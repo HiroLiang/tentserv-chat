@@ -4,11 +4,13 @@ import { type DeviceInfo } from '@/types/device';
 interface DeviceState {
     deviceId: string | null;
     platform: string | null;
+    deviceName: string | null;
     registered: boolean;
     createAt: number | null;
 
     setDeviceId: (deviceId: string | null) => void;
     setPlatform: (platform: string | null) => void;
+    setDeviceName: (deviceName: string | null) => void;
     setRegistered: (registered: boolean) => void;
     setCreateTime: (createAt: number | null) => void;
 
@@ -17,6 +19,7 @@ interface DeviceState {
 
 export const useDeviceStore = create<DeviceState>((set) => ({
     deviceId: null,
+    deviceName: null,
     platform: null,
     registered: false,
     createAt: null,
@@ -27,6 +30,10 @@ export const useDeviceStore = create<DeviceState>((set) => ({
 
     setPlatform: (platform: string | null) => {
         set({ platform: platform });
+    },
+
+    setDeviceName: (deviceName: string | null): void => {
+        set({ deviceName: deviceName });
     },
 
     setRegistered: (registered: boolean): void => {
@@ -40,6 +47,7 @@ export const useDeviceStore = create<DeviceState>((set) => ({
     updateDeviceInfo: (deviceInfo: DeviceInfo): void => {
         set({
             deviceId: deviceInfo.device_id,
+            deviceName: deviceInfo.device_name,
             platform: deviceInfo.platform,
             registered: deviceInfo.registered,
             createAt: deviceInfo.created_at

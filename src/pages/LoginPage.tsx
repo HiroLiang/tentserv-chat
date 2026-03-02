@@ -24,9 +24,12 @@ export const LoginPage = () => {
         setError('');
 
         try {
+
+            // Try to sign in
             const response = await userService.login(email, password);
             toast.success(response.message ?? "Login successfully");
 
+            // connect to websocket
             const token = useUserStore.getState().currentUser?.token;
             wsService.connect(env.WS_BASE_URL, token ?? '');
             chatService.initialize();

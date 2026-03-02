@@ -2,6 +2,7 @@ export interface User {
     id: number;
     name?: string;
     email?: string;
+    avatar?: string;
     token?: string;
     isLoggedIn?: boolean;
 }
@@ -25,5 +26,10 @@ export interface CurrentUserResponse {
     id: number
     name: string;
     email: string;
+    avatar_url: string;
     create_at: string;
+}
+
+export interface UpdateProfileRequest {
+    name: string;
 }

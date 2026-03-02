@@ -5,6 +5,16 @@ import { useUserStore } from "@/stores/userStore.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "sonner";
 import { userService } from "@/services/userService.ts";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar.tsx";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu.tsx";
+import { CircleUserRound } from "lucide-react";
+import { env } from "@/config/env.ts";
 
 interface NavItem {
     name: string;
@@ -23,6 +33,8 @@ interface NavbarProps {
 export const Navbar = ({ className }: NavbarProps) => {
     const user = useUserStore((state) => state.currentUser);
     const navigate = useNavigate();
+
+    const userDisplayName = user?.name ?? "User";
 
     const logout = async () => {
         try {
@@ -83,14 +95,46 @@ export const Navbar = ({ className }: NavbarProps) => {
             {/* user info */}
             <div className="flex items-center gap-3">
                 {user?.isLoggedIn ? (
-                    <div className="flex text-sm justify-between items-center gap-2">
-                        <p className="font-medium">User: {user.name}</p>
-                        <p
-                            className="text-gray-500 text-xs cursor-pointer"
-                            onClick={() => logout()}
-                        >
-                            Logout
-                        </p>
+                    <div className="flex items-center gap-2">
+                        <p className="font-medium text-sm">{userDisplayName}</p>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <button
+                                    type="button"
+                                    className={cn(
+                                        "h-10 w-10 rounded-full p-0.5 text-gray-400",
+                                        "transition-colors hover:text-gray-500 focus-visible:outline-none",
+                                        "focus-visible:ring-1 focus-visible:ring-ring"
+                                    )}
+                                    aria-label="Open user menu"
+                                >
+                                    <Avatar className="h-full w-full">
+                                        {user?.avatar && (
+                                            <AvatarImage
+                                                src={env.API_BASE_URL + user.avatar}
+                                                alt={`${userDisplayName} avatar`}
+                                                className="object-cover"
+                                            />
+                                        )}
+                                        <AvatarFallback>
+                                            <CircleUserRound className="h-full w-full"/>
+                                        </AvatarFallback>
+                                    </Avatar>
+                                </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-40">
+                                <DropdownMenuItem onClick={() => navigate('/profile')}>
+                                    Profile
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => navigate('/settings')}>
+                                    Setting
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator/>
+                                <DropdownMenuItem onClick={() => logout()}>
+                                    Logout
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                     </div>
                 ) : (
                     <Button size="sm"

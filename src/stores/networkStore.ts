@@ -47,6 +47,15 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
         },
 
         checkConnection: async () => {
+            if (env.IS_DEV) {
+                set({
+                    networkStatus: 'healthy',
+                    serverReachable: true,
+                    lastCheck: Date.now()
+                });
+                return true;
+            }
+
             try {
                 await healthCheckClient.get('/api/health');
 

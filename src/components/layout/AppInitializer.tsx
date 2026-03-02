@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { logger } from "@/utils/logger.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { Overlay } from "@/components/ui/overlay.tsx";
@@ -7,6 +7,9 @@ import { deviceService } from "@/services/deviceService.ts";
 import { networkService } from "@/services/networkService.ts";
 import { env } from "@/config/env.ts";
 import { userService } from "@/services/userService.ts";
+import { useUserStore } from "@/stores/userStore.ts";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 type InitStatus = 'loading' | 'ready' | 'error';
 
@@ -19,6 +22,9 @@ interface Props {
 }
 
 export const AppInitializer = ({ children }: Props) => {
+    const navigate = useNavigate();
+
+    const initialized = useRef(false);
     const [status, setStatus] = useState<InitStatus>('loading');
     const [initError, setInitError] = useState<InitError | null>(null);
 
@@ -40,14 +46,21 @@ export const AppInitializer = ({ children }: Props) => {
             return;
         }
 
-        if (env.IS_DEV) {
-            await userService.login('jack@gmail.com', 'string');
+        const user = useUserStore.getState().currentUser;
+        if ((!user || !user.isLoggedIn) && env.IS_DEV) {
+            await userService.login('jack@gmail.com', 'string').catch(err => {
+                toast.error(err.message);
+                navigate('/login');
+            });
         }
 
         setStatus("ready");
     }
 
     useEffect(() => {
+        if (initialized.current) return;
+        initialized.current = true;
+
         initialize().catch((error) => {
             logger.error('Uncaught initialization error', error);
         });

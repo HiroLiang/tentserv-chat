@@ -4,6 +4,8 @@ import { LoginPage } from "@/pages/LoginPage.tsx";
 import { RegisterPage } from "@/pages/RegisterPage.tsx";
 import { ProtectedRoute } from "@/routes/ProtectedRoute.tsx";
 import { ChatPage } from "@/pages/ChatPage.tsx";
+import { ProfilePage } from "@/pages/ProfilePage.tsx";
+import { SettingsPage } from "@/pages/SettingsPage.tsx";
 
 const Routes = () => {
     return useRoutes([
@@ -14,7 +16,9 @@ const Routes = () => {
         {
             element: <ProtectedRoute/>,
             children: [
-                { path: "/chat", element: <ChatPage/> }
+                { path: "/chat", element: <ChatPage/> },
+                { path: "/profile", element: <ProfilePage/> },
+                { path: "/settings", element: <SettingsPage/> }
             ],
         },
     ]);

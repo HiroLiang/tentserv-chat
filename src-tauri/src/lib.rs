@@ -4,7 +4,7 @@ use tauri_plugin_store::Builder as StoreBuilder;
 use tauri_plugin_log::{Builder, Target, TargetKind, TimezoneStrategy};
 use log::LevelFilter;
 use commands::device::{
-    get_or_create_device_info,
+    get_device_info,
     update_device_registration,
     clear_device_id,
 };
@@ -29,7 +29,7 @@ pub fn run() {
             .build()
         )
         .invoke_handler(tauri::generate_handler![
-            get_or_create_device_info,
+            get_device_info,
             update_device_registration,
             clear_device_id,
         ])

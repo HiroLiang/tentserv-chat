@@ -26,19 +26,24 @@ interface Logger {
 class BrowserLogger implements Logger {
     private getCaller(): string {
         const error = new Error();
-        const stack = error.stack?.split('\n');
-        if (!stack || stack.length < 4) return 'unknown';
+        const stack = error.stack?.split('\n').map(s => s.trim()) ?? [];
+        const callerLine = stack[3] ?? '';
 
-        const callerLine = stack[3];
-        if (callerLine) {
-            const match = callerLine.match(/@(.+):(\d+):(\d+)$/);
-            if (match) {
-                const [, file, line] = match;
-                const fileName = file.split('/').pop();
-                return `${fileName}:${line}`;
-            }
-        }
-        return 'unknown';
+        // 1) Chromium: at func (http://.../file.ts:line:col)
+        // 2) Chromium: at http://.../file.ts:line:col
+        // 3) Firefox: func@http://.../file.ts:line:col
+        const m =
+            callerLine.match(/\((.*):(\d+):(\d+)\)$/) ||
+            callerLine.match(/at (.*):(\d+):(\d+)$/) ||
+            callerLine.match(/@(.*):(\d+):(\d+)$/);
+
+        if (!m) return 'unknown';
+
+        const [, file, line] = m;
+        const cleanFile = file.split('?')[0];
+        const fileName = cleanFile.split('/').pop() ?? cleanFile;
+
+        return `${fileName}:${line}`;
     }
 
     trace(message: string, data?: unknown) {
@@ -81,6 +86,23 @@ class BrowserLogger implements Logger {
 }
 
 class TauriLogger implements Logger {
+    private getCaller(): string {
+        const error = new Error();
+        const stack = error.stack?.split('\n');
+        if (!stack || stack.length < 4) return 'unknown';
+
+        const callerLine = stack[3];
+        if (callerLine) {
+            const match = callerLine.match(/@(.+):(\d+):(\d+)$/);
+            if (match) {
+                const [, file, line] = match;
+                const fileName = file.split('/').pop();
+                return `${fileName}:${line}`;
+            }
+        }
+        return 'unknown';
+    }
+
     private formatData(data?: unknown): string {
         if (data === undefined) return '';
         if (data instanceof Error) return ` | ${data.message}\n${data.stack ?? ''}`;
@@ -92,10 +114,13 @@ class TauriLogger implements Logger {
     }
 
     private log(level: LogLevel, message: string, data?: unknown) {
-        const formatted = `${message}${this.formatData(data)}`;
+        const caller = this.getCaller();
+        const formatted = `[${caller}] ${message}${this.formatData(data)}`;
+
         invoke('plugin:log|log', {
             level: LOG_LEVEL_MAP[level],
             message: formatted,
+            target: caller,
         }).catch((err) => {
             console.error('[TauriLogger] invoke failed', err);
         });
@@ -123,10 +148,7 @@ class TauriLogger implements Logger {
 }
 
 const createLogger = (): Logger => {
-    if (isTauri()) {
-        return new TauriLogger();
-    }
-    return new BrowserLogger();
+    return isTauri() ? new TauriLogger() : new BrowserLogger();
 }
 
 export const logger: Logger = createLogger();
