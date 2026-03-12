@@ -126,6 +126,7 @@ export const ProfilePage = () => {
                     toast.success('Avatar uploaded successfully');
                 })
                 .catch((error) => {
+                    toast.dismiss();
                     logger.error('Failed to upload avatar', error);
                     toast.error('Failed to upload avatar');
                 });

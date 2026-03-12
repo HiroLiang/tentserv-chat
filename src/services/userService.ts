@@ -7,10 +7,13 @@ import {
     UserRegisterRequest,
 } from "@/types/user.ts";
 import { toast } from "sonner";
+import { useDeviceStore } from "@/stores/deviceStore.ts";
 
 class UserService {
     async login(email: string, password: string): Promise<AuthMessageResponse> {
-        const request: UserLoginRequest = { email, password };
+        const deviceState = useDeviceStore.getState();
+
+        const request: UserLoginRequest = { email, password, device_id: deviceState.deviceId ?? '' };
         const response = await http.post<AuthMessageResponse>("/api/user/login", request);
 
         const currentUser = await this.fetchCurrentUser();
@@ -73,6 +76,7 @@ class UserService {
             name: user.name,
             avatar: user.avatar_url,
             isLoggedIn: true,
+            roles: user.roles,
         });
     }
 }

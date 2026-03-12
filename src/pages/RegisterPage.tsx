@@ -128,7 +128,7 @@ export const RegisterPage = () => {
                                 className="text-sm text-primary hover:underline font-medium"
                                 onClick={() => navigate('/login')}
                             >
-                                Sign up
+                                Sign in
                             </p>
                         </div>
 

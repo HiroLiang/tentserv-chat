@@ -129,6 +129,14 @@ export const Navbar = ({ className }: NavbarProps) => {
                                 <DropdownMenuItem onClick={() => navigate('/settings')}>
                                     Setting
                                 </DropdownMenuItem>
+                                {(user?.roles ?? []).includes('admin') && (
+                                    <>
+                                        <DropdownMenuSeparator/>
+                                        <DropdownMenuItem onClick={() => navigate('/console')}>
+                                            Dashboard
+                                        </DropdownMenuItem>
+                                    </>
+                                )}
                                 <DropdownMenuSeparator/>
                                 <DropdownMenuItem onClick={() => logout()}>
                                     Logout
