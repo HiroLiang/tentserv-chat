@@ -66,7 +66,7 @@ export const Navbar = ({ className }: NavbarProps) => {
                             className="w-full h-full scale-150"
                         />
                     </div>
-                    <h1 className="text-xl font-bold">Goat Chat</h1>
+                    <h1 className="text-xl font-bold">Tentserv Chat</h1>
                 </Link>
 
                 {/* nav options */}
