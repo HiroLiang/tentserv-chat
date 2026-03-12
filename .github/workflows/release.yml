@@ -15,32 +15,29 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
+            args: "--target aarch64-apple-darwin --bundles dmg"
 
           - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
+            args: "--target x86_64-apple-darwin --bundles dmg"
 
           - platform: windows-latest
-            args: ""
+            args: "--bundles zip"
 
     runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # Install Node
       - name: setup node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # Install pnpm
       - name: install pnpm
         uses: pnpm/action-setup@v3
         with:
           version: 9
 
-      # cache pnpm
       - name: get pnpm store
         id: pnpm-cache
         run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
@@ -52,11 +49,9 @@ jobs:
           restore-keys: |
             pnpm-${{ runner.os }}-
 
-      # install deps
       - name: install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Install Rust
       - name: install rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -64,7 +59,6 @@ jobs:
             aarch64-apple-darwin
             x86_64-apple-darwin
 
-      # build + release
       - name: build tauri
         uses: tauri-apps/tauri-action@v0
         env:
