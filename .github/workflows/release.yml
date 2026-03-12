@@ -21,7 +21,7 @@ jobs:
             args: "--target x86_64-apple-darwin --bundles dmg"
 
           - platform: windows-latest
-            args: "--bundles zip"
+            args: "--bundles nsis"
 
     runs-on: ${{ matrix.platform }}
 
@@ -39,12 +39,15 @@ jobs:
           version: 9
 
       - name: get pnpm store
-        id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+        shell: bash
+        run: |
+          STORE=$(pnpm store path 2>/dev/null || echo "")
+          echo "STORE_PATH=$STORE" >> $GITHUB_ENV
 
       - uses: actions/cache@v4
+        if: env.STORE_PATH != ''
         with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          path: ${{ env.STORE_PATH }}
           key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             pnpm-${{ runner.os }}-
@@ -68,5 +71,30 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Turi ${{ github.ref_name }}"
-          releaseBody: "Download the installer below."
+          releaseBody: |
+            Download the installer below.
+
+            **macOS User Notice: If a security warning appears during the first launch, please proceed with execution：
+            ```
+            xattr -cr /Applications/goat-chat.app
+            ```
           args: ${{ matrix.args }}
+
+      # Windows: pack exe to zip and upload to release
+      - name: package windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          $zipName = $exe.BaseName + ".zip"
+          Compress-Archive -Path $exe.FullName -DestinationPath $zipName
+          echo "ZIP_PATH=$zipName" >> $env:GITHUB_ENV
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+
+      - name: upload windows zip to release
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
