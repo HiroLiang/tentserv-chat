@@ -9,7 +9,27 @@ permissions:
   contents: write
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Turi ${{ github.ref_name }}"
+          body: |
+            Download the installer below.
+
+            **macOS User Notice: If a security warning appears during the first launch, please proceed with execution：
+            ```
+            xattr -cr /Applications/goat-chat.app
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -71,16 +91,9 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Turi ${{ github.ref_name }}"
-          releaseBody: |
-            Download the installer below.
-
-            **macOS User Notice: If a security warning appears during the first launch, please proceed with execution：
-            ```
-            xattr -cr /Applications/goat-chat.app
-            ```
+          releaseBody: ""
           args: ${{ matrix.args }}
 
-      # Windows: pack exe to zip and upload to release
       - name: package windows zip
         if: runner.os == 'Windows'
         shell: pwsh
@@ -89,12 +102,12 @@ jobs:
           $zipName = $exe.BaseName + ".zip"
           Compress-Archive -Path $exe.FullName -DestinationPath $zipName
           echo "ZIP_PATH=$zipName" >> $env:GITHUB_ENV
-          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
 
       - name: upload windows zip to release
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           files: ${{ env.ZIP_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
