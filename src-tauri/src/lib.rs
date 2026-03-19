@@ -1,4 +1,5 @@
 mod commands;
+mod crypto;
 
 use tauri_plugin_store::Builder as StoreBuilder;
 use tauri_plugin_log::{Builder, Target, TargetKind, TimezoneStrategy};
@@ -7,6 +8,13 @@ use commands::device::{
     get_device_info,
     update_device_registration,
     clear_device_id,
+};
+use commands::e2ee::{
+    generate_identity_keys,
+    generate_signed_pre_key,
+    generate_one_time_pre_keys,
+    perform_x3dh_send,
+    perform_x3dh_receive,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,6 +40,11 @@ pub fn run() {
             get_device_info,
             update_device_registration,
             clear_device_id,
+            generate_identity_keys,
+            generate_signed_pre_key,
+            generate_one_time_pre_keys,
+            perform_x3dh_send,
+            perform_x3dh_receive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

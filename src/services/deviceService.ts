@@ -2,12 +2,13 @@ import {
     DeviceInfo,
     DeviceRegistrationRequest,
     DeviceRegistrationResponse,
-    DeviceInfoResponse, DeviceUpdateRequest
+    DeviceUpdateRequest
 } from "@/types/device.ts";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { logger } from "@/utils/logger.ts";
-import { http } from "@/api/http.ts";
+import { deviceApi } from "@/api/index.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
+import type { DeviceInfoResponseDto } from "@/api/types.ts";
 
 class DeviceService {
 
@@ -53,14 +54,14 @@ class DeviceService {
     private async getAppDeviceInfo(): Promise<DeviceInfo> {
         try {
             const info = await invoke<DeviceInfo>('get_device_info');
-            const response = await http.get<DeviceInfoResponse>(
-                `/api/device/${info.device_id}`
-            );
+            const response = await deviceApi.getById(info.device_id);
 
-            return {
-                ...info,
-                registered: response.data.success,
-            };
+            return this.toDeviceInfo({
+                ...response,
+                device_id: info.device_id,
+                device_name: info.device_name,
+                platform: info.platform,
+            });
         } catch (err) {
             logger.error("Error getting device info:", err);
             throw err;
@@ -68,9 +69,7 @@ class DeviceService {
     }
 
     private async getWebDeviceInfo(): Promise<DeviceInfo> {
-        const response = await http.get<DeviceInfoResponse>(
-            '/api/device/browser'
-        );
+        const response = await deviceApi.getBrowserInfo();
 
         const ua = navigator.userAgent;
 
@@ -94,11 +93,13 @@ class DeviceService {
         })();
 
         return {
-            device_id: 'Browser',
+            device_id: response.device_id || 'Browser',
             platform: platform,
             device_name: deviceName,
-            registered: response.data.success,
-            created_at: response.data.success ? response.data.created_at : new Date().getTime(),
+            registered: response.success,
+            created_at: response.success
+                ? this.toTimestamp(response.created_at)
+                : new Date().getTime(),
         };
     }
 
@@ -110,18 +111,18 @@ class DeviceService {
                 platform: platform
             };
 
-            const response = await http.post<DeviceRegistrationResponse>(
-                '/api/device/register',
-                payload
-            );
+            const response = await deviceApi.register(payload);
 
-            logger.info("Device registered successfully:", response.data);
+            logger.info("Device registered successfully:", response);
 
-            if (response.data.success && isTauri()) {
+            if (response.success && isTauri()) {
                 await invoke('update_device_registration', { registered: true })
             }
 
-            return response.data;
+            return {
+                ...response,
+                created_at: this.toTimestamp(response.created_at),
+            };
         } catch (err) {
             logger.error("Error register device:", err);
             throw err;
@@ -136,12 +137,35 @@ class DeviceService {
                 platform: platform
             };
 
-            await http.patch<void>(`/api/device/${deviceId}`, payload);
+            await deviceApi.update(deviceId, payload);
             logger.info('Device updated successfully');
         } catch (err) {
             logger.error('Failed to update device');
             throw err;
         }
+    }
+
+    private toDeviceInfo(response: DeviceInfoResponseDto): DeviceInfo {
+        return {
+            device_id: response.device_id,
+            platform: response.platform,
+            device_name: response.device_name,
+            registered: response.success,
+            created_at: this.toTimestamp(response.created_at),
+        };
+    }
+
+    private toTimestamp(value: string | number | undefined): number {
+        if (typeof value === 'number') {
+            return value;
+        }
+
+        if (!value) {
+            return Date.now();
+        }
+
+        const parsed = Date.parse(value);
+        return Number.isNaN(parsed) ? Date.now() : parsed;
     }
 }
 

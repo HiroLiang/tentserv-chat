@@ -18,6 +18,9 @@ export interface DeviceRegistrationRequest extends DeviceInfoRequest {
 export interface DeviceRegistrationResponse {
     success: boolean;
     device_id: string;
+    device_name?: string;
+    platform?: string;
+    created_at?: number;
     message?: string;
 }
 

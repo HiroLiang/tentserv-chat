@@ -8,13 +8,8 @@ export interface User {
     roles?: string[]; // 'user' | 'admin' | 'vendor' | 'guest'
 }
 
-export interface UserLoginRequest {
-    email: string;
-    password: string;
-    device_id?: string;
-}
-
 export interface UserRegisterRequest {
+    account?: string;
     email: string;
     name: string;
     password: string;
@@ -25,11 +20,11 @@ export interface AuthMessageResponse {
 }
 
 export interface CurrentUserResponse {
-    id: number
+    id: number;
     name: string;
     email: string;
-    avatar_url: string;
-    create_at: string;
+    avatar_url?: string;
+    create_at?: string;
     roles: string[];
 }
 

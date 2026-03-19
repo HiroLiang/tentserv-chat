@@ -1,9 +1,8 @@
-import { http } from "@/api/http.ts";
+import { authApi, userApi } from "@/api/index.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import {
     AuthMessageResponse,
     CurrentUserResponse, UpdateProfileRequest,
-    UserLoginRequest,
     UserRegisterRequest,
 } from "@/types/user.ts";
 import { toast } from "sonner";
@@ -12,23 +11,29 @@ import { useDeviceStore } from "@/stores/deviceStore.ts";
 class UserService {
     async login(email: string, password: string): Promise<AuthMessageResponse> {
         const deviceState = useDeviceStore.getState();
-
-        const request: UserLoginRequest = { email, password, device_id: deviceState.deviceId ?? '' };
-        const response = await http.post<AuthMessageResponse>("/api/user/login", request);
+        const response = await authApi.login({
+            identifier: email,
+            password,
+            device_id: deviceState.deviceId ?? '',
+        });
 
         const currentUser = await this.fetchCurrentUser();
         this.setAuthenticatedUser(currentUser);
 
-        return response.data;
+        return response;
     }
 
     async register(payload: UserRegisterRequest): Promise<AuthMessageResponse> {
-        const response = await http.post<AuthMessageResponse>("/api/user/register", payload);
-        return response.data;
+        return authApi.register({
+            account: payload.account ?? payload.email,
+            email: payload.email,
+            name: payload.name,
+            password: payload.password,
+        });
     }
 
     async logout(): Promise<void> {
-        await http.post("/api/user/logout");
+        await authApi.logout();
 
         const state = useUserStore.getState();
         state.setCurrentUser({
@@ -41,7 +46,11 @@ class UserService {
     }
 
     async updateUser(payload: Partial<UpdateProfileRequest>): Promise<void> {
-        await http.patch("/api/user/profile", payload);
+        if (!payload.name) {
+            return;
+        }
+
+        await userApi.updateProfile({ name: payload.name });
         const currentUser = await this.fetchCurrentUser();
         this.setAuthenticatedUser(currentUser);
     }
@@ -54,18 +63,21 @@ class UserService {
         const formData = new FormData();
         formData.append('avatar', file);
 
-        const response = await http.post<{ avatar_url: string }>('/api/user/avatar', formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
-        });
+        const response = await userApi.uploadAvatar(formData);
 
-        return { avatarUrl: response.data.avatar_url };
+        return { avatarUrl: response.avatar_url };
     }
 
     async fetchCurrentUser(): Promise<CurrentUserResponse> {
-        const response = await http.get<CurrentUserResponse>("/api/user/me");
-        return response.data;
+        const response = await authApi.getProfile();
+
+        return {
+            id: response.current_user.id,
+            name: response.current_user.name,
+            email: response.email,
+            avatar_url: response.current_user.avatar,
+            roles: response.current_user.role_codes ?? [],
+        };
     }
 
     private setAuthenticatedUser(user: CurrentUserResponse): void {
