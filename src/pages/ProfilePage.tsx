@@ -167,7 +167,7 @@ export const ProfilePage = () => {
                                         )}
                                         {!previewUrl && user?.avatar && (
                                             <AvatarImage
-                                                src={env.API_BASE_URL + user.avatar}
+                                                src={`${env.API_BASE_URL}/static/${user.avatar}`}
                                                 alt={`${name || "User"} avatar`}
                                                 className="object-cover"
                                             />

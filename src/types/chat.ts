@@ -1,22 +1,47 @@
-export type ChatType = 'DIRECT' | 'GROUP' | 'CHANNEL' | 'BOT';
+export type RoomType = 'DIRECT' | 'GROUP' | 'CHANNEL' | 'BOT';
 
-export interface ChatGroup {
-    id: string;
-    type: ChatType;
+export interface RoomSummary {
+    id: number;
+    type: RoomType;
     name: string;
-    lastMessage?: string;
-    lastMessageTime?: string;
-    unreadCount?: number;
-    memberCount?: number;
-    isOnline?: boolean;
+    description?: string;
+    avatar_url?: string;
+    member_count?: number;
+    allow_agent: boolean;
+    created_at: string;
 }
 
-export interface ChatMessage {
-    id: string;
-    chatId: string;
-    senderId: string;
-    senderName: string;
+export interface RoomMember {
+    member_id: number;
+    user_id: number;
+    name: string;
+    avatar?: string;
+    role: string;
+    last_read_at?: string;
+}
+
+export type MessageType = 'text' | 'image' | 'file';
+
+export interface Message {
+    id: number;
+    room_id: number;
+    sender_id: number;
+    sender_name: string;
+    sender_avatar?: string;
+    type: MessageType;
     content: string;
-    timestamp: string;
-    isMe: boolean;
+    reply_to_id?: number;
+    created_at: string;
+}
+
+export interface RoomDetail extends RoomSummary {
+    members: RoomMember[];
+    messages: Message[];
+}
+
+export interface GetUserRoomsResponse {
+    direct: RoomSummary[];
+    group: RoomSummary[];
+    channel: RoomSummary[];
+    bot: RoomSummary[];
 }

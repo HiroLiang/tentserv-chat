@@ -9,12 +9,20 @@ use commands::device::{
     update_device_registration,
     clear_device_id,
 };
+use commands::auth::{
+    get_auth_token,
+    save_auth_token,
+    clear_auth_token,
+};
 use commands::e2ee::{
     generate_identity_keys,
     generate_signed_pre_key,
     generate_one_time_pre_keys,
+    clear_e2ee_keys,
     perform_x3dh_send,
     perform_x3dh_receive,
+    get_e2ee_flag,
+    set_e2ee_flag,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -40,11 +48,17 @@ pub fn run() {
             get_device_info,
             update_device_registration,
             clear_device_id,
+            get_auth_token,
+            save_auth_token,
+            clear_auth_token,
             generate_identity_keys,
             generate_signed_pre_key,
             generate_one_time_pre_keys,
+            clear_e2ee_keys,
             perform_x3dh_send,
             perform_x3dh_receive,
+            get_e2ee_flag,
+            set_e2ee_flag,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

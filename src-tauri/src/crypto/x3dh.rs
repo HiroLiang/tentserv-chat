@@ -57,6 +57,7 @@ pub fn x3dh_sender(
     bob_bundle:       &PublicKeyBundle,
     plaintext:        &[u8],
 ) -> Result<InitialMessage, String> {
+
     // 1. Verify SPK signature (防中間人替換)
     let bob_ik_verify = VerifyingKey::from_bytes(&bob_bundle.identity_key_sign)
         .map_err(|e| e.to_string())?;

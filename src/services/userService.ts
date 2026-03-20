@@ -1,3 +1,4 @@
+import { saveAuthToken, getAuthToken, clearAuthToken } from "@/bridge/auth.ts";
 import { authApi, userApi } from "@/api/index.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import {
@@ -20,7 +21,36 @@ class UserService {
         const currentUser = await this.fetchCurrentUser();
         this.setAuthenticatedUser(currentUser);
 
+        const token = useUserStore.getState().currentUser?.token;
+        if (token) await saveAuthToken(token);
+
         return response;
+    }
+
+    async tryRestoreSession(): Promise<boolean> {
+        const token = await getAuthToken();
+        if (!token) return false;
+
+        // Set a token in store so the HTTP interceptor can attach it to getProfile()
+        useUserStore.getState().setCurrentUser({ id: 0, token });
+
+        try {
+            const profile = await authApi.getProfile();
+            useUserStore.getState().setCurrentUser({
+                id: profile.current_user.id,
+                name: profile.current_user.name,
+                email: profile.email,
+                avatar: profile.current_user.avatar,
+                token,
+                isLoggedIn: true,
+                roles: profile.current_user.role_codes ?? [],
+            });
+            return true;
+        } catch {
+            await clearAuthToken();
+            useUserStore.getState().setCurrentUser({ id: 0, token: undefined, isLoggedIn: false });
+            return false;
+        }
     }
 
     async register(payload: UserRegisterRequest): Promise<AuthMessageResponse> {
@@ -34,6 +64,8 @@ class UserService {
 
     async logout(): Promise<void> {
         await authApi.logout();
+
+        await clearAuthToken();
 
         const state = useUserStore.getState();
         state.setCurrentUser({

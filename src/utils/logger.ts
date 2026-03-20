@@ -1,5 +1,6 @@
 import { env } from "@/config/env.ts";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
+import { tauriLog } from "@/bridge/log.ts";
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
@@ -117,7 +118,7 @@ class TauriLogger implements Logger {
         const caller = this.getCaller();
         const formatted = `[${caller}] ${message}${this.formatData(data)}`;
 
-        invoke('plugin:log|log', {
+        tauriLog({
             level: LOG_LEVEL_MAP[level],
             message: formatted,
             target: caller,

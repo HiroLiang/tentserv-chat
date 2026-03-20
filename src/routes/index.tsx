@@ -9,6 +9,7 @@ import { AdminRoute } from "@/routes/AdminRoute.tsx";
 import { ChatPage } from "@/pages/ChatPage.tsx";
 import { ProfilePage } from "@/pages/ProfilePage.tsx";
 import { SettingsPage } from "@/pages/SettingsPage.tsx";
+import { FriendsPage } from "@/pages/FriendsPage.tsx";
 import { Loader2 } from 'lucide-react';
 
 // Lazy-load the admin page so its bundle chunk is only fetched
@@ -35,6 +36,7 @@ const Routes = () => {
                 { path: "/chat", element: <ChatPage/> },
                 { path: "/profile", element: <ProfilePage/> },
                 { path: "/settings", element: <SettingsPage/> },
+                { path: "/friends", element: <FriendsPage/> },
             ],
         },
 

@@ -5,6 +5,7 @@ use ed25519_dalek::Signer;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use tauri_plugin_store::StoreExt;
 
 // ── Keyring helpers ────────────────────────────────
 
@@ -28,8 +29,8 @@ fn load_private_key(label: &str) -> Result<[u8; 32], String> {
 
 #[derive(Serialize, Deserialize)]
 pub struct IdentityKeyBundle {
-    pub identity_key_dh:   [u8; 32],
-    pub identity_key_sign: [u8; 32],
+    pub identity_key_dh_pub:   [u8; 32],
+    pub identity_key_sign_pub: [u8; 32],
 }
 
 #[serde_as]
@@ -62,8 +63,8 @@ pub async fn generate_identity_keys() -> Result<IdentityKeyBundle, String> {
     store_private_key("ik_sign", sign_secret.as_bytes())?;
 
     Ok(IdentityKeyBundle {
-        identity_key_dh:   dh_public.to_bytes(),
-        identity_key_sign: sign_public.to_bytes(),
+        identity_key_dh_pub:   dh_public.to_bytes(),
+        identity_key_sign_pub: sign_public.to_bytes(),
     })
 }
 
@@ -104,6 +105,20 @@ pub async fn generate_one_time_pre_keys(key_ids: Vec<u32>) -> Result<Vec<OneTime
 }
 
 #[tauri::command]
+pub fn clear_e2ee_keys(app: tauri::AppHandle) -> Result<(), String> {
+    let labels = ["ik_dh", "ik_sign", "spk_1"];
+    for label in labels {
+        let _ = Entry::new("goat-chat", label)
+            .map_err(|e| e.to_string())?
+            .delete_credential();
+    }
+    // 清 flag
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    store.clear();
+    store.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn perform_x3dh_send(
     bundle:    PublicKeyBundle,
     plaintext: Vec<u8>,
@@ -128,4 +143,21 @@ pub async fn perform_x3dh_receive(
         .transpose()?
         .map(StaticSecret::from);
     x3dh_receiver(&ik, &spk, opk.as_ref(), &msg)
+}
+
+#[tauri::command]
+pub fn get_e2ee_flag(app: tauri::AppHandle, device_id: String) -> Result<bool, String> {
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    let key = format!("e2ee_initialized_{}", device_id);
+    Ok(store.get(&key)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn set_e2ee_flag(app: tauri::AppHandle, device_id: String, value: bool) -> Result<(), String> {
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    let key = format!("e2ee_initialized_{}", device_id);
+    store.set(key, serde_json::Value::Bool(value));
+    store.save().map_err(|e| e.to_string())
 }

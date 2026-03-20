@@ -2,6 +2,7 @@ import axios, { AxiosError, type AxiosRequestConfig, type AxiosResponse } from '
 import { env } from "@/config/env.ts";
 import { logger } from "@/utils/logger.ts";
 import { useUserStore } from "@/stores/userStore.ts";
+import { useDeviceStore } from "@/stores/deviceStore.ts";
 import type { ErrorResponse } from "@/types/api.ts";
 
 export const http = axios.create({
@@ -22,6 +23,12 @@ http.interceptors.request.use(
         const token = userStore.currentUser?.token;
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
+        }
+
+        // Set device ID header
+        const deviceId = useDeviceStore.getState().deviceId;
+        if (deviceId) {
+            config.headers['X-Device-ID'] = deviceId;
         }
 
         return config;

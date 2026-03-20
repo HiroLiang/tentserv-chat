@@ -23,6 +23,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+    { name: 'Friends', path: '/friends' },
     { name: 'Chat Room', path: '/chat' },
 ];
 
@@ -111,7 +112,7 @@ export const Navbar = ({ className }: NavbarProps) => {
                                     <Avatar className="h-full w-full">
                                         {user?.avatar && (
                                             <AvatarImage
-                                                src={env.API_BASE_URL + user.avatar}
+                                                src={`${env.API_BASE_URL}/static/${user.avatar}`}
                                                 alt={`${userDisplayName} avatar`}
                                                 className="object-cover"
                                             />

@@ -4,7 +4,8 @@ import {
     DeviceRegistrationResponse,
     DeviceUpdateRequest
 } from "@/types/device.ts";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
+import { getDeviceInfo as bridgeGetDeviceInfo, updateDeviceRegistration, clearDeviceId } from "@/bridge/device.ts";
 import { logger } from "@/utils/logger.ts";
 import { deviceApi } from "@/api/index.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
@@ -35,10 +36,7 @@ class DeviceService {
     }
 
     async resetDevice(): Promise<void> {
-        if (isTauri()) {
-            await invoke('clear_device_id');
-
-        }
+        await clearDeviceId();
 
         const state = useDeviceStore.getState();
         state.setDeviceId(null);
@@ -48,12 +46,12 @@ class DeviceService {
     }
 
     private async getDeviceInfo(): Promise<DeviceInfo> {
-        return isTauri() ? await this.getAppDeviceInfo() : await this.getWebDeviceInfo();
+        return this.getAppDeviceInfo();
     }
 
     private async getAppDeviceInfo(): Promise<DeviceInfo> {
         try {
-            const info = await invoke<DeviceInfo>('get_device_info');
+            const info = await bridgeGetDeviceInfo();
             const response = await deviceApi.getById(info.device_id);
 
             return this.toDeviceInfo({
@@ -66,41 +64,6 @@ class DeviceService {
             logger.error("Error getting device info:", err);
             throw err;
         }
-    }
-
-    private async getWebDeviceInfo(): Promise<DeviceInfo> {
-        const response = await deviceApi.getBrowserInfo();
-
-        const ua = navigator.userAgent;
-
-        const platform: string = ((): string => {
-            if (/Android/i.test(ua)) return 'android';
-            if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
-            if (/Windows/i.test(ua)) return 'windows';
-            if (/Mac/i.test(ua)) return 'macos';
-            if (/Linux/i.test(ua)) return 'linux';
-            return 'unknown';
-        })();
-
-        const deviceName: string = ((): string => {
-            if (/Edg\//i.test(ua)) return 'Edge';
-            if (/OPR\/|Opera/i.test(ua)) return 'Opera';
-            if (/Chrome\//i.test(ua) && !/Chromium/.test(ua)) return 'Chrome';
-            if (/Chromium\//i.test(ua)) return 'Chromium';
-            if (/Firefox\//i.test(ua)) return 'Firefox';
-            if (/Safari\//i.test(ua) && !/Chrome/.test(ua)) return 'Safari';
-            return 'Unknown';
-        })();
-
-        return {
-            device_id: response.device_id || 'Browser',
-            platform: platform,
-            device_name: deviceName,
-            registered: response.success,
-            created_at: response.success
-                ? this.toTimestamp(response.created_at)
-                : new Date().getTime(),
-        };
     }
 
     private async registerDevice(deviceId: string, deviceName: string, platform: string): Promise<DeviceRegistrationResponse> {
@@ -116,7 +79,7 @@ class DeviceService {
             logger.info("Device registered successfully:", response);
 
             if (response.success && isTauri()) {
-                await invoke('update_device_registration', { registered: true })
+                await updateDeviceRegistration(true)
             }
 
             return {
@@ -137,7 +100,8 @@ class DeviceService {
                 platform: platform
             };
 
-            await deviceApi.update(deviceId, payload);
+            const rs = await deviceApi.update(deviceId, payload);
+            logger.info("get response: ", rs);
             logger.info('Device updated successfully');
         } catch (err) {
             logger.error('Failed to update device');

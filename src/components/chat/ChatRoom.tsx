@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import type { ChatGroup, ChatMessage } from '@/types/chat';
+import type { ChatGroup, ChatMessage } from '@/mock/chat';
 import { Bot, Send, Users } from 'lucide-react';
 
 interface ChatRoomProps {
