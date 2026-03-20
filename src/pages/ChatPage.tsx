@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Navbar } from '@/components/layout/Navbar.tsx';
 import { ChatSidebar } from '@/components/chat/ChatSidebar.tsx';
 import type { ChatGroups } from '@/components/chat/ChatSidebar.tsx';
@@ -20,7 +21,11 @@ function buildMockGroups(): ChatGroups {
 }
 
 export const ChatPage = () => {
-    const [chatGroups, _setChatGroups] = useState<ChatGroups>(USE_MOCK ? buildMockGroups() : {
+    // searchParams.get('user_id') — TODO: use to auto-select or create direct room
+    const [searchParams] = useSearchParams();
+    void searchParams;
+
+const [chatGroups, _setChatGroups] = useState<ChatGroups>(USE_MOCK ? buildMockGroups() : {
         DIRECT: [],
         GROUP: [],
         CHANNEL: [],

@@ -100,6 +100,34 @@ export interface ParticipantResponse {
     user_id: number;
 }
 
+// ── Friends ───────────────────────────────────────────────────────────────────
+
+export interface FriendResponse {
+    friendship_id: number;
+    user_id: number;
+    name: string;
+    avatar: string;
+    status: string;
+    created_at: string;
+}
+
+export interface FriendRequestResponse {
+    friendship_id: number;
+    user_id: number;
+    name: string;
+    avatar: string;
+    created_at: string;
+}
+
+export interface UserSearchResponse {
+    user_id: number;
+    name: string;
+    avatar: string;
+    account: string;
+    public_id: string;
+    friendship_status?: string;
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 export interface CreateRoomRequest {

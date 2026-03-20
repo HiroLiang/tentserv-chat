@@ -1,8 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/layout/Navbar.tsx';
 import { cn } from '@/lib/utils';
-import { mockFriends, mockFriendRequests } from '@/mock/friends.ts';
-import type { MockFriend } from '@/mock/friends.ts';
+import { friendApi } from '@/api/friend.ts';
+import type { FriendResponse, FriendRequestResponse } from '@/api/types.ts';
+import { AddFriendDialog } from '@/components/friends/AddFriendDialog.tsx';
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import { env } from '@/config/env';
 
 type Tab = 'friends' | 'requests';
 
@@ -10,49 +14,84 @@ function getInitials(name: string) {
     return name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
 }
 
-function FriendRow({ friend, actionLabel }: { friend: MockFriend; actionLabel: string }) {
-    return (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-accent transition-colors">
-            <div className="relative flex-shrink-0">
-                <div
-                    className="h-10 w-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-sm">
-                    {getInitials(friend.name)}
-                </div>
-                <span className={cn(
-                    'absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background',
-                    friend.isOnline ? 'bg-green-500' : 'bg-zinc-400',
-                )}/>
-            </div>
-            <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm truncate">{friend.name}</p>
-                <p className="text-xs text-muted-foreground">
-                    {friend.status === 'accepted' ? (friend.isOnline ? 'Online' : 'Offline') : 'Pending'}
-                </p>
-            </div>
-            <button
-                className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground">
-                {actionLabel}
-            </button>
-        </div>
-    );
-}
-
 export const FriendsPage = () => {
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState<Tab>('friends');
+    const [friends, setFriends] = useState<FriendResponse[]>([]);
+    const [requests, setRequests] = useState<FriendRequestResponse[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const [showAddDialog, setShowAddDialog] = useState(false);
+
+    const fetchFriends = async () => {
+        const data = await friendApi.getFriends();
+        setFriends(data);
+    };
+
+    const fetchRequests = async () => {
+        const data = await friendApi.getFriendRequests();
+        setRequests(data);
+    };
+
+    useEffect(() => {
+        setLoading(true);
+        Promise.all([fetchFriends(), fetchRequests()]).finally(() => setLoading(false));
+    }, []);
+
+    const handleMessage = (userId: number) => {
+        navigate(`/chat?user_id=${userId}`);
+    };
+
+    const handleCancel = async (friendshipId: number) => {
+        await friendApi.removeFriend(friendshipId);
+        await Promise.all([fetchFriends(), fetchRequests()]);
+    };
+
+    const handleAccept = async (friendshipId: number) => {
+        await friendApi.acceptFriend(friendshipId);
+        await Promise.all([fetchFriends(), fetchRequests()]);
+    };
+
+    const handleReject = async (friendshipId: number) => {
+        await friendApi.removeFriend(friendshipId);
+        await Promise.all([fetchFriends(), fetchRequests()]);
+    };
+
+    const filteredFriends = friends.filter(f =>
+        f.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    const filteredRequests = requests.filter(r =>
+        r.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
     return (
         <div className="flex flex-col h-screen overflow-hidden">
             <Navbar/>
             <div className="flex-1 overflow-y-auto">
                 <div className="max-w-2xl mx-auto px-4 py-6">
-                    <h1 className="text-xl font-semibold mb-4">Friends</h1>
+                    <div className="flex items-center justify-between mb-4">
+                        <h1 className="text-xl font-semibold">Friends</h1>
+                        <button
+                            onClick={() => setShowAddDialog(true)}
+                            className="text-sm px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                        >
+                            Add Friend
+                        </button>
+                    </div>
 
                     {/* Tabs */}
                     <div className="flex gap-1 border-b border-border mb-4">
                         {(['friends', 'requests'] as Tab[]).map((tab) => (
                             <button
                                 key={tab}
-                                onClick={() => setActiveTab(tab)}
+                                onClick={() => {
+                                    setActiveTab(tab);
+                                    setSearchQuery('');
+                                    if (tab === 'friends') fetchFriends();
+                                    else fetchRequests();
+                                }}
                                 className={cn(
                                     'px-4 py-2 text-sm font-medium capitalize transition-colors',
                                     activeTab === tab
@@ -60,26 +99,118 @@ export const FriendsPage = () => {
                                         : 'text-muted-foreground hover:text-foreground',
                                 )}
                             >
-                                {tab === 'friends' ? `Friends (${mockFriends.length})` : `Requests (${mockFriendRequests.length})`}
+                                {tab === 'friends'
+                                    ? `Friends (${friends.length})`
+                                    : `Requests (${requests.length})`}
                             </button>
                         ))}
                     </div>
 
+                    {/* Search */}
+                    <input
+                        type="text"
+                        placeholder="Search..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        className="w-full mb-4 px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+
                     {/* List */}
-                    <div className="space-y-1">
-                        {activeTab === 'friends'
-                            ? mockFriends.map(f => <FriendRow key={f.userId} friend={f} actionLabel="Message"/>)
-                            : mockFriendRequests.map(f => <FriendRow key={f.userId} friend={f} actionLabel="Accept"/>)
-                        }
-                        {activeTab === 'friends' && mockFriends.length === 0 && (
-                            <p className="text-center text-sm text-muted-foreground py-8">No friends yet</p>
-                        )}
-                        {activeTab === 'requests' && mockFriendRequests.length === 0 && (
-                            <p className="text-center text-sm text-muted-foreground py-8">No pending requests</p>
-                        )}
-                    </div>
+                    {loading ? (
+                        <p className="text-center text-sm text-muted-foreground py-8">Loading...</p>
+                    ) : (
+                        <div className="space-y-1">
+                            {activeTab === 'friends' && (
+                                <>
+                                    {filteredFriends.map(f => (
+                                        <div
+                                            key={f.friendship_id}
+                                            className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-accent transition-colors"
+                                        >
+                                            <Avatar className="h-10 w-10 flex-shrink-0">
+                                                <AvatarImage src={`${env.API_BASE_URL}/static/${f.avatar}`} />
+                                                <AvatarFallback className="text-sm font-semibold bg-primary text-primary-foreground">
+                                                    {getInitials(f.name)}
+                                                </AvatarFallback>
+                                            </Avatar>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-medium text-sm truncate">{f.name}</p>
+                                                <p className="text-xs text-muted-foreground capitalize">{f.status}</p>
+                                            </div>
+                                            {f.status === 'accepted' ? (
+                                                <button
+                                                    onClick={() => handleMessage(f.user_id)}
+                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                >
+                                                    Message
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={() => handleCancel(f.friendship_id)}
+                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            )}
+                                        </div>
+                                    ))}
+                                    {filteredFriends.length === 0 && (
+                                        <p className="text-center text-sm text-muted-foreground py-8">No friends yet</p>
+                                    )}
+                                </>
+                            )}
+
+                            {activeTab === 'requests' && (
+                                <>
+                                    {filteredRequests.map(r => (
+                                        <div
+                                            key={r.friendship_id}
+                                            className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-accent transition-colors"
+                                        >
+                                            <Avatar className="h-10 w-10 flex-shrink-0">
+                                                <AvatarImage src={`${env.API_BASE_URL}/static/${r.avatar}`} />
+                                                <AvatarFallback className="text-sm font-semibold bg-primary text-primary-foreground">
+                                                    {getInitials(r.name)}
+                                                </AvatarFallback>
+                                            </Avatar>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-medium text-sm truncate">{r.name}</p>
+                                                <p className="text-xs text-muted-foreground">Sent you a request</p>
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={() => handleAccept(r.friendship_id)}
+                                                    className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                                >
+                                                    Accept
+                                                </button>
+                                                <button
+                                                    onClick={() => handleReject(r.friendship_id)}
+                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                >
+                                                    Reject
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {filteredRequests.length === 0 && (
+                                        <p className="text-center text-sm text-muted-foreground py-8">No pending requests</p>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
+
+            {showAddDialog && (
+                <AddFriendDialog
+                    onClose={() => {
+                        setShowAddDialog(false);
+                        Promise.all([fetchFriends(), fetchRequests()]);
+                    }}
+                />
+            )}
         </div>
     );
 };
