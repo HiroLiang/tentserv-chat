@@ -13,7 +13,7 @@ import { env } from "@/config/env.ts";
 export const LoginPage = () => {
     const navigate = useNavigate();
 
-    const [email, setEmail] = useState('');
+    const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
@@ -26,7 +26,7 @@ export const LoginPage = () => {
         try {
 
             // Try to sign in
-            const response = await userService.login(email, password);
+            const response = await userService.login(identifier, password);
             toast.success(response.message ?? "Login successfully");
 
             // connect to websocket
@@ -66,20 +66,20 @@ export const LoginPage = () => {
                                 {/* Email */}
                                 <div className="space-y-2">
                                     <label
-                                        htmlFor="email"
+                                        htmlFor="identifier"
                                         className="block text-sm font-medium text-card-foreground mb-2"
                                     >
-                                        Email Address
+                                        Email or Account
                                     </label>
                                     <Input
-                                        id="email"
-                                        type="email"
-                                        placeholder="example@email.com"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
+                                        id="identifier"
+                                        type="text"
+                                        placeholder="email or account name"
+                                        value={identifier}
+                                        onChange={(e) => setIdentifier(e.target.value)}
                                         required
                                         disabled={isLoading}
-                                        autoComplete="email"
+                                        autoComplete="username"
                                         autoFocus
                                     />
                                 </div>

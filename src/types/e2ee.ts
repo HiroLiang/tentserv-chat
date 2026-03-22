@@ -31,7 +31,7 @@ export interface GenerateSignedPreKeyResult {
 }
 
 // Rust generate_one_time_pre_keys returns Vec<OneTimePreKey> directly as an array
-export interface OneTimePreKeyResult {
+export interface OneTimePreKey {
     key_id: number;
     public_key: number[];
 }

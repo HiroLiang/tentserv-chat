@@ -1,29 +1,11 @@
 use crate::crypto::x3dh::{PublicKeyBundle, InitialMessage};
 use crate::crypto::x3dh::{x3dh_sender, x3dh_receiver};
 use crate::crypto::x3dh::{StaticSecret, PublicKey, SigningKey};
+use crate::store::resource_store::{store_private_key, load_private_key, delete_private_key, has_private_key, clear_private_keys, next_opk_ids};
 use ed25519_dalek::Signer;
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use tauri_plugin_store::StoreExt;
-
-// ── Keyring helpers ────────────────────────────────
-
-fn store_private_key(label: &str, secret: &[u8; 32]) -> Result<(), String> {
-    Entry::new("goat-chat", label)
-        .map_err(|e| e.to_string())?
-        .set_password(&hex::encode(secret))
-        .map_err(|e| e.to_string())
-}
-
-fn load_private_key(label: &str) -> Result<[u8; 32], String> {
-    let hex_str = Entry::new("goat-chat", label)
-        .map_err(|e| e.to_string())?
-        .get_password()
-        .map_err(|e| e.to_string())?;
-    let bytes = hex::decode(&hex_str).map_err(|e| e.to_string())?;
-    bytes.try_into().map_err(|_| "key is not 32 bytes".into())
-}
 
 // ── Return types ───────────────────────────────────
 
@@ -51,68 +33,92 @@ pub struct OneTimePreKey {
 // ── Commands ───────────────────────────────────────
 
 #[tauri::command]
-pub async fn generate_identity_keys() -> Result<IdentityKeyBundle, String> {
-    // X25519 DH identity key
+pub async fn generate_identity_keys(app: tauri::AppHandle) -> Result<IdentityKeyBundle, String> {
     let dh_secret = StaticSecret::from(rand::random::<[u8; 32]>());
     let dh_public = PublicKey::from(&dh_secret);
-    store_private_key("ik_dh", dh_secret.as_bytes())?;
+    store_private_key(&app, "ik_dh", dh_secret.as_bytes())?;
 
-    // Ed25519 signing identity key
     let sign_secret = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
     let sign_public = sign_secret.verifying_key();
-    store_private_key("ik_sign", sign_secret.as_bytes())?;
+    store_private_key(&app, "ik_sign", sign_secret.as_bytes())?;
 
     Ok(IdentityKeyBundle {
-        identity_key_dh_pub:   dh_public.to_bytes(),
+        identity_key_dh_pub: dh_public.to_bytes(),
         identity_key_sign_pub: sign_public.to_bytes(),
     })
 }
 
+// #[tauri::command]
+// pub async fn generate_identity_keys() -> Result<IdentityKeyBundle, String> {
+//     // X25519 DH identity key
+//     let dh_secret = StaticSecret::from(rand::random::<[u8; 32]>());
+//     let dh_public = PublicKey::from(&dh_secret);
+//     store_private_key("ik_dh", dh_secret.as_bytes())?;
+//
+//     // Ed25519 signing identity key
+//     let sign_secret = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
+//     let sign_public = sign_secret.verifying_key();
+//     store_private_key("ik_sign", sign_secret.as_bytes())?;
+//
+//     Ok(IdentityKeyBundle {
+//         identity_key_dh_pub:   dh_public.to_bytes(),
+//         identity_key_sign_pub: sign_public.to_bytes(),
+//     })
+// }
+
 #[tauri::command]
-pub async fn generate_signed_pre_key(key_id: u32) -> Result<SignedPreKeyBundle, String> {
-    // Generate X25519 SPK
+pub async fn generate_signed_pre_key(
+    app: tauri::AppHandle,
+    key_id: u32,
+) -> Result<SignedPreKeyBundle, String> {
     let spk_secret = StaticSecret::from(rand::random::<[u8; 32]>());
     let spk_public = PublicKey::from(&spk_secret);
 
-    // Load Ed25519 signing key to sign the SPK public key
-    let sign_bytes = load_private_key("ik_sign")?;
+    let sign_bytes = load_private_key(&app, "ik_sign")?;
     let sign_secret = SigningKey::from_bytes(&sign_bytes);
     let signature = sign_secret.sign(spk_public.as_bytes());
 
-    // Store SPK private key
-    store_private_key(&format!("spk_{key_id}"), spk_secret.as_bytes())?;
+    store_private_key(&app, &format!("spk_{key_id}"), spk_secret.as_bytes())?;
 
     Ok(SignedPreKeyBundle {
         public_key: spk_public.to_bytes(),
-        signature:  signature.to_bytes(),
+        signature: signature.to_bytes(),
         key_id,
     })
 }
 
 #[tauri::command]
-pub async fn generate_one_time_pre_keys(key_ids: Vec<u32>) -> Result<Vec<OneTimePreKey>, String> {
-    let mut result = Vec::with_capacity(key_ids.len());
-    for key_id in key_ids {
+pub async fn replenish_otp_keys(
+    app: tauri::AppHandle,
+    count: u32,
+) -> Result<Vec<OneTimePreKey>, String> {
+    let ids = next_opk_ids(&app, count)?;
+
+    let mut result = Vec::with_capacity(ids.len());
+
+    for key_id in ids {
         let opk_secret = StaticSecret::from(rand::random::<[u8; 32]>());
         let opk_public = PublicKey::from(&opk_secret);
-        store_private_key(&format!("opk_{key_id}"), opk_secret.as_bytes())?;
+
+        store_private_key(
+            &app,
+            &format!("opk_{key_id}"),
+            opk_secret.as_bytes(),
+        )?;
+
         result.push(OneTimePreKey {
             key_id,
             public_key: opk_public.to_bytes(),
         });
     }
+
     Ok(result)
 }
 
 #[tauri::command]
 pub fn clear_e2ee_keys(app: tauri::AppHandle) -> Result<(), String> {
-    let labels = ["ik_dh", "ik_sign", "spk_1"];
-    for label in labels {
-        let _ = Entry::new("goat-chat", label)
-            .map_err(|e| e.to_string())?
-            .delete_credential();
-    }
-    // 清 flag
+    clear_private_keys(&app)?;
+
     let store = app.store("store.json").map_err(|e| e.to_string())?;
     store.clear();
     store.save().map_err(|e| e.to_string())
@@ -120,44 +126,48 @@ pub fn clear_e2ee_keys(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn perform_x3dh_send(
-    bundle:    PublicKeyBundle,
+    app: tauri::AppHandle,
+    bundle: PublicKeyBundle,
     plaintext: Vec<u8>,
 ) -> Result<InitialMessage, String> {
-    let ik_dh_bytes   = load_private_key("ik_dh")?;
-    let ik_sign_bytes = load_private_key("ik_sign")?;
-    let ik_dh   = StaticSecret::from(ik_dh_bytes);
+    let ik_dh_bytes = load_private_key(&app, "ik_dh")?;
+    let ik_sign_bytes = load_private_key(&app, "ik_sign")?;
+
+    let ik_dh = StaticSecret::from(ik_dh_bytes);
     let ik_sign = SigningKey::from_bytes(&ik_sign_bytes);
+
     x3dh_sender(&ik_dh, &ik_sign, &bundle, &plaintext)
 }
 
 #[tauri::command]
 pub async fn perform_x3dh_receive(
-    msg:        InitialMessage,
+    app: tauri::AppHandle,
+    msg: InitialMessage,
     spk_key_id: u32,
     otpk_key_id: Option<u32>,
 ) -> Result<Vec<u8>, String> {
-    let ik  = StaticSecret::from(load_private_key("ik_dh")?);
-    let spk = StaticSecret::from(load_private_key(&format!("spk_{spk_key_id}"))?);
+    let ik = StaticSecret::from(load_private_key(&app, "ik_dh")?);
+    let spk = StaticSecret::from(
+        load_private_key(&app, &format!("spk_{spk_key_id}"))?
+    );
+
     let opk = otpk_key_id
-        .map(|id| load_private_key(&format!("opk_{id}")))
+        .map(|id| load_private_key(&app, &format!("opk_{id}")))
         .transpose()?
         .map(StaticSecret::from);
-    x3dh_receiver(&ik, &spk, opk.as_ref(), &msg)
+
+    let plaintext = x3dh_receiver(&ik, &spk, opk.as_ref(), &msg)?;
+
+    if let Some(id) = otpk_key_id {
+        let _ = delete_private_key(&app, &format!("opk_{id}"));
+    }
+
+    Ok(plaintext)
 }
 
 #[tauri::command]
-pub fn get_e2ee_flag(app: tauri::AppHandle, device_id: String) -> Result<bool, String> {
-    let store = app.store("store.json").map_err(|e| e.to_string())?;
-    let key = format!("e2ee_initialized_{}", device_id);
-    Ok(store.get(&key)
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false))
-}
-
-#[tauri::command]
-pub fn set_e2ee_flag(app: tauri::AppHandle, device_id: String, value: bool) -> Result<(), String> {
-    let store = app.store("store.json").map_err(|e| e.to_string())?;
-    let key = format!("e2ee_initialized_{}", device_id);
-    store.set(key, serde_json::Value::Bool(value));
-    store.save().map_err(|e| e.to_string())
+pub fn has_identity_keys(app: tauri::AppHandle) -> Result<bool, String> {
+    let has_dh = has_private_key(&app, "ik_dh")?;
+    let has_sign = has_private_key(&app, "ik_sign")?;
+    Ok(has_dh && has_sign)
 }

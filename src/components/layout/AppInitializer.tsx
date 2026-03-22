@@ -67,7 +67,7 @@ export const AppInitializer = ({ children }: Props) => {
         // 4. If not logged in: auto-login in dev, navigate to /login in prod
         if (!isLoggedIn) {
             if (env.IS_DEV) {
-                const loginOk = await userService.login('hiro@gmail.com', 'string').then(() => true).catch(err => {
+                const loginOk = await userService.login('hiromichi.liang@gmail.com', 'string').then(() => true).catch(err => {
                     toast.error(err.message);
                     return false;
                 });

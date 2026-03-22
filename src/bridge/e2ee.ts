@@ -2,16 +2,13 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
     GenerateIdentityKeysResult,
     GenerateSignedPreKeyResult,
-    OneTimePreKeyResult,
+    OneTimePreKey,
     PublicKeyBundle,
     InitialMessage,
 } from '@/types/e2ee.ts';
 
-export const getE2eeFlag = (deviceId: string): Promise<boolean> =>
-    invoke<boolean>('get_e2ee_flag', { deviceId });
-
-export const setE2eeFlag = (deviceId: string, value: boolean): Promise<void> =>
-    invoke('set_e2ee_flag', { deviceId, value });
+export const hasIdentityKeys = (): Promise<boolean> =>
+    invoke<boolean>('has_identity_keys');
 
 export const generateIdentityKeys = (): Promise<GenerateIdentityKeysResult> =>
     invoke<GenerateIdentityKeysResult>('generate_identity_keys');
@@ -19,8 +16,8 @@ export const generateIdentityKeys = (): Promise<GenerateIdentityKeysResult> =>
 export const generateSignedPreKey = (keyId: number): Promise<GenerateSignedPreKeyResult> =>
     invoke<GenerateSignedPreKeyResult>('generate_signed_pre_key', { keyId });
 
-export const generateOneTimePreKeys = (keyIds: number[]): Promise<OneTimePreKeyResult[]> =>
-    invoke<OneTimePreKeyResult[]>('generate_one_time_pre_keys', { keyIds });
+export const replenishOtpKeys = (number: number): Promise<OneTimePreKey[]> =>
+    invoke<OneTimePreKey[]>("replenish_otp_keys", { count: number, });
 
 export const performX3dhSend = (bundle: PublicKeyBundle, plaintext: number[]): Promise<InitialMessage> =>
     invoke<InitialMessage>('perform_x3dh_send', { bundle, plaintext });

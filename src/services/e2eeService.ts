@@ -2,13 +2,12 @@ import { e2eeApi } from '@/api/index.ts';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { logger } from '@/utils/logger.ts';
 import {
-    getE2eeFlag,
-    setE2eeFlag,
     generateIdentityKeys,
     generateSignedPreKey,
-    generateOneTimePreKeys,
+    replenishOtpKeys,
     performX3dhSend,
     performX3dhReceive,
+    hasIdentityKeys,
 } from '@/bridge/e2ee.ts';
 import type {
     PublicKeyBundle,
@@ -16,8 +15,6 @@ import type {
 } from '@/types/e2ee.ts';
 
 const INITIAL_SPK_KEY_ID = 1;
-const INITIAL_OTP_KEY_IDS = Array.from({ length: 20 }, (_, i) => i + 1);
-const OTP_REPLENISH_BATCH = 20;
 
 // Rust returns [u8;32] / [u8;64] as number[] in JSON.
 // Server expects base64.StdEncoding (standard, not URL-safe, with padding).
@@ -29,30 +26,31 @@ const fromBase64 = (b64: string): number[] =>
 
 class E2eeService {
     async ensureInitialized(deviceId: string): Promise<void> {
-        const alreadyInitialized = await getE2eeFlag(deviceId);
+        const alreadyInitialized = await hasIdentityKeys();
         logger.info(`E2EE already initialized: ${alreadyInitialized}`);
 
         if (!alreadyInitialized) {
             const identityKeys = await generateIdentityKeys();
-            logger.info('Generated E2EE keys:', identityKeys);
+            logger.info('E2EE keys generated');
             await e2eeApi.uploadIdentityKey(
                 deviceId,
                 toBase64(identityKeys.identity_key_dh_pub),
                 toBase64(identityKeys.identity_key_sign_pub),
             );
+            logger.info('E2EE identity key uploaded');
 
             const spk = await generateSignedPreKey(INITIAL_SPK_KEY_ID);
-            logger.info('Generated SPK:', spk);
+            logger.info('E2EE signed pre-key generated');
             await e2eeApi.uploadSignedPreKey(deviceId, spk.key_id, toBase64(spk.public_key), toBase64(spk.signature));
+            logger.info('E2EE signed pre-key uploaded');
 
-            const otpKeys = await generateOneTimePreKeys(INITIAL_OTP_KEY_IDS);
-            logger.info('Generated OTP keys:', otpKeys.length);
+            const otpKeys = await replenishOtpKeys(20);
+            logger.info('E2EE OTP pre-keys generated');
             await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
                 key_id: k.key_id,
                 public_key: toBase64(k.public_key)
             })));
-
-            await setE2eeFlag(deviceId, true);
+            logger.info('E2EE OTP pre-keys uploaded');
 
             const e2eeState = useE2eeStore.getState();
             e2eeState.setKeysUploaded(true);
@@ -71,9 +69,7 @@ class E2eeService {
 
         if (count >= threshold) return;
 
-        const startId = Date.now();
-        const keyIds = Array.from({ length: OTP_REPLENISH_BATCH }, (_, i) => startId + i);
-        const otpKeys = await generateOneTimePreKeys(keyIds);
+        const otpKeys = await replenishOtpKeys(20);
         await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
             key_id: k.key_id,
             public_key: toBase64(k.public_key)
@@ -91,13 +87,13 @@ class E2eeService {
         const bundle = await e2eeApi.getKeyBundle(targetUserId, targetDeviceId);
 
         const keyBundle: PublicKeyBundle = {
-            identity_key_dh:   fromBase64(bundle.identity_key),
+            identity_key_dh: fromBase64(bundle.identity_key),
             identity_key_sign: fromBase64(bundle.identity_key_sign),
-            signed_pre_key:    fromBase64(bundle.signed_pre_key),
-            spk_signature:     fromBase64(bundle.spk_signature),
-            spk_key_id:        bundle.spk_key_id,
-            one_time_pre_key:  bundle.otp_pre_key ? fromBase64(bundle.otp_pre_key) : undefined,
-            otpk_key_id:       bundle.otp_pre_key_id,
+            signed_pre_key: fromBase64(bundle.signed_pre_key),
+            spk_signature: fromBase64(bundle.spk_signature),
+            spk_key_id: bundle.spk_key_id,
+            one_time_pre_key: bundle.otp_pre_key ? fromBase64(bundle.otp_pre_key) : undefined,
+            otpk_key_id: bundle.otp_pre_key_id,
         };
 
         return performX3dhSend(keyBundle, Array.from(new TextEncoder().encode(plaintext)));

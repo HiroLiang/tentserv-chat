@@ -10,10 +10,10 @@ import { toast } from "sonner";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 
 class UserService {
-    async login(email: string, password: string): Promise<AuthMessageResponse> {
+    async login(identifier: string, password: string): Promise<AuthMessageResponse> {
         const deviceState = useDeviceStore.getState();
         const response = await authApi.login({
-            identifier: email,
+            identifier,
             password,
             device_id: deviceState.deviceId ?? '',
         });
@@ -55,7 +55,7 @@ class UserService {
 
     async register(payload: UserRegisterRequest): Promise<AuthMessageResponse> {
         return authApi.register({
-            account: payload.account ?? payload.email,
+            account: payload.account!,
             email: payload.email,
             name: payload.name,
             password: payload.password,

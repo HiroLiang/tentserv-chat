@@ -1,5 +1,6 @@
 mod commands;
 mod crypto;
+mod store;
 
 use tauri_plugin_store::Builder as StoreBuilder;
 use tauri_plugin_log::{Builder, Target, TargetKind, TimezoneStrategy};
@@ -15,14 +16,13 @@ use commands::auth::{
     clear_auth_token,
 };
 use commands::e2ee::{
+    has_identity_keys,
     generate_identity_keys,
     generate_signed_pre_key,
-    generate_one_time_pre_keys,
+    replenish_otp_keys,
     clear_e2ee_keys,
     perform_x3dh_send,
     perform_x3dh_receive,
-    get_e2ee_flag,
-    set_e2ee_flag,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,14 +51,13 @@ pub fn run() {
             get_auth_token,
             save_auth_token,
             clear_auth_token,
+            has_identity_keys,
             generate_identity_keys,
             generate_signed_pre_key,
-            generate_one_time_pre_keys,
+            replenish_otp_keys,
             clear_e2ee_keys,
             perform_x3dh_send,
             perform_x3dh_receive,
-            get_e2ee_flag,
-            set_e2ee_flag,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

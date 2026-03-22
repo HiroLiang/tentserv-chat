@@ -10,6 +10,7 @@ export const RegisterPage = () => {
     const navigate = useNavigate();
 
     const [email, setEmail] = useState('');
+    const [account, setAccount] = useState('');
     const [name, setName] = useState('');
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -21,7 +22,7 @@ export const RegisterPage = () => {
         setError('');
 
         try {
-            const response = await userService.register({ email, name, password });
+            const response = await userService.register({ account, email, name, password });
             toast.success(response.message ?? "Account created successfully");
             navigate("/login");
         } catch (err) {
@@ -64,6 +65,23 @@ export const RegisterPage = () => {
                                     disabled={isLoading}
                                     autoComplete="email"
                                     autoFocus
+                                />
+                            </div>
+
+                            {/* Account */}
+                            <div className="space-y-2">
+                                <label htmlFor="account" className="block text-sm font-medium text-card-foreground mb-2">
+                                    Account Name
+                                </label>
+                                <Input
+                                    id="account"
+                                    type="text"
+                                    placeholder="your_account"
+                                    value={account}
+                                    onChange={(e) => setAccount(e.target.value)}
+                                    required
+                                    disabled={isLoading}
+                                    autoComplete="username"
                                 />
                             </div>
 
