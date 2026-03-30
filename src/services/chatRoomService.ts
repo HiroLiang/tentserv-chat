@@ -1,8 +1,9 @@
 import { chatApi } from '@/api/index.ts';
 import { useChatStore } from '@/stores/chatStore.ts';
 import { logger } from '@/utils/logger.ts';
-import type { CreateRoomRequest, SendMessageRequest } from '@/api/types.ts';
+import type { CreateRoomRequest, CreateRoomResponse, SendMessageRequest } from '@/api/types.ts';
 import type { Message } from '@/types/chat.ts';
+import { e2eeService } from '@/services/e2eeService.ts';
 
 class ChatRoomService {
     async loadRooms(): Promise<void> {
@@ -64,10 +65,9 @@ class ChatRoomService {
         }
     }
 
-    async createRoom(req: CreateRoomRequest): Promise<number> {
+    async createRoom(req: CreateRoomRequest): Promise<CreateRoomResponse> {
         try {
-            const result = await chatApi.createRoom(req);
-            return result.id;
+            return await chatApi.createRoom(req);
         } catch (err) {
             logger.error('Failed to create room', err);
             throw err;
@@ -88,6 +88,43 @@ class ChatRoomService {
             await chatApi.markAsRead(roomId);
         } catch (err) {
             logger.error(`Failed to mark room ${roomId} as read`, err);
+            throw err;
+        }
+    }
+
+    async loadMyRoomInvitation(roomId: number): Promise<void> {
+        const store = useChatStore.getState();
+        try {
+            const inv = await chatApi.getMyRoomInvitation(roomId);
+            store.setPendingInvitation(inv.found ? inv : null);
+        } catch (err) {
+            logger.error(`Failed to load invitation for room ${roomId}`, err);
+            store.setPendingInvitation(null);
+        }
+    }
+
+    async respondToInvitation(
+        invId: number,
+        action: 'accept' | 'reject' | 'block',
+        ctx?: { roomId: number; roomType: string; inviterUserId?: number },
+    ): Promise<void> {
+        try {
+            await chatApi.respondInvitation(invId, action);
+            useChatStore.getState().setPendingInvitation(null);
+
+            if (action === 'accept' && ctx?.roomType === 'DIRECT' && ctx.inviterUserId !== undefined) {
+                const store = useChatStore.getState();
+                store.setDirectKeyStatus(ctx.roomId, 'loading');
+                try {
+                    await e2eeService.performDirectKeyExchange(ctx.roomId, ctx.inviterUserId);
+                    store.setDirectKeyStatus(ctx.roomId, 'unlocked');
+                } catch (e2eeErr) {
+                    logger.error(`Direct key exchange failed for room ${ctx.roomId}`, e2eeErr);
+                    store.setDirectKeyStatus(ctx.roomId, 'locked');
+                }
+            }
+        } catch (err) {
+            logger.error(`Failed to respond to invitation ${invId}`, err);
             throw err;
         }
     }

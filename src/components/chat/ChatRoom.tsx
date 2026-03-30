@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import type { ChatGroup, ChatMessage } from '@/mock/chat';
-import { Bot, Send, Users } from 'lucide-react';
+import type { ChatGroup, ChatMessage } from '@/types/ui';
+import { Bot, Lock, Send, Users } from 'lucide-react';
+import { useChatStore } from '@/stores/chatStore';
+import { chatRoomService } from '@/services/chatRoomService';
+import { e2eeService } from '@/services/e2eeService';
+import { wsService } from '@/services/wsService';
+import { InvitationBanner } from './InvitationBanner';
 
 interface ChatRoomProps {
     chat: ChatGroup;
@@ -101,6 +106,45 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
     const [input, setInput] = useState('');
     const bottomRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const pendingInvitation = useChatStore((s) => s.pendingInvitation);
+    const directKeyStatus = useChatStore((s) => s.directKeyStatus[Number(chat.id)]);
+    const isDirectLocked = chat.type === 'DIRECT' && directKeyStatus !== 'unlocked';
+    const inputDisabled = (chat.type === 'GROUP' && pendingInvitation?.found === true) || isDirectLocked;
+
+    // Load pending invitation for GROUP; resolve direct key for DIRECT
+    useEffect(() => {
+        if (chat.type === 'GROUP') {
+            void chatRoomService.loadMyRoomInvitation(Number(chat.id));
+            useChatStore.getState().setDirectKeyStatus(Number(chat.id), 'unlocked');
+        } else if (chat.type === 'DIRECT') {
+            useChatStore.getState().setPendingInvitation(null);
+            const roomId = Number(chat.id);
+            useChatStore.getState().setDirectKeyStatus(roomId, 'loading');
+            void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
+                useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+            });
+        } else {
+            useChatStore.getState().setPendingInvitation(null);
+            useChatStore.getState().setDirectKeyStatus(Number(chat.id), 'unlocked');
+        }
+    }, [chat.id, chat.type]);
+
+    // Subscribe to WS e2ee.direct_key_ready to auto-unlock when invitee completes handshake
+    useEffect(() => {
+        if (chat.type !== 'DIRECT') return;
+        const roomId = Number(chat.id);
+        const handler = (data: unknown) => {
+            const payload = data as { room_id?: number };
+            if (payload?.room_id === roomId) {
+                useChatStore.getState().setDirectKeyStatus(roomId, 'loading');
+                void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
+                    useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+                });
+            }
+        };
+        wsService.on('e2ee.direct_key_ready', handler);
+        return () => wsService.off('e2ee.direct_key_ready', handler);
+    }, [chat.id, chat.type]);
 
     // Jump to the bottom instantly when switching chats
     useEffect(() => {
@@ -171,7 +215,52 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                 </div>
             </div>
 
-            {/* Messages */}
+            {/* Invitation Banner (GROUP) */}
+            {chat.type === 'GROUP' && pendingInvitation?.found && (
+                <InvitationBanner
+                    invitation={pendingInvitation}
+                    onAccept={() => pendingInvitation.invitation_id !== undefined &&
+                        void chatRoomService.respondToInvitation(pendingInvitation.invitation_id, 'accept')}
+                    onReject={() => pendingInvitation.invitation_id !== undefined &&
+                        void chatRoomService.respondToInvitation(pendingInvitation.invitation_id, 'reject')}
+                    onBlock={() => pendingInvitation.invitation_id !== undefined &&
+                        void chatRoomService.respondToInvitation(pendingInvitation.invitation_id, 'block')}
+                />
+            )}
+
+            {/* Invitation Banner (DIRECT) */}
+            {chat.type === 'DIRECT' && pendingInvitation?.found && pendingInvitation.role === 'invitee' && (
+                <InvitationBanner
+                    invitation={pendingInvitation}
+                    onAccept={() => pendingInvitation.invitation_id !== undefined &&
+                        void chatRoomService.respondToInvitation(
+                            pendingInvitation.invitation_id,
+                            'accept',
+                            {
+                                roomId: Number(chat.id),
+                                roomType: chat.type,
+                                inviterUserId: pendingInvitation.inviter_user_id,
+                            },
+                        )}
+                    onReject={() => pendingInvitation.invitation_id !== undefined &&
+                        void chatRoomService.respondToInvitation(pendingInvitation.invitation_id, 'reject')}
+                    onBlock={() => pendingInvitation.invitation_id !== undefined &&
+                        void chatRoomService.respondToInvitation(pendingInvitation.invitation_id, 'block')}
+                />
+            )}
+
+            {/* Direct chat locked overlay */}
+            {chat.type === 'DIRECT' && directKeyStatus === 'locked' && (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-muted/30">
+                    <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
+                        <Lock className="h-6 w-6 text-muted-foreground"/>
+                    </div>
+                    <p className="text-sm text-muted-foreground">等待對方上線解鎖</p>
+                </div>
+            )}
+
+            {/* Messages (hidden while locked) */}
+            {(!isDirectLocked || directKeyStatus === 'loading') && (
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4">
                 <div className="flex flex-col gap-3">
                     {messages.map((msg) => (
@@ -180,6 +269,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     <div ref={bottomRef}/>
                 </div>
             </div>
+            )}
 
             {/* Input area */}
             <div className="flex-shrink-0 px-4 py-3 border-t border-border bg-background">
@@ -189,16 +279,23 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                         value={input}
                         onChange={handleChange}
                         onKeyDown={handleKeyDown}
-                        placeholder={`Message ${chat.name}...`}
+                        placeholder={
+                            isDirectLocked
+                                ? '等待對方上線解鎖...'
+                                : inputDisabled
+                                    ? 'Accept the invitation to start chatting...'
+                                    : `Message ${chat.name}...`
+                        }
                         rows={1}
-                        className="flex-1 bg-transparent resize-none outline-none text-sm text-foreground placeholder:text-muted-foreground min-h-[24px] max-h-[120px] leading-6 py-1"
+                        disabled={inputDisabled}
+                        className="flex-1 bg-transparent resize-none outline-none text-sm text-foreground placeholder:text-muted-foreground min-h-[24px] max-h-[120px] leading-6 py-1 disabled:cursor-not-allowed"
                     />
                     <button
                         onClick={send}
-                        disabled={!input.trim()}
+                        disabled={!input.trim() || inputDisabled}
                         className={cn(
                             'h-8 w-8 self-end inline-flex items-center justify-center rounded-xl transition-colors flex-shrink-0',
-                            input.trim()
+                            input.trim() && !inputDisabled
                                 ? 'bg-primary text-primary-foreground hover:opacity-90'
                                 : 'text-muted-foreground cursor-not-allowed opacity-40',
                         )}
@@ -207,7 +304,11 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     </button>
                 </div>
                 <p className="text-[11px] text-muted-foreground text-center mt-2">
-                    Enter to send · Shift+Enter for newline
+                    {isDirectLocked
+                        ? '聊天室尚未解鎖，請等待對方上線'
+                        : inputDisabled
+                            ? 'You cannot send messages until the invitation is accepted'
+                            : 'Enter to send · Shift+Enter for newline'}
                 </p>
             </div>
         </div>

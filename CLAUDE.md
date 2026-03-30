@@ -14,6 +14,7 @@ pnpm tauri build      # Production desktop build
 # Rust only (faster iteration on backend changes)
 cd src-tauri && cargo check   # type-check without full link
 cd src-tauri && cargo build   # full Rust compile
+pnpm tauri icon --path ./public/goat-chat.png  # Update app icon
 ```
 
 No test framework is configured in this project.
@@ -29,17 +30,23 @@ Vite at port 1420 during development.
 
 1. `networkService.initialize()` — starts health polling and browser event listeners
 2. `deviceService.initializeDevice()` — calls Tauri `get_or_create_device_info`, registers with backend, updates
-   `deviceStore`
-3. In dev mode only: auto-logs in with a hardcoded test user
-4. If device registration fails, shows a blocking error overlay with retry
+   `deviceStore`; blocks app with error overlay + retry if registration fails
+3. `userService.tryRestoreSession()` — restores token from OS keyring, calls `/api/user/me` to populate user state
+4. Login/navigation: dev mode auto-logs in with a hardcoded test user; prod redirects unauthenticated users to `/`
+5. `chatService.initialize()` — ensures participant record exists on backend
+6. `wsService.connect()` — only if user is logged in AND network is healthy
+7. `e2eeService.ensureInitialized(deviceId)` — generates identity keys if absent, uploads public keys, replenishes
+   OTP pre-keys to a threshold of 20
 
 ### State Management
 
-Three Zustand stores in `src/stores/`:
+Five Zustand stores in `src/stores/`:
 
 - `userStore` — current user session (token, login state) and cached users
 - `deviceStore` — device ID and registration state
 - `networkStore` — network health status (`'offline' | 'connecting' | 'healthy' | 'unhealthy' | 'unreachable'`)
+- `chatStore` — chat rooms and messages
+- `e2eeStore` — E2EE key status (uploaded, OTP pre-key count)
 
 ### Service Layer (`src/services/`)
 
@@ -50,9 +57,17 @@ Singletons called during startup or on demand:
 - `userService` — login, logout, register, fetchCurrentUser, uploadAvatar
 - `wsService` — WebSocket singleton with exponential backoff reconnect (3s→30s), heartbeat ping every 20s, message queue
   for offline sends; requires user logged in + network healthy before connecting
-- `chatService` — thin wrapper over `wsService` for `chat_message` and `typing` events
+- `chatService` — thin wrapper over `wsService` for `chat_message` and `typing` events; also ensures participant record exists
+- `e2eeService` — key generation via Tauri, public key upload, X3DH send/receive, OTP key replenishment
+- `chatRoomService` — chat room CRUD via REST API
+- `chatParticipantService` — participant lifecycle via REST API
 - `src/services/llm/` — LLM integration: `factory.ts` creates adapters, `adapter.ts` implements `ClaudeAdapter` (
   Anthropic SDK) and `OpenAIAdapter`; message format normalized via `LLMAdapter` interface
+
+**Service Layer Rule:** Pages and components must not import from `src/api/` directly when a
+service in `src/services/` already covers that API domain. Always call the service. Direct
+`src/api/` imports are only acceptable when no service wrapper exists yet for that domain
+(e.g., `friendApi` — no `friendService` exists).
 
 ### HTTP Client (`src/api/`)
 
@@ -60,14 +75,12 @@ Singletons called during startup or on demand:
   refreshes token on new token in response headers
 - `src/api/index.ts` — barrel re-export of `authApi`, `deviceApi`, `healthApi`, `participantApi`, `userApi`
 - `src/api/types.ts` — all request/response DTOs for the HTTP layer
-- `src/features/*/api.ts` and `src/features/*/dto.ts` — feature-specific API wrappers and DTOs (parallel to the flat
-  `src/api/` modules; not yet fully consolidated)
 
 ### Routing (`src/routes/`)
 
 - `/` → `HomePage`
 - `/login`, `/register` — public
-- `/chat`, `/profile`, `/settings` — behind `ProtectedRoute` (redirects to `/login` if unauthenticated)
+- `/chat`, `/profile`, `/settings`, `/friends` — behind `ProtectedRoute` (redirects to `/login` if unauthenticated)
 - `/console` — behind `AdminRoute` (calls `/api/user/me` fresh to verify role server-side; denies → `/`, not `/login`);
   `AdminPage` is `React.lazy` so its bundle chunk is never fetched for unauthorized users
 

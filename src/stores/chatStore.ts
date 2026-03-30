@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { RoomSummary, RoomDetail, Message } from '@/types/chat.ts';
+import type { RoomSummary, RoomDetail, Message, PendingInvitation } from '@/types/chat.ts';
 
 interface RoomsState {
     direct: RoomSummary[];
@@ -7,6 +7,8 @@ interface RoomsState {
     channel: RoomSummary[];
     bot: RoomSummary[];
 }
+
+type DirectKeyStatus = 'loading' | 'locked' | 'unlocked';
 
 interface ChatState {
     rooms: RoomsState;
@@ -16,6 +18,8 @@ interface ChatState {
     hasMore: Record<number, boolean>;
     loadingRooms: boolean;
     loadingMessages: boolean;
+    pendingInvitation: PendingInvitation | null;
+    directKeyStatus: Record<number, DirectKeyStatus>;
 
     setRooms: (rooms: RoomsState) => void;
     setCurrentRoomId: (id: number | null) => void;
@@ -24,6 +28,8 @@ interface ChatState {
     appendMessage: (roomId: number, msg: Message) => void;
     setLoadingRooms: (v: boolean) => void;
     setLoadingMessages: (v: boolean) => void;
+    setPendingInvitation: (inv: PendingInvitation | null) => void;
+    setDirectKeyStatus: (roomId: number, status: DirectKeyStatus) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -34,6 +40,8 @@ export const useChatStore = create<ChatState>((set) => ({
     hasMore: {},
     loadingRooms: false,
     loadingMessages: false,
+    pendingInvitation: null,
+    directKeyStatus: {},
 
     setRooms: (rooms) => set({ rooms }),
 
@@ -64,4 +72,11 @@ export const useChatStore = create<ChatState>((set) => ({
     setLoadingRooms: (v) => set({ loadingRooms: v }),
 
     setLoadingMessages: (v) => set({ loadingMessages: v }),
+
+    setPendingInvitation: (inv) => set({ pendingInvitation: inv }),
+
+    setDirectKeyStatus: (roomId, status) =>
+        set((state) => ({
+            directKeyStatus: { ...state.directKeyStatus, [roomId]: status },
+        })),
 }));

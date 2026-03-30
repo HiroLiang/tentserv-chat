@@ -171,3 +171,4 @@ pub fn has_identity_keys(app: tauri::AppHandle) -> Result<bool, String> {
     let has_sign = has_private_key(&app, "ik_sign")?;
     Ok(has_dh && has_sign)
 }
+

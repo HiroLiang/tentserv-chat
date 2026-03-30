@@ -83,9 +83,11 @@ export const AppInitializer = ({ children }: Props) => {
             }
         }
 
-        // 5. WebSocket setup (requires user logged in)
+        // 5. Ensure participant record exists, then connect WebSocket
+        await chatService.initialize().catch(err => {
+            logger.warn('Participant initialization failed', err);
+        });
         const token = useUserStore.getState().currentUser?.token;
-        chatService.initialize();
         wsService.connect(env.WS_BASE_URL, token);
 
         // 6. E2EE: ensure keys are generated & uploaded, then replenish if needed

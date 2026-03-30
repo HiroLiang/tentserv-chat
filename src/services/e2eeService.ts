@@ -21,9 +21,6 @@ const INITIAL_SPK_KEY_ID = 1;
 const toBase64 = (bytes: number[]): string =>
     btoa(String.fromCharCode(...bytes));
 
-const fromBase64 = (b64: string): number[] =>
-    Array.from(atob(b64), c => c.charCodeAt(0));
-
 class E2eeService {
     async ensureInitialized(deviceId: string): Promise<void> {
         const alreadyInitialized = await hasIdentityKeys();
@@ -109,5 +106,8 @@ class E2eeService {
         return new TextDecoder().decode(new Uint8Array(plaintextBytes));
     }
 }
+
+const fromBase64 = (b64: string): number[] =>
+    Array.from(atob(b64), c => c.charCodeAt(0));
 
 export const e2eeService = new E2eeService();

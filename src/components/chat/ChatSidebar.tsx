@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
-import type { ChatGroup } from '@/mock/chat';
+import type { ChatGroup } from '@/types/ui';
 import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, MessageSquare, Users } from 'lucide-react';
 
 export interface ChatGroups {

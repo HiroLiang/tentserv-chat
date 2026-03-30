@@ -28,3 +28,4 @@ export const performX3dhReceive = (msg: InitialMessage, spkKeyId: number, otpkKe
         spk_key_id: spkKeyId,
         ...(otpkKeyId !== undefined && { otpk_key_id: otpkKeyId }),
     });
+

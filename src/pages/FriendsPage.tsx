@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/layout/Navbar.tsx';
 import { cn } from '@/lib/utils';
 import { friendApi } from '@/api/friend.ts';
+import { chatRoomService } from '@/services/chatRoomService.ts';
 import type { FriendResponse, FriendRequestResponse } from '@/api/types.ts';
 import { AddFriendDialog } from '@/components/friends/AddFriendDialog.tsx';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
@@ -23,6 +24,8 @@ export const FriendsPage = () => {
     const [searchQuery, setSearchQuery] = useState('');
 
     const [showAddDialog, setShowAddDialog] = useState(false);
+    const [loadingUserId, setLoadingUserId] = useState<number | null>(null);
+    const [messageError, setMessageError] = useState<string | null>(null);
 
     const fetchFriends = async () => {
         const data = await friendApi.getFriends();
@@ -39,8 +42,25 @@ export const FriendsPage = () => {
         Promise.all([fetchFriends(), fetchRequests()]).finally(() => setLoading(false));
     }, []);
 
-    const handleMessage = (userId: number) => {
-        navigate(`/chat?user_id=${userId}`);
+    const handleOpenDirect = async (friend: FriendResponse) => {
+        setLoadingUserId(friend.user_id);
+        setMessageError(null);
+        try {
+            const room = await chatRoomService.createRoom({
+                type: 'DIRECT',
+                name: friend.name,
+                member_ids: [friend.user_id],
+            });
+            navigate(`/chat?room_id=${room.id}`);
+        } catch (err: any) {
+            if (err.code === 'USER_BLOCKED') {
+                setMessageError(`Cannot send a message to ${friend.name}.`);
+            } else {
+                setMessageError('Failed to open chat. Please try again.');
+            }
+        } finally {
+            setLoadingUserId(null);
+        }
     };
 
     const handleCancel = async (friendshipId: number) => {
@@ -89,6 +109,7 @@ export const FriendsPage = () => {
                                 onClick={() => {
                                     setActiveTab(tab);
                                     setSearchQuery('');
+                                    setMessageError(null);
                                     if (tab === 'friends') fetchFriends();
                                     else fetchRequests();
                                 }}
@@ -115,6 +136,19 @@ export const FriendsPage = () => {
                         className="w-full mb-4 px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                     />
 
+                    {/* Error banner */}
+                    {messageError && (
+                        <div className="mb-3 flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-destructive/10 text-destructive text-sm">
+                            <span>{messageError}</span>
+                            <button
+                                onClick={() => setMessageError(null)}
+                                className="text-destructive/70 hover:text-destructive transition-colors text-xs"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                    )}
+
                     {/* List */}
                     {loading ? (
                         <p className="text-center text-sm text-muted-foreground py-8">Loading...</p>
@@ -139,10 +173,11 @@ export const FriendsPage = () => {
                                             </div>
                                             {f.status === 'accepted' ? (
                                                 <button
-                                                    onClick={() => handleMessage(f.user_id)}
-                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                    onClick={() => handleOpenDirect(f)}
+                                                    disabled={loadingUserId === f.user_id}
+                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                                                 >
-                                                    Message
+                                                    {loadingUserId === f.user_id ? '...' : 'Message'}
                                                 </button>
                                             ) : (
                                                 <button

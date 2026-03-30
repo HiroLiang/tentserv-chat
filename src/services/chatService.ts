@@ -1,10 +1,13 @@
 import { wsService } from "./wsService.ts";
 import { logger } from "@/utils/logger.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
+import { chatParticipantService } from "./chatParticipantService.ts";
 import type { Message } from "@/types/chat.ts";
 
 class ChatService {
-    initialize() {
+    async initialize(): Promise<void> {
+        await chatParticipantService.ensureParticipant();
+
         wsService.on('new_message', (payload) => {
             logger.info('New message received:', payload);
             const msg = payload as Message;

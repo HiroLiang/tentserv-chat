@@ -7,6 +7,7 @@ import type {
     GetKeyBundleResponse,
     UploadSenderKeyRequest,
     GetSenderKeysResponse,
+    GetSenderKeyDistributionStatusResponse,
 } from '@/api/types.ts';
 
 export const e2eeApi = {
@@ -25,9 +26,12 @@ export const e2eeApi = {
     getKeyBundle: (user_id: number, device_id: string): Promise<GetKeyBundleResponse> =>
         get(`/api/e2ee/key-bundle/${user_id}`, { params: { device_id } }),
 
-    uploadSenderKey: (room_id: number, sender_key_public: number[], distribution_message: number[]): Promise<void> =>
+    uploadSenderKey: (room_id: number, sender_key_public: string, distribution_message: string): Promise<void> =>
         post('/api/e2ee/sender-key', { room_id, sender_key_public, distribution_message } as UploadSenderKeyRequest),
 
     getSenderKeys: (room_id: number): Promise<GetSenderKeysResponse> =>
         get(`/api/e2ee/sender-keys/${room_id}`),
+
+    getSenderKeyDistributionStatus: (room_id: number): Promise<GetSenderKeyDistributionStatusResponse> =>
+        get(`/api/e2ee/sender-key-distributions/${room_id}`),
 };

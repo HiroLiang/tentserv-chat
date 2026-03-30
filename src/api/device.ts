@@ -1,15 +1,20 @@
-import { get, patch, post } from "@/api/http.ts";
+import { get, patch, post, del } from "@/api/http.ts";
 import type {
+    BindDeviceResponse,
     DeviceInfoResponseDto,
     DeviceRegisterRequest,
     DeviceRegisterResponse,
     DeviceUpdateRequest,
     DeviceUpdateResponse,
+    ListDevicesResponse,
 } from "@/api/types.ts";
 
 export const deviceApi = {
     register: (payload: DeviceRegisterRequest) =>
         post<DeviceRegisterResponse, DeviceRegisterRequest>('/api/device/register', payload),
+
+    list: () =>
+        get<ListDevicesResponse>('/api/device'),
 
     getById: (deviceId: string) =>
         get<DeviceInfoResponseDto>(`/api/device/${deviceId}`),
@@ -17,7 +22,9 @@ export const deviceApi = {
     update: (deviceId: string, payload: DeviceUpdateRequest) =>
         patch<DeviceUpdateResponse, DeviceUpdateRequest>(`/api/device/${deviceId}`, payload),
 
-    // Compatibility endpoint used by the existing web bootstrap flow.
-    getBrowserInfo: () =>
-        get<DeviceInfoResponseDto>('/api/device/browser'),
+    bind: (deviceId: string) =>
+        post<BindDeviceResponse>(`/api/device/${deviceId}/bind`),
+
+    remove: (deviceId: string) =>
+        del(`/api/device/${deviceId}`),
 };

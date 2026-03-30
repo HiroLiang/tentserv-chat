@@ -75,7 +75,11 @@ http.interceptors.response.use(
     error => {
         if (axios.isAxiosError(error) && error.response) {
             const errorBody = error.response.data as ErrorResponse;
-            return Promise.reject(new Error(errorBody.message ?? 'Request failed'));
+            const err = Object.assign(
+                new Error(errorBody.message ?? 'Request failed'),
+                { code: errorBody.code }
+            );
+            return Promise.reject(err);
         }
 
         return Promise.reject(error);

@@ -7,6 +7,9 @@ import type {
     SendMessageResponse,
     UploadMediaResponse,
     ApproveInvitationRequest,
+    GetMyRoomInvitationResponse,
+    RespondInvitationRequest,
+    RespondInvitationResponse,
 } from '@/api/types.ts';
 import type { GetUserRoomsResponse, RoomDetail } from '@/types/chat.ts';
 
@@ -25,6 +28,12 @@ export const chatApi = {
 
     approveInvitation: (invId: number, approve: boolean): Promise<void> =>
         patch(`/api/chat/room/invitations/${invId}`, { approve } as ApproveInvitationRequest),
+
+    getMyRoomInvitation: (roomId: number): Promise<GetMyRoomInvitationResponse> =>
+        get(`/api/chat/room/${roomId}/my-invitation`),
+
+    respondInvitation: (invId: number, action: 'accept' | 'reject' | 'block'): Promise<RespondInvitationResponse> =>
+        patch(`/api/chat/room/invitations/${invId}/respond`, { action } as RespondInvitationRequest),
 
     getMessages: (roomId: number, beforeId?: number, limit?: number): Promise<GetMessagesResponse> =>
         get(`/api/chat/room/${roomId}/messages`, {

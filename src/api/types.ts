@@ -50,7 +50,7 @@ export interface DeviceRegisterRequest {
 }
 
 export interface DeviceRegisterResponse {
-    created_at?: string | number;
+    created_at?: string;
     device_id: string;
     device_name?: string;
     platform?: string;
@@ -58,7 +58,7 @@ export interface DeviceRegisterResponse {
 }
 
 export interface DeviceInfoResponseDto {
-    created_at?: string | number;
+    created_at?: string;
     device_id: string;
     device_name: string;
     platform: string;
@@ -71,11 +71,29 @@ export interface DeviceUpdateRequest {
 }
 
 export interface DeviceUpdateResponse {
-    created_at?: string | number;
+    created_at?: string;
     device_id: string;
     device_name?: string;
     platform?: string;
     success: boolean;
+}
+
+export interface DeviceListItem {
+    device_id: string;
+    device_name: string;
+    platform: string;
+    created_at: string;
+}
+
+export interface ListDevicesResponse {
+    success: boolean;
+    devices: DeviceListItem[];
+}
+
+export interface BindDeviceResponse {
+    success: boolean;
+    device_id: string;
+    account_id: number;
 }
 
 export interface UserUpdateProfileRequest {
@@ -119,6 +137,14 @@ export interface FriendRequestResponse {
     created_at: string;
 }
 
+export interface SentFriendRequestResponse {
+    friendship_id: number;
+    user_id: number;
+    name: string;
+    avatar: string;
+    created_at: string;
+}
+
 export interface UserSearchResponse {
     user_id: number;
     name: string;
@@ -134,6 +160,7 @@ export interface CreateRoomRequest {
     type: 'DIRECT' | 'GROUP' | 'CHANNEL' | 'BOT';
     name: string;
     description?: string;
+    max_members?: number;
     allow_agent?: boolean;
     member_ids?: number[];
 }
@@ -142,7 +169,10 @@ export interface CreateRoomResponse {
     id: number;
     type: string;
     name: string;
+    max_members: number;
+    allow_agent: boolean;
     created_at: string;
+    already_existed: boolean;
 }
 
 export interface GetMessagesResponse {
@@ -151,34 +181,60 @@ export interface GetMessagesResponse {
 }
 
 export interface MessageDto {
-    id: number;
-    room_id: number;
+    message_id: number;
     sender_id: number;
-    sender_name: string;
-    sender_avatar?: string;
     type: 'text' | 'image' | 'file';
     content: string;
     reply_to_id?: number;
+    is_edited: boolean;
     created_at: string;
 }
 
 export interface SendMessageRequest {
-    type?: 'text' | 'image' | 'file';
+    type: 'text' | 'image' | 'file';
     content: string;
     reply_to_id?: number;
 }
 
 export interface SendMessageResponse {
-    id: number;
+    message_id: number;
+    sender_id: number;
+    type: string;
+    content: string;
+    reply_to_id?: number;
     created_at: string;
 }
 
 export interface UploadMediaResponse {
+    path: string;
     url: string;
+    mime_type: string;
+    size: number;
 }
 
 export interface ApproveInvitationRequest {
     approve: boolean;
+}
+
+export interface GetMyRoomInvitationResponse {
+    found: boolean;
+    invitation_id?: number;
+    role?: 'inviter' | 'invitee';
+    inviter_name?: string;
+    inviter_avatar?: string;
+    inviter_user_id?: number;
+}
+
+export interface RespondInvitationRequest {
+    action: 'accept' | 'reject' | 'block';
+}
+
+export interface RespondInvitationResponse {
+    invitation_id: number;
+    status: string;
+    member_id?: number;
+    role?: string;
+    joined_at?: string;
 }
 
 // ── E2EE ──────────────────────────────────────────────────────────────────────
@@ -220,15 +276,19 @@ export interface GetKeyBundleResponse {
 
 export interface UploadSenderKeyRequest {
     room_id: number;
-    sender_key_public: number[];
-    distribution_message: number[];
+    sender_key_public: string;   // base64
+    distribution_message: string; // base64
 }
 
 export interface GetSenderKeysResponse {
-    sender_keys: {
-        user_id: number;
-        device_id: string;
-        sender_key_public: number[];
-        distribution_message: number[];
+    keys: {
+        chat_member_id: number;
+        sender_key_public: string;   // base64
+        distribution_message: string; // base64
     }[];
+}
+
+export interface GetSenderKeyDistributionStatusResponse {
+    pending_receivers: number[];    // member IDs who haven't fetched my latest key
+    pending_from_members: number[]; // member IDs whose key I haven't fetched yet
 }

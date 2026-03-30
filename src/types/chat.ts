@@ -1,47 +1,63 @@
 export type RoomType = 'DIRECT' | 'GROUP' | 'CHANNEL' | 'BOT';
 
+// Matches backend ChatRoomSummaryResponse (GET /chat/rooms)
 export interface RoomSummary {
-    id: number;
-    type: RoomType;
-    name: string;
-    description?: string;
+    room_id: number;
+    room_type: RoomType;
+    display_name: string;
     avatar_url?: string;
-    member_count?: number;
-    allow_agent: boolean;
-    created_at: string;
+    latest_message?: string;
+    unread_count: number;
 }
 
+// Matches backend ChatRoomMemberInfoResponse
 export interface RoomMember {
     member_id: number;
-    user_id: number;
-    name: string;
-    avatar?: string;
+    participant_id: number;
+    display_name: string;
+    avatar_url?: string;
     role: string;
     last_read_at?: string;
+    joined_at: string;
 }
 
 export type MessageType = 'text' | 'image' | 'file';
 
+// Matches backend ChatMessageInfoResponse
 export interface Message {
-    id: number;
-    room_id: number;
+    message_id: number;
     sender_id: number;
-    sender_name: string;
-    sender_avatar?: string;
     type: MessageType;
     content: string;
     reply_to_id?: number;
+    is_edited: boolean;
     created_at: string;
 }
 
-export interface RoomDetail extends RoomSummary {
+// Matches backend GetChatRoomDetailResponse (GET /chat/room/{id})
+export interface RoomDetail {
+    room_id: number;
+    room_type: RoomType;
+    name: string;
+    description?: string;
+    avatar_url?: string;
     members: RoomMember[];
     messages: Message[];
 }
 
+// Matches backend GetUserChatRoomsResponse (GET /chat/rooms)
 export interface GetUserRoomsResponse {
     direct: RoomSummary[];
     group: RoomSummary[];
     channel: RoomSummary[];
     bot: RoomSummary[];
+}
+
+export interface PendingInvitation {
+    found: boolean;
+    invitation_id?: number;
+    role?: 'inviter' | 'invitee';
+    inviter_name?: string;
+    inviter_avatar?: string;
+    inviter_user_id?: number;
 }
