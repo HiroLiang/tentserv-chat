@@ -1,14 +1,17 @@
 import { participantApi } from '@/api/participant.ts';
+import { useUserStore } from '@/stores/userStore.ts';
 import { logger } from '@/utils/logger.ts';
 
 class ChatParticipantService {
     async ensureParticipant(): Promise<void> {
         try {
-            await participantApi.getMe();
+            const p = await participantApi.getMe();
+            useUserStore.getState().setParticipantId(p.id);
         } catch {
             logger.info('Participant not found, registering...');
             try {
-                await participantApi.registerUser();
+                const p = await participantApi.registerUser();
+                useUserStore.getState().setParticipantId(p.id);
             } catch (err) {
                 logger.error('Failed to register participant', err);
                 throw err;

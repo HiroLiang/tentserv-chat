@@ -15,24 +15,24 @@ interface ChatRoomProps {
 }
 
 const avatarBgClass: Record<ChatGroup['type'], string> = {
-    DIRECT: 'bg-primary text-primary-foreground',
-    GROUP: 'bg-blue-500 text-white',
-    CHANNEL: 'bg-purple-500 text-white',
-    BOT: 'bg-amber-500 text-white',
+    direct: 'bg-primary text-primary-foreground',
+    group: 'bg-blue-500 text-white',
+    channel: 'bg-purple-500 text-white',
+    bot: 'bg-amber-500 text-white',
 };
 
 const typeLabel: Record<ChatGroup['type'], string> = {
-    DIRECT: 'Direct',
-    GROUP: 'Group',
-    CHANNEL: 'Channel',
-    BOT: 'Bot',
+    direct: 'Direct',
+    group: 'Group',
+    channel: 'Channel',
+    bot: 'Bot',
 };
 
 const typeBadgeClass: Record<ChatGroup['type'], string> = {
-    DIRECT: 'bg-primary/10 text-primary',
-    GROUP: 'bg-blue-500/10 text-blue-600',
-    CHANNEL: 'bg-purple-500/10 text-purple-600',
-    BOT: 'bg-amber-500/10 text-amber-600',
+    direct: 'bg-primary/10 text-primary',
+    group: 'bg-blue-500/10 text-blue-600',
+    channel: 'bg-purple-500/10 text-purple-600',
+    bot: 'bg-amber-500/10 text-amber-600',
 };
 
 // Stable color palette for group sender avatars
@@ -53,7 +53,7 @@ const getInitials = (name: string) =>
     name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
 
 function MessageAvatar({ message, chat }: { message: ChatMessage; chat: ChatGroup }) {
-    if (chat.type === 'BOT') {
+    if (chat.type === 'bot') {
         return (
             <div
                 className="h-8 w-8 rounded-full bg-amber-500 text-white flex items-center justify-center flex-shrink-0 self-end">
@@ -61,7 +61,7 @@ function MessageAvatar({ message, chat }: { message: ChatMessage; chat: ChatGrou
             </div>
         );
     }
-    const colorClass = chat.type === 'GROUP'
+    const colorClass = chat.type === 'group'
         ? getSenderColor(message.senderId)
         : avatarBgClass[chat.type];
     return (
@@ -75,7 +75,7 @@ function MessageAvatar({ message, chat }: { message: ChatMessage; chat: ChatGrou
 }
 
 function MessageBubble({ message, chat }: { message: ChatMessage; chat: ChatGroup }) {
-    const showSenderName = !message.isMe && chat.type === 'GROUP';
+    const showSenderName = !message.isMe && chat.type === 'group';
 
     return (
         <div className={cn('flex items-end gap-2', message.isMe ? 'flex-row-reverse' : 'flex-row')}>
@@ -108,20 +108,29 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const pendingInvitation = useChatStore((s) => s.pendingInvitation);
     const directKeyStatus = useChatStore((s) => s.directKeyStatus[Number(chat.id)]);
-    const isDirectLocked = chat.type === 'DIRECT' && directKeyStatus !== 'unlocked';
-    const inputDisabled = (chat.type === 'GROUP' && pendingInvitation?.found === true) || isDirectLocked;
+    const isDirectLocked = chat.type === 'direct' && directKeyStatus !== 'unlocked';
+    const inputDisabled = (chat.type === 'group' && pendingInvitation?.found === true) || isDirectLocked;
 
     // Load pending invitation for GROUP; resolve direct key for DIRECT
     useEffect(() => {
-        if (chat.type === 'GROUP') {
+        if (chat.type === 'group') {
             void chatRoomService.loadMyRoomInvitation(Number(chat.id));
             useChatStore.getState().setDirectKeyStatus(Number(chat.id), 'unlocked');
-        } else if (chat.type === 'DIRECT') {
-            useChatStore.getState().setPendingInvitation(null);
+        } else if (chat.type === 'direct') {
             const roomId = Number(chat.id);
             useChatStore.getState().setDirectKeyStatus(roomId, 'loading');
-            void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
-                useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+            void chatRoomService.loadMyRoomInvitation(roomId).then(() => {
+                const inv = useChatStore.getState().pendingInvitation;
+                if (!inv?.found || inv.role !== 'invitee') {
+                    void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
+                        useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+                    });
+                }
+                // If pending invitee: keep status 'loading' so invitation banner is visible
+            }).catch(() => {
+                void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
+                    useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+                });
             });
         } else {
             useChatStore.getState().setPendingInvitation(null);
@@ -131,7 +140,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
 
     // Subscribe to WS e2ee.direct_key_ready to auto-unlock when invitee completes handshake
     useEffect(() => {
-        if (chat.type !== 'DIRECT') return;
+        if (chat.type !== 'direct') return;
         const roomId = Number(chat.id);
         const handler = (data: unknown) => {
             const payload = data as { room_id?: number };
@@ -189,9 +198,9 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     'h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold',
                     avatarBgClass[chat.type],
                 )}>
-                    {chat.type === 'BOT'
+                    {chat.type === 'bot'
                         ? <Bot className="h-5 w-5"/>
-                        : chat.type === 'GROUP'
+                        : chat.type === 'group'
                             ? <Users className="h-5 w-5"/>
                             : getInitials(chat.name)}
                 </div>
@@ -207,16 +216,16 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                         </span>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        {chat.type === 'GROUP' && `${chat.memberCount} members`}
-                        {chat.type === 'DIRECT' && (chat.isOnline ? 'Online' : 'Offline')}
-                        {chat.type === 'BOT' && 'AI Assistant'}
-                        {chat.type === 'CHANNEL' && 'Channel'}
+                        {chat.type === 'group' && `${chat.memberCount} members`}
+                        {chat.type === 'direct' && (chat.isOnline ? 'Online' : 'Offline')}
+                        {chat.type === 'bot' && 'AI Assistant'}
+                        {chat.type === 'channel' && 'Channel'}
                     </p>
                 </div>
             </div>
 
             {/* Invitation Banner (GROUP) */}
-            {chat.type === 'GROUP' && pendingInvitation?.found && (
+            {chat.type === 'group' && pendingInvitation?.found && (
                 <InvitationBanner
                     invitation={pendingInvitation}
                     onAccept={() => pendingInvitation.invitation_id !== undefined &&
@@ -229,7 +238,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             )}
 
             {/* Invitation Banner (DIRECT) */}
-            {chat.type === 'DIRECT' && pendingInvitation?.found && pendingInvitation.role === 'invitee' && (
+            {chat.type === 'direct' && pendingInvitation?.found && pendingInvitation.role === 'invitee' && (
                 <InvitationBanner
                     invitation={pendingInvitation}
                     onAccept={() => pendingInvitation.invitation_id !== undefined &&
@@ -250,7 +259,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             )}
 
             {/* Direct chat locked overlay */}
-            {chat.type === 'DIRECT' && directKeyStatus === 'locked' && (
+            {chat.type === 'direct' && directKeyStatus === 'locked' && (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-muted/30">
                     <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                         <Lock className="h-6 w-6 text-muted-foreground"/>

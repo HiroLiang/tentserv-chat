@@ -47,7 +47,7 @@ export const FriendsPage = () => {
         setMessageError(null);
         try {
             const room = await chatRoomService.createRoom({
-                type: 'DIRECT',
+                type: 'direct',
                 name: friend.name,
                 member_ids: [friend.user_id],
             });

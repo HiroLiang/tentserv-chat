@@ -1,4 +1,4 @@
-export type RoomType = 'DIRECT' | 'GROUP' | 'CHANNEL' | 'BOT';
+export type RoomType = 'direct' | 'group' | 'channel' | 'bot';
 
 // Matches backend ChatRoomSummaryResponse (GET /chat/rooms)
 export interface RoomSummary {

@@ -2,7 +2,6 @@ import { chatApi } from '@/api/index.ts';
 import { useChatStore } from '@/stores/chatStore.ts';
 import { logger } from '@/utils/logger.ts';
 import type { CreateRoomRequest, CreateRoomResponse, SendMessageRequest } from '@/api/types.ts';
-import type { Message } from '@/types/chat.ts';
 import { e2eeService } from '@/services/e2eeService.ts';
 
 class ChatRoomService {
@@ -36,18 +35,7 @@ class ChatRoomService {
         store.setLoadingMessages(true);
         try {
             const { messages, has_more } = await chatApi.getMessages(roomId, beforeId);
-            const mapped: Message[] = messages.map((m) => ({
-                id: m.id,
-                room_id: m.room_id,
-                sender_id: m.sender_id,
-                sender_name: m.sender_name,
-                sender_avatar: m.sender_avatar,
-                type: m.type,
-                content: m.content,
-                reply_to_id: m.reply_to_id,
-                created_at: m.created_at,
-            }));
-            store.prependMessages(roomId, mapped, has_more);
+            store.prependMessages(roomId, messages, has_more);
         } catch (err) {
             logger.error(`Failed to load messages for room ${roomId}`, err);
             throw err;
@@ -112,7 +100,7 @@ class ChatRoomService {
             await chatApi.respondInvitation(invId, action);
             useChatStore.getState().setPendingInvitation(null);
 
-            if (action === 'accept' && ctx?.roomType === 'DIRECT' && ctx.inviterUserId !== undefined) {
+            if (action === 'accept' && ctx?.roomType === 'direct' && ctx.inviterUserId !== undefined) {
                 const store = useChatStore.getState();
                 store.setDirectKeyStatus(ctx.roomId, 'loading');
                 try {

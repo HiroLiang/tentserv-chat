@@ -157,7 +157,7 @@ export interface UserSearchResponse {
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 export interface CreateRoomRequest {
-    type: 'DIRECT' | 'GROUP' | 'CHANNEL' | 'BOT';
+    type: 'direct' | 'group' | 'channel' | 'bot';
     name: string;
     description?: string;
     max_members?: number;
@@ -258,6 +258,14 @@ export interface UploadOTPPreKeysRequest {
         key_id: number;
         public_key: string;
     }[];
+}
+
+export interface UploadIdentityKeyResponse {
+    fingerprint: string;
+}
+
+export interface UploadOTPPreKeysResponse {
+    count: number;
 }
 
 export interface CountOTPPreKeysResponse {

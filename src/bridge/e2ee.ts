@@ -3,6 +3,7 @@ import type {
     GenerateIdentityKeysResult,
     GenerateSignedPreKeyResult,
     OneTimePreKey,
+    SenderKeyBundle,
     PublicKeyBundle,
     InitialMessage,
 } from '@/types/e2ee.ts';
@@ -28,4 +29,7 @@ export const performX3dhReceive = (msg: InitialMessage, spkKeyId: number, otpkKe
         spk_key_id: spkKeyId,
         ...(otpkKeyId !== undefined && { otpk_key_id: otpkKeyId }),
     });
+
+export const generateSenderKey = (roomId: number): Promise<SenderKeyBundle> =>
+    invoke<SenderKeyBundle>('generate_sender_key', { room_id: roomId });
 

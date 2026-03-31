@@ -4,10 +4,10 @@ import type { ChatGroup } from '@/types/ui';
 import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, MessageSquare, Users } from 'lucide-react';
 
 export interface ChatGroups {
-    DIRECT: ChatGroup[];
-    GROUP: ChatGroup[];
-    CHANNEL: ChatGroup[];
-    BOT: ChatGroup[];
+    direct: ChatGroup[];
+    group: ChatGroup[];
+    channel: ChatGroup[];
+    bot: ChatGroup[];
 }
 
 interface ChatSidebarProps {
@@ -19,20 +19,20 @@ interface ChatSidebarProps {
 }
 
 const avatarBgClass: Record<ChatGroup['type'], string> = {
-    DIRECT: 'bg-primary text-primary-foreground',
-    GROUP: 'bg-blue-500 text-white',
-    CHANNEL: 'bg-purple-500 text-white',
-    BOT: 'bg-amber-500 text-white',
+    direct: 'bg-primary text-primary-foreground',
+    group: 'bg-blue-500 text-white',
+    channel: 'bg-purple-500 text-white',
+    bot: 'bg-amber-500 text-white',
 };
 
 const SECTION_LABELS: Record<ChatGroup['type'], string> = {
-    DIRECT: 'Direct',
-    GROUP: 'Groups',
-    CHANNEL: 'Channels',
-    BOT: 'Bots',
+    direct: 'Direct',
+    group: 'Groups',
+    channel: 'Channels',
+    bot: 'Bots',
 };
 
-const SECTION_ORDER: ChatGroup['type'][] = ['DIRECT', 'GROUP', 'CHANNEL', 'BOT'];
+const SECTION_ORDER: ChatGroup['type'][] = ['direct', 'group', 'channel', 'bot'];
 
 const getInitials = (name: string) =>
     name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
@@ -43,13 +43,13 @@ function ChatAvatar({ chat }: { chat: ChatGroup }) {
             'h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-sm relative',
             avatarBgClass[chat.type],
         )}>
-            {chat.type === 'GROUP'
+            {chat.type === 'group'
                 ? <Users className="h-5 w-5"/>
-                : chat.type === 'BOT'
+                : chat.type === 'bot'
                     ? <Bot className="h-5 w-5"/>
                     : getInitials(chat.name)}
 
-            {chat.type !== 'GROUP' && (
+            {chat.type !== 'group' && (
                 <span className={cn(
                     'absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background',
                     chat.isOnline ? 'bg-green-500' : 'bg-zinc-400',
@@ -68,10 +68,10 @@ export function ChatSidebar({
 }: ChatSidebarProps) {
     const [searchQuery, setSearchQuery] = useState('');
     const [expanded, setExpanded] = useState<Record<ChatGroup['type'], boolean>>({
-        DIRECT: true,
-        GROUP: true,
-        CHANNEL: true,
-        BOT: true,
+        direct: true,
+        group: true,
+        channel: true,
+        bot: true,
     });
 
     const toggleSection = (type: ChatGroup['type']) => {

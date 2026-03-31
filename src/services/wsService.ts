@@ -20,6 +20,7 @@ class WebSocketService {
 
     private url = "";
     private token: string | null = null;
+    private deviceId: string | null = null;
 
     private status: WSStatus = "idle";
 
@@ -27,9 +28,10 @@ class WebSocketService {
         return this.status;
     }
 
-    connect(url: string, token?: string) {
+    connect(url: string, token?: string, deviceId?: string) {
         this.url = url;
         this.token = token ?? null;
+        this.deviceId = deviceId ?? null;
 
         const userState = useUserStore.getState();
         if (!userState.currentUser?.isLoggedIn) {
@@ -110,7 +112,11 @@ class WebSocketService {
 
         this.status = this.ws ? "reconnecting" : "connecting";
 
-        const finalUrl = this.token ? `${this.url}?token=${this.token}` : this.url;
+        const params = new URLSearchParams();
+        if (this.token) params.set('token', this.token);
+        if (this.deviceId) params.set('device_id', this.deviceId);
+        const queryString = params.toString();
+        const finalUrl = queryString ? `${this.url}?${queryString}` : this.url;
 
         logger.info('WebSocket connecting...', { url: finalUrl });
 
@@ -132,6 +138,11 @@ class WebSocketService {
 
                 // Heartbeat response
                 if (message.type === "pong") return;
+
+                // Auto-acknowledge delivery if delivery_id is present
+                if (message.delivery_id !== undefined) {
+                    this.send('system.ack', { delivery_id: message.delivery_id });
+                }
 
                 const handlers = this.handlers.get(message.type);
                 handlers?.forEach((h) => h(message.payload));
@@ -190,18 +201,7 @@ class WebSocketService {
     }
 
     private startHeartbeat() {
-        this.stopHeartbeat();
-
-        this.heartbeatTimer = setInterval(() => {
-            if (this.ws?.readyState === WebSocket.OPEN) {
-                this.ws.send(
-                    JSON.stringify({
-                        type: "ping",
-                        timestamp: Date.now(),
-                    })
-                );
-            }
-        }, 20000);
+        // Heartbeat is handled by the server-side WebSocket protocol ping/pong (54s interval).
     }
 
     private stopHeartbeat() {

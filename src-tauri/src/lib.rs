@@ -23,6 +23,7 @@ use commands::e2ee::{
     clear_e2ee_keys,
     perform_x3dh_send,
     perform_x3dh_receive,
+    generate_sender_key,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -58,6 +59,7 @@ pub fn run() {
             clear_e2ee_keys,
             perform_x3dh_send,
             perform_x3dh_receive,
+            generate_sender_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

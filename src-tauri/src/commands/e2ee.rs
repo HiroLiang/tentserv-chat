@@ -172,3 +172,19 @@ pub fn has_identity_keys(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(has_dh && has_sign)
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct SenderKeyBundle {
+    pub public_key: [u8; 32],
+}
+
+#[tauri::command]
+pub async fn generate_sender_key(
+    app: tauri::AppHandle,
+    room_id: u32,
+) -> Result<SenderKeyBundle, String> {
+    let sk_secret = StaticSecret::from(rand::random::<[u8; 32]>());
+    let sk_public = PublicKey::from(&sk_secret);
+    store_private_key(&app, &format!("sk_{room_id}"), sk_secret.as_bytes())?;
+    Ok(SenderKeyBundle { public_key: sk_public.to_bytes() })
+}
+

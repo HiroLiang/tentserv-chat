@@ -8,7 +8,7 @@ import { useChatStore } from '@/stores/chatStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
 import { chatRoomService } from '@/services/chatRoomService.ts';
 import type { ChatGroup, ChatMessage } from '@/types/ui.ts';
-import type { RoomSummary, Message } from '@/types/chat.ts';
+import type { RoomSummary, Message, RoomMember } from '@/types/chat.ts';
 import { MessageSquare } from 'lucide-react';
 
 function formatTime(iso: string): string {
@@ -28,24 +28,26 @@ function formatTime(iso: string): string {
 
 function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
     return {
-        id: String(room.id),
-        type: room.type,
-        name: room.name,
-        memberCount: room.member_count,
-        lastMessage: lastMsg?.content,
+        id: String(room.room_id),
+        type: room.room_type,
+        name: room.display_name,
+        unreadCount: room.unread_count,
+        lastMessage: lastMsg?.content ?? room.latest_message,
         lastMessageTime: lastMsg ? formatTime(lastMsg.created_at) : undefined,
     };
 }
 
-function messageToUi(msg: Message, currentUserId: number): ChatMessage {
+function messageToUi(msg: Message, currentParticipantId: number | null, members: RoomMember[]): ChatMessage {
+    const myMember = members.find(m => m.participant_id === currentParticipantId);
+    const senderMember = members.find(m => m.member_id === msg.sender_id);
     return {
-        id: String(msg.id),
-        chatId: String(msg.room_id),
+        id: String(msg.message_id),
+        chatId: '',
         senderId: String(msg.sender_id),
-        senderName: msg.sender_name,
+        senderName: senderMember?.display_name ?? '',
         content: msg.content,
         timestamp: formatTime(msg.created_at),
-        isMe: msg.sender_id === currentUserId,
+        isMe: myMember !== undefined && msg.sender_id === myMember.member_id,
     };
 }
 
@@ -54,7 +56,9 @@ export const ChatPage = () => {
     const roomIdParam = searchParams.get('room_id');
 
     const { rooms, messages } = useChatStore();
+    const currentRoomMembers = useChatStore(s => s.currentRoomDetail?.members ?? []);
     const currentUser = useUserStore(s => s.currentUser);
+    const currentParticipantId = useUserStore(s => s.participantId);
 
     const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -67,9 +71,9 @@ export const ChatPage = () => {
     useEffect(() => {
         if (!roomIdParam) return;
         const allRooms = [...rooms.direct, ...rooms.group, ...rooms.channel, ...rooms.bot];
-        const match = allRooms.find(r => String(r.id) === roomIdParam);
+        const match = allRooms.find(r => String(r.room_id) === roomIdParam);
         if (match) {
-            setSelectedChatId(String(match.id));
+            setSelectedChatId(String(match.room_id));
             setSidebarCollapsed(true);
         }
     }, [rooms, roomIdParam]);
@@ -77,6 +81,7 @@ export const ChatPage = () => {
     useEffect(() => {
         if (!selectedChatId) return;
         const roomId = Number(selectedChatId);
+        chatRoomService.loadRoomDetail(roomId).catch(() => {});
         if (!messages[roomId]) {
             chatRoomService.loadMessages(roomId).catch(() => {});
         }
@@ -84,29 +89,29 @@ export const ChatPage = () => {
 
     const toGroups = (arr: RoomSummary[]): ChatGroup[] =>
         arr.map(room => {
-            const roomMsgs = messages[room.id];
+            const roomMsgs = messages[room.room_id];
             const lastMsg = roomMsgs?.[roomMsgs.length - 1];
             return roomToGroup(room, lastMsg);
         });
 
     const chatGroups: ChatGroups = {
-        DIRECT: toGroups(rooms.direct),
-        GROUP: toGroups(rooms.group),
-        CHANNEL: toGroups(rooms.channel),
-        BOT: toGroups(rooms.bot),
+        direct: toGroups(rooms.direct),
+        group: toGroups(rooms.group),
+        channel: toGroups(rooms.channel),
+        bot: toGroups(rooms.bot),
     };
 
     const selectedRoomId = selectedChatId ? Number(selectedChatId) : null;
 
     const currentMessages: ChatMessage[] = selectedRoomId && messages[selectedRoomId]
-        ? messages[selectedRoomId].map(m => messageToUi(m, currentUser?.id ?? 0))
+        ? messages[selectedRoomId].map(m => messageToUi(m, currentParticipantId, currentRoomMembers))
         : [];
 
     const allChats: ChatGroup[] = [
-        ...chatGroups.DIRECT,
-        ...chatGroups.GROUP,
-        ...chatGroups.CHANNEL,
-        ...chatGroups.BOT,
+        ...chatGroups.direct,
+        ...chatGroups.group,
+        ...chatGroups.channel,
+        ...chatGroups.bot,
     ];
     const selectedChat = allChats.find(c => c.id === selectedChatId) ?? null;
 
@@ -117,13 +122,13 @@ export const ChatPage = () => {
 
     const handleSendMessage = (content: string) => {
         if (!selectedRoomId || !currentUser) return;
+        const myMember = currentRoomMembers.find(m => m.participant_id === currentParticipantId);
         const optimistic: Message = {
-            id: Date.now(),
-            room_id: selectedRoomId,
-            sender_id: currentUser.id,
-            sender_name: currentUser.name ?? 'Me',
+            message_id: Date.now(),
+            sender_id: myMember?.member_id ?? 0,
             type: 'text',
             content,
+            is_edited: false,
             created_at: new Date().toISOString(),
         };
         useChatStore.getState().appendMessage(selectedRoomId, optimistic);

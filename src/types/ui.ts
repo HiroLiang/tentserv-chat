@@ -1,6 +1,6 @@
 export interface ChatGroup {
     id: string;
-    type: 'DIRECT' | 'GROUP' | 'CHANNEL' | 'BOT';
+    type: 'direct' | 'group' | 'channel' | 'bot';
     name: string;
     lastMessage?: string;
     lastMessageTime?: string;

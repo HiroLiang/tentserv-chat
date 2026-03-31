@@ -35,3 +35,7 @@ export interface OneTimePreKey {
     key_id: number;
     public_key: number[];
 }
+
+export interface SenderKeyBundle {
+    public_key: number[];
+}

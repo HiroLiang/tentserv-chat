@@ -83,15 +83,15 @@ export const AppInitializer = ({ children }: Props) => {
             }
         }
 
-        // 5. Ensure participant record exists, then connect WebSocket
+        // 5. Ensure the participant record exists, then connect WebSocket
         await chatService.initialize().catch(err => {
             logger.warn('Participant initialization failed', err);
         });
         const token = useUserStore.getState().currentUser?.token;
-        wsService.connect(env.WS_BASE_URL, token);
+        const deviceId = useDeviceStore.getState().deviceId;
+        wsService.connect(env.WS_BASE_URL, token, deviceId ?? undefined);
 
         // 6. E2EE: ensure keys are generated & uploaded, then replenish if needed
-        const deviceId = useDeviceStore.getState().deviceId;
         if (deviceId) {
             await e2eeService.ensureInitialized(deviceId).catch(err => {
                 logger.error('E2EE initialization failed', err);

@@ -2,19 +2,23 @@ import { create } from 'zustand';
 import { type DeviceInfo } from '@/types/device';
 
 interface DeviceState {
+    // ── State ──────────────────────────────────────────────────────────────────
+    /** UUID assigned by Tauri on first launch. */
     deviceId: string | null;
+    /** OS platform string (e.g. "macos"). */
     platform: string | null;
+    /** Human-readable hostname of this device. */
     deviceName: string | null;
+    /** Whether this device is registered on the backend. */
     registered: boolean;
-    createAt: number | null;
+    /** Timestamp (ms) when this device was first registered. */
+    createdAt: number | null;
 
-    setDeviceId: (deviceId: string | null) => void;
-    setPlatform: (platform: string | null) => void;
-    setDeviceName: (deviceName: string | null) => void;
-    setRegistered: (registered: boolean) => void;
-    setCreateTime: (createAt: number | null) => void;
-
+    // ── Actions ────────────────────────────────────────────────────────────────
+    /** Bulk-updates all device fields from a DeviceInfo object. */
     updateDeviceInfo: (deviceInfo: DeviceInfo) => void;
+    /** Clears all device state (used on logout or device removal). */
+    reset: () => void;
 }
 
 export const useDeviceStore = create<DeviceState>((set) => ({
@@ -22,27 +26,7 @@ export const useDeviceStore = create<DeviceState>((set) => ({
     deviceName: null,
     platform: null,
     registered: false,
-    createAt: null,
-
-    setDeviceId: (id: string | null): void => {
-        set({ deviceId: id });
-    },
-
-    setPlatform: (platform: string | null) => {
-        set({ platform: platform });
-    },
-
-    setDeviceName: (deviceName: string | null): void => {
-        set({ deviceName: deviceName });
-    },
-
-    setRegistered: (registered: boolean): void => {
-        set({ registered: registered })
-    },
-
-    setCreateTime: (createAt: number | null): void => {
-        set({ createAt: createAt })
-    },
+    createdAt: null,
 
     updateDeviceInfo: (deviceInfo: DeviceInfo): void => {
         set({
@@ -50,8 +34,11 @@ export const useDeviceStore = create<DeviceState>((set) => ({
             deviceName: deviceInfo.device_name,
             platform: deviceInfo.platform,
             registered: deviceInfo.registered,
-            createAt: deviceInfo.created_at
-        })
+            createdAt: deviceInfo.created_at,
+        });
     },
 
+    reset: (): void => {
+        set({ deviceId: null, deviceName: null, platform: null, registered: false, createdAt: null });
+    },
 }));

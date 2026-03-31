@@ -8,6 +8,7 @@ import {
     performX3dhSend,
     performX3dhReceive,
     hasIdentityKeys,
+    generateSenderKey,
 } from '@/bridge/e2ee.ts';
 import type {
     PublicKeyBundle,
@@ -43,7 +44,7 @@ class E2eeService {
 
             const otpKeys = await replenishOtpKeys(20);
             logger.info('E2EE OTP pre-keys generated');
-            await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
+            const { count: otpCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
                 key_id: k.key_id,
                 public_key: toBase64(k.public_key)
             })));
@@ -51,7 +52,7 @@ class E2eeService {
 
             const e2eeState = useE2eeStore.getState();
             e2eeState.setKeysUploaded(true);
-            e2eeState.setOtpKeyCount(otpKeys.length);
+            e2eeState.setOtpKeyCount(otpCount);
 
             logger.info('E2EE keys initialized and uploaded');
         }
@@ -67,11 +68,11 @@ class E2eeService {
         if (count >= threshold) return;
 
         const otpKeys = await replenishOtpKeys(20);
-        await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
+        const { count: newCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
             key_id: k.key_id,
             public_key: toBase64(k.public_key)
         })));
-        store.setOtpKeyCount(count + otpKeys.length);
+        store.setOtpKeyCount(newCount);
 
         logger.info(`Replenished ${otpKeys.length} OTP keys`);
     }
@@ -104,6 +105,38 @@ class E2eeService {
         const plaintextBytes = await performX3dhReceive(msg, spkKeyId, otpkKeyId);
 
         return new TextDecoder().decode(new Uint8Array(plaintextBytes));
+    }
+
+    async performDirectKeyExchange(roomId: number, inviterUserId: number): Promise<void> {
+        const bundle = await e2eeApi.getKeyBundle(inviterUserId);
+
+        const keyBundle: PublicKeyBundle = {
+            identity_key_dh: fromBase64(bundle.identity_key),
+            identity_key_sign: fromBase64(bundle.identity_key_sign),
+            signed_pre_key: fromBase64(bundle.signed_pre_key),
+            spk_signature: fromBase64(bundle.spk_signature),
+            spk_key_id: bundle.spk_key_id,
+            one_time_pre_key: bundle.otp_pre_key ? fromBase64(bundle.otp_pre_key) : undefined,
+            otpk_key_id: bundle.otp_pre_key_id,
+        };
+
+        const senderKey = await generateSenderKey(roomId);
+        const initialMsg = await performX3dhSend(keyBundle, senderKey.public_key);
+
+        const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
+
+        await e2eeApi.uploadSenderKey(
+            roomId,
+            toBase64(senderKey.public_key),
+            toBase64(distMsgBytes),
+        );
+
+        logger.info(`Direct key exchange completed for room ${roomId}`);
+    }
+
+    async resolveDirectKey(roomId: number): Promise<boolean> {
+        const status = await e2eeApi.getSenderKeyDistributionStatus(roomId);
+        return status.pending_from_members.length === 0;
     }
 }
 

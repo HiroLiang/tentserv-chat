@@ -1,5 +1,6 @@
 import { saveAuthToken, getAuthToken, clearAuthToken } from "@/bridge/auth.ts";
 import { authApi, userApi } from "@/api/index.ts";
+import { wsService } from "./wsService.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import {
     AuthMessageResponse,
@@ -64,6 +65,7 @@ class UserService {
 
     async logout(): Promise<void> {
         await authApi.logout();
+        wsService.disconnect();
 
         await clearAuthToken();
 
