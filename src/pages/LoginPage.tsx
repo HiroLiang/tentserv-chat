@@ -7,7 +7,9 @@ import { useNavigate } from "react-router-dom";
 import { userService } from "@/services/userService.ts";
 import { chatService } from "@/services/chatService.ts";
 import { wsService } from "@/services/wsService.ts";
+import { e2eeService } from "@/services/e2eeService.ts";
 import { useUserStore } from "@/stores/userStore.ts";
+import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { env } from "@/config/env.ts";
 
 export const LoginPage = () => {
@@ -31,8 +33,12 @@ export const LoginPage = () => {
 
             // connect to websocket
             const token = useUserStore.getState().currentUser?.token;
-            wsService.connect(env.WS_BASE_URL, token ?? '');
+            const deviceId = useDeviceStore.getState().deviceId ?? undefined;
+            wsService.connect(env.WS_BASE_URL, token ?? '', deviceId);
             chatService.initialize();
+            if (deviceId) {
+                e2eeService.ensureInitialized(deviceId).catch(() => {});
+            }
             navigate("/");
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Login failed';

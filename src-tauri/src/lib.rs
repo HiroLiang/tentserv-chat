@@ -24,6 +24,7 @@ use commands::e2ee::{
     perform_x3dh_send,
     perform_x3dh_receive,
     generate_sender_key,
+    has_sender_key,
     encrypt_with_sender_key,
 };
 
@@ -61,6 +62,7 @@ pub fn run() {
             perform_x3dh_send,
             perform_x3dh_receive,
             generate_sender_key,
+            has_sender_key,
             encrypt_with_sender_key,
         ])
         .run(tauri::generate_context!())

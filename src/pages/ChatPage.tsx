@@ -136,9 +136,8 @@ const ChatPageContent = () => {
         if (!selectedChatId) return;
         const roomId = Number(selectedChatId);
         chatRoomService.loadRoomDetail(roomId).catch(() => {});
-        if (!messages[roomId]) {
-            chatRoomService.loadMessages(roomId).catch(() => {});
-        }
+        chatRoomService.loadMessages(roomId).catch(() => {});
+        chatRoomService.markAsRead(roomId).catch(() => {});
     }, [selectedChatId]);
 
     const toGroups = (arr: RoomSummary[]): ChatGroup[] =>
@@ -176,16 +175,6 @@ const ChatPageContent = () => {
 
     const handleSendMessage = (content: string) => {
         if (!selectedRoomId || !currentUser) return;
-        const myMember = currentRoomMembers.find(m => m.participant_id === currentParticipantId);
-        const optimistic: Message = {
-            message_id: Date.now(),
-            sender_id: myMember?.member_id ?? 0,
-            type: 'text',
-            content,
-            is_edited: false,
-            created_at: new Date().toISOString(),
-        };
-        useChatStore.getState().appendMessage(selectedRoomId, optimistic);
         chatRoomService.sendMessage(selectedRoomId, content).catch(() => {});
     };
 

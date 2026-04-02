@@ -1,5 +1,9 @@
 # Tentserv Chat
 
+<p align="center">
+  English | <a href="docs/i18n/zh-TW/README.md">中文</a> | <a href="docs/i18n/ja/README.md">日本語</a>
+</p>
+
 A cross-platform desktop chat application with end-to-end encryption and LLM integration.
 
 ## Stack

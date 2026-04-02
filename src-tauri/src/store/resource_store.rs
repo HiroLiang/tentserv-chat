@@ -143,15 +143,17 @@ pub fn clear_private_keys(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-pub fn next_opk_ids(app: &tauri::AppHandle, count: u32) -> Result<Vec<u32>, String> {
+pub fn next_opk_ids(app: &tauri::AppHandle, user_id: u32, count: u32) -> Result<Vec<u32>, String> {
     use rusqlite::params;
 
     let conn = open_db(app)?;
 
+    let meta_key = format!("last_opk_id_{user_id}");
+
     let last: u32 = conn
         .query_row(
-            "SELECT value FROM key_meta WHERE key = 'last_opk_id'",
-            [],
+            "SELECT value FROM key_meta WHERE key = ?1",
+            params![meta_key],
             |row| row.get(0),
         )
         .unwrap_or(0);
@@ -159,11 +161,10 @@ pub fn next_opk_ids(app: &tauri::AppHandle, count: u32) -> Result<Vec<u32>, Stri
     let start = last + 1;
     let end = start + count;
 
-    // 更新 last_opk_id
     conn.execute(
-        "INSERT INTO key_meta (key, value) VALUES ('last_opk_id', ?1)
+        "INSERT INTO key_meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![end - 1],
+        params![meta_key, end - 1],
     )
         .map_err(|e| e.to_string())?;
 

@@ -2,6 +2,7 @@ import { saveAuthToken, getAuthToken, clearAuthToken } from "@/bridge/auth.ts";
 import { authApi, userApi } from "@/api/index.ts";
 import { wsService } from "./wsService.ts";
 import { useUserStore } from "@/stores/userStore.ts";
+import { useChatStore } from "@/stores/chatStore.ts";
 import {
     AuthMessageResponse,
     CurrentUserResponse, UpdateProfileRequest,
@@ -68,6 +69,8 @@ class UserService {
         wsService.disconnect();
 
         await clearAuthToken();
+
+        useChatStore.getState().resetChat();
 
         const state = useUserStore.getState();
         state.setCurrentUser({

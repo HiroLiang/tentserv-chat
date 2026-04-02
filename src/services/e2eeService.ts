@@ -25,25 +25,29 @@ const toBase64 = (bytes: number[]): string =>
     btoa(String.fromCharCode(...bytes));
 
 class E2eeService {
+    private getCurrentUserId(): number {
+        const userId = useUserStore.getState().currentUser?.id;
+        if (!userId) throw new Error('No current user');
+        return userId;
+    }
+
     async ensureInitialized(deviceId: string): Promise<void> {
-        const locallyInitialized = await hasIdentityKeys();
+        const userId = this.getCurrentUserId();
+        const locallyInitialized = await hasIdentityKeys(userId);
         logger.info(`E2EE locally initialized: ${locallyInitialized}`);
 
         let needsUpload = !locallyInitialized;
         if (locallyInitialized) {
-            const myUserId = useUserStore.getState().currentUser?.id;
-            if (myUserId) {
-                try {
-                    await e2eeApi.getKeyBundle(myUserId, deviceId);
-                } catch {
-                    logger.warn('E2EE backend missing keys despite local init — re-uploading');
-                    needsUpload = true;
-                }
+            try {
+                await e2eeApi.getKeyBundle(userId, deviceId);
+            } catch {
+                logger.warn('E2EE backend missing keys despite local init — re-uploading');
+                needsUpload = true;
             }
         }
 
         if (needsUpload) {
-            const identityKeys = await generateIdentityKeys();
+            const identityKeys = await generateIdentityKeys(userId);
             logger.info('E2EE keys generated');
             await e2eeApi.uploadIdentityKey(
                 deviceId,
@@ -52,12 +56,12 @@ class E2eeService {
             );
             logger.info('E2EE identity key uploaded');
 
-            const spk = await generateSignedPreKey(INITIAL_SPK_KEY_ID);
+            const spk = await generateSignedPreKey(userId, INITIAL_SPK_KEY_ID);
             logger.info('E2EE signed pre-key generated');
             await e2eeApi.uploadSignedPreKey(deviceId, spk.key_id, toBase64(spk.public_key), toBase64(spk.signature));
             logger.info('E2EE signed pre-key uploaded');
 
-            const otpKeys = await replenishOtpKeys(20);
+            const otpKeys = await replenishOtpKeys(userId, 20);
             logger.info('E2EE OTP pre-keys generated');
             const { count: otpCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
                 key_id: k.key_id,
@@ -78,13 +82,14 @@ class E2eeService {
     }
 
     async replenishOTPKeys(deviceId: string, threshold = 20): Promise<void> {
+        const userId = this.getCurrentUserId();
         const { count } = await e2eeApi.countOTPPreKeys(deviceId);
         const store = useE2eeStore.getState();
         store.setOtpKeyCount(count);
 
         if (count >= threshold) return;
 
-        const otpKeys = await replenishOtpKeys(20);
+        const otpKeys = await replenishOtpKeys(userId, 20);
         const { count: newCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
             key_id: k.key_id,
             public_key: toBase64(k.public_key)
@@ -99,6 +104,7 @@ class E2eeService {
         targetDeviceId: string,
         plaintext: string,
     ): Promise<InitialMessage> {
+        const userId = this.getCurrentUserId();
         const bundle = await e2eeApi.getKeyBundle(targetUserId, targetDeviceId);
 
         const keyBundle: PublicKeyBundle = {
@@ -111,7 +117,7 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        return performX3dhSend(keyBundle, Array.from(new TextEncoder().encode(plaintext)));
+        return performX3dhSend(userId, keyBundle, Array.from(new TextEncoder().encode(plaintext)));
     }
 
     async performReceive(
@@ -119,12 +125,14 @@ class E2eeService {
         spkKeyId: number,
         otpkKeyId?: number,
     ): Promise<string> {
-        const plaintextBytes = await performX3dhReceive(msg, spkKeyId, otpkKeyId);
+        const userId = this.getCurrentUserId();
+        const plaintextBytes = await performX3dhReceive(userId, msg, spkKeyId, otpkKeyId);
 
         return new TextDecoder().decode(new Uint8Array(plaintextBytes));
     }
 
     async performDirectKeyExchange(roomId: number, inviterUserId: number): Promise<void> {
+        const userId = this.getCurrentUserId();
         const bundle = await e2eeApi.getKeyBundle(inviterUserId);
 
         const keyBundle: PublicKeyBundle = {
@@ -137,8 +145,8 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        const senderKey = await generateSenderKey(roomId);
-        const initialMsg = await performX3dhSend(keyBundle, senderKey.public_key);
+        const senderKey = await generateSenderKey(userId, roomId);
+        const initialMsg = await performX3dhSend(userId, keyBundle, senderKey.public_key);
 
         const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
 
@@ -152,8 +160,9 @@ class E2eeService {
     }
 
     async encryptMessage(roomId: number, plaintext: string): Promise<string> {
+        const userId = this.getCurrentUserId();
         const bytes = Array.from(new TextEncoder().encode(plaintext));
-        const { ciphertext, nonce } = await encryptWithSenderKey(roomId, bytes);
+        const { ciphertext, nonce } = await encryptWithSenderKey(userId, roomId, bytes);
         const combined = new Uint8Array([...nonce, ...ciphertext]);
         const b64 = btoa(String.fromCharCode(...combined));
         return `e2ee:v1:${b64}`;
@@ -162,6 +171,7 @@ class E2eeService {
     // Called when the inviter receives e2ee.sender_key_needed.
     // Encrypts own sender key using the requester's (invitee's) X3DH public key bundle and uploads it.
     async performInviterKeyExchange(roomId: number, requesterUserId: number): Promise<void> {
+        const userId = this.getCurrentUserId();
         const bundle = await e2eeApi.getKeyBundle(requesterUserId);
 
         const keyBundle: PublicKeyBundle = {
@@ -174,8 +184,8 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        const senderKey = await generateSenderKey(roomId);
-        const initialMsg = await performX3dhSend(keyBundle, senderKey.public_key);
+        const senderKey = await generateSenderKey(userId, roomId);
+        const initialMsg = await performX3dhSend(userId, keyBundle, senderKey.public_key);
 
         const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
 

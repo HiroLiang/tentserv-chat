@@ -14,6 +14,7 @@ export interface RoomSummary {
 export interface RoomMember {
     member_id: number;
     participant_id: number;
+    user_id?: number;
     display_name: string;
     avatar_url?: string;
     role: string;

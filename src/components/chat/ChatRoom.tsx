@@ -137,6 +137,10 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
 
                     const unlocked = await e2eeService.resolveDirectKey(roomId);
                     setDirectStatus(unlocked ? 'unlocked' : 'locked');
+
+                    chatRoomService.initializeDirectRoomEncryption(roomId).catch(err =>
+                        logger.warn(`Auto key exchange failed for room ${roomId}`, err)
+                    );
                 } catch (err) {
                     logger.error(`Failed to initialize direct chat state for room ${roomId}`, err);
                     toast.error('Unable to verify chat invitation status.', {

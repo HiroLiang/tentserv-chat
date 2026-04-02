@@ -1,8 +1,10 @@
 import { chatApi, e2eeApi } from '@/api/index.ts';
 import { useChatStore } from '@/stores/chatStore.ts';
+import { useUserStore } from '@/stores/userStore.ts';
 import { logger } from '@/utils/logger.ts';
 import type { CreateRoomRequest, CreateRoomResponse, GetMyRoomInvitationResponse, SendMessageRequest } from '@/api/types.ts';
 import { e2eeService } from '@/services/e2eeService.ts';
+import { hasSenderKey } from '@/bridge/e2ee.ts';
 
 class ChatRoomService {
     async loadRooms(): Promise<void> {
@@ -35,7 +37,11 @@ class ChatRoomService {
         store.setLoadingMessages(true);
         try {
             const { messages, has_more } = await chatApi.getMessages(roomId, beforeId);
-            store.prependMessages(roomId, messages, has_more);
+            if (beforeId === undefined) {
+                store.setMessages(roomId, messages, has_more);
+            } else {
+                store.prependMessages(roomId, messages, has_more);
+            }
         } catch (err) {
             logger.error(`Failed to load messages for room ${roomId}`, err);
             throw err;
@@ -55,6 +61,7 @@ class ChatRoomService {
         }
         try {
             await chatApi.sendMessage(roomId, { type, content: finalContent });
+            this.markAsRead(roomId).catch(() => {});
         } catch (err) {
             logger.error(`Failed to send message to room ${roomId}`, err);
             throw err;
@@ -80,6 +87,7 @@ class ChatRoomService {
     }
 
     async markAsRead(roomId: number): Promise<void> {
+        useChatStore.getState().clearUnreadCount(roomId);
         try {
             await chatApi.markAsRead(roomId);
         } catch (err) {
@@ -99,6 +107,31 @@ class ChatRoomService {
             store.setPendingInvitation(null);
             throw err;
         }
+    }
+
+    async initializeDirectRoomEncryption(roomId: number): Promise<void> {
+        const userId = useUserStore.getState().currentUser?.id;
+        if (!userId) return;
+
+        const hasKey = await hasSenderKey(userId, roomId);
+        if (hasKey) return;
+
+        const detail = useChatStore.getState().currentRoomDetail;
+        const myParticipantId = useUserStore.getState().participantId;
+        const otherMembers = (detail?.members ?? []).filter(
+            m => m.participant_id !== myParticipantId && m.user_id !== undefined
+        );
+
+        for (const member of otherMembers) {
+            await e2eeService.performDirectKeyExchange(roomId, member.user_id!);
+        }
+
+        const status = await e2eeApi.getSenderKeyDistributionStatus(roomId);
+        for (const memberID of (status?.pending_from_members ?? [])) {
+            await e2eeApi.createSenderKeyRequest(roomId, memberID).catch(() => {});
+        }
+
+        logger.info(`Direct room E2EE initialized for room ${roomId}`);
     }
 
     async respondToInvitation(
