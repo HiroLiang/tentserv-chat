@@ -300,3 +300,8 @@ export interface GetSenderKeyDistributionStatusResponse {
     pending_receivers: number[];    // member IDs who haven't fetched my latest key
     pending_from_members: number[]; // member IDs whose key I haven't fetched yet
 }
+
+export interface CreateSenderKeyRequestRequest {
+    room_id: number;
+    provider_member_id: number;
+}

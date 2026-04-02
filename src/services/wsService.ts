@@ -40,6 +40,14 @@ class WebSocketService {
             return;
         }
 
+        if (!this.token || !this.deviceId) {
+            logger.warn('Cannot connect to websocket server. Missing token or device ID.', {
+                hasToken: Boolean(this.token),
+                deviceId: this.deviceId,
+            });
+            return;
+        }
+
         const netState = useNetworkStore.getState();
         if (netState.networkStatus !== 'healthy') {
             logger.warn('Cannot connect to websocket server. Network is not healthy.');
@@ -159,6 +167,14 @@ class WebSocketService {
                 return;
             }
 
+            if (this.status === "connecting" || this.status === "reconnecting") {
+                logger.warn("WebSocket closed during handshake; check token and device_id pairing.", {
+                    code: event.code,
+                    hasToken: Boolean(this.token),
+                    deviceId: this.deviceId,
+                });
+            }
+
             logger.warn("WebSocket closed, reconnecting...", {
                 code: event.code,
             });
@@ -167,7 +183,12 @@ class WebSocketService {
         };
 
         this.ws.onerror = (err) => {
-            logger.error("WebSocket error", err);
+            logger.error("WebSocket error", {
+                err,
+                hasToken: Boolean(this.token),
+                deviceId: this.deviceId,
+                status: this.status,
+            });
         };
     }
 

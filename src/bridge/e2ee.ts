@@ -4,6 +4,7 @@ import type {
     GenerateSignedPreKeyResult,
     OneTimePreKey,
     SenderKeyBundle,
+    SenderKeyEncryptedMessage,
     PublicKeyBundle,
     InitialMessage,
 } from '@/types/e2ee.ts';
@@ -32,4 +33,13 @@ export const performX3dhReceive = (msg: InitialMessage, spkKeyId: number, otpkKe
 
 export const generateSenderKey = (roomId: number): Promise<SenderKeyBundle> =>
     invoke<SenderKeyBundle>('generate_sender_key', { room_id: roomId });
+
+export const encryptWithSenderKey = (
+    roomId: number,
+    plaintext: number[],
+): Promise<SenderKeyEncryptedMessage> =>
+    invoke<SenderKeyEncryptedMessage>('encrypt_with_sender_key', {
+        room_id: roomId,
+        plaintext,
+    });
 

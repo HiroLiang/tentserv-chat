@@ -1,15 +1,68 @@
-import { useEffect, useState } from 'react';
+import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Navbar } from '@/components/layout/Navbar.tsx';
 import { ChatSidebar } from '@/components/chat/ChatSidebar.tsx';
 import type { ChatGroups } from '@/components/chat/ChatSidebar.tsx';
 import { ChatRoom } from '@/components/chat/ChatRoom.tsx';
+import { Button } from '@/components/ui/button.tsx';
 import { useChatStore } from '@/stores/chatStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
 import { chatRoomService } from '@/services/chatRoomService.ts';
 import type { ChatGroup, ChatMessage } from '@/types/ui.ts';
 import type { RoomSummary, Message, RoomMember } from '@/types/chat.ts';
+import { logger } from '@/utils/logger.ts';
 import { MessageSquare } from 'lucide-react';
+
+const EMPTY_ROOM_MEMBERS: RoomMember[] = [];
+
+interface ChatPageErrorBoundaryProps {
+    children: ReactNode;
+}
+
+interface ChatPageErrorBoundaryState {
+    hasError: boolean;
+}
+
+class ChatPageErrorBoundary extends Component<ChatPageErrorBoundaryProps, ChatPageErrorBoundaryState> {
+    state: ChatPageErrorBoundaryState = { hasError: false };
+
+    static getDerivedStateFromError(): ChatPageErrorBoundaryState {
+        return { hasError: true };
+    }
+
+    componentDidCatch(error: Error, info: ErrorInfo) {
+        logger.error('Chat page render failed', {
+            message: error.message,
+            stack: error.stack,
+            componentStack: info.componentStack,
+        });
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="flex flex-col h-screen overflow-hidden">
+                    <Navbar/>
+                    <div className="flex flex-1 items-center justify-center px-6">
+                        <div className="max-w-md text-center space-y-3">
+                            <h2 className="text-lg font-semibold text-foreground">Chat room 載入失敗</h2>
+                            <p className="text-sm text-muted-foreground">
+                                頁面遇到未預期錯誤，請重新整理後再試一次。
+                            </p>
+                            <div className="flex items-center justify-center gap-3">
+                                <Button onClick={() => window.location.reload()}>
+                                    Reload Page
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        return this.props.children;
+    }
+}
 
 function formatTime(iso: string): string {
     const date = new Date(iso);
@@ -51,14 +104,15 @@ function messageToUi(msg: Message, currentParticipantId: number | null, members:
     };
 }
 
-export const ChatPage = () => {
+const ChatPageContent = () => {
     const [searchParams] = useSearchParams();
     const roomIdParam = searchParams.get('room_id');
 
     const { rooms, messages } = useChatStore();
-    const currentRoomMembers = useChatStore(s => s.currentRoomDetail?.members ?? []);
+    const currentRoomDetail = useChatStore((s) => s.currentRoomDetail);
     const currentUser = useUserStore(s => s.currentUser);
     const currentParticipantId = useUserStore(s => s.participantId);
+    const currentRoomMembers = currentRoomDetail?.members ?? EMPTY_ROOM_MEMBERS;
 
     const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -163,3 +217,9 @@ export const ChatPage = () => {
         </div>
     );
 };
+
+export const ChatPage = () => (
+    <ChatPageErrorBoundary>
+        <ChatPageContent/>
+    </ChatPageErrorBoundary>
+);

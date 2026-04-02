@@ -6,6 +6,8 @@ import { useChatStore } from '@/stores/chatStore';
 import { chatRoomService } from '@/services/chatRoomService';
 import { e2eeService } from '@/services/e2eeService';
 import { wsService } from '@/services/wsService';
+import { logger } from '@/utils/logger';
+import { toast } from 'sonner';
 import { InvitationBanner } from './InvitationBanner';
 
 interface ChatRoomProps {
@@ -113,29 +115,43 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
 
     // Load pending invitation for GROUP; resolve direct key for DIRECT
     useEffect(() => {
+        let active = true;
+        const setDirectStatus = (status: 'loading' | 'locked' | 'unlocked') => {
+            if (!active) return;
+            useChatStore.getState().setDirectKeyStatus(Number(chat.id), status);
+        };
+
         if (chat.type === 'group') {
             void chatRoomService.loadMyRoomInvitation(Number(chat.id));
             useChatStore.getState().setDirectKeyStatus(Number(chat.id), 'unlocked');
         } else if (chat.type === 'direct') {
             const roomId = Number(chat.id);
-            useChatStore.getState().setDirectKeyStatus(roomId, 'loading');
-            void chatRoomService.loadMyRoomInvitation(roomId).then(() => {
-                const inv = useChatStore.getState().pendingInvitation;
-                if (!inv?.found || inv.role !== 'invitee') {
-                    void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
-                        useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+            setDirectStatus('loading');
+
+            void (async () => {
+                try {
+                    const invitation = await chatRoomService.loadMyRoomInvitation(roomId);
+                    if (invitation?.found && invitation.role === 'invitee') {
+                        return;
+                    }
+
+                    const unlocked = await e2eeService.resolveDirectKey(roomId);
+                    setDirectStatus(unlocked ? 'unlocked' : 'locked');
+                } catch (err) {
+                    logger.error(`Failed to initialize direct chat state for room ${roomId}`, err);
+                    toast.error('Unable to verify chat invitation status.', {
+                        id: `direct-chat-init-${roomId}`,
                     });
+                    setDirectStatus('locked');
                 }
-                // If pending invitee: keep status 'loading' so invitation banner is visible
-            }).catch(() => {
-                void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
-                    useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
-                });
-            });
+            })();
         } else {
             useChatStore.getState().setPendingInvitation(null);
             useChatStore.getState().setDirectKeyStatus(Number(chat.id), 'unlocked');
         }
+        return () => {
+            active = false;
+        };
     }, [chat.id, chat.type]);
 
     // Subscribe to WS e2ee.direct_key_ready to auto-unlock when invitee completes handshake
@@ -146,9 +162,14 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             const payload = data as { room_id?: number };
             if (payload?.room_id === roomId) {
                 useChatStore.getState().setDirectKeyStatus(roomId, 'loading');
-                void e2eeService.resolveDirectKey(roomId).then((unlocked) => {
-                    useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
-                });
+                void e2eeService.resolveDirectKey(roomId)
+                    .then((unlocked) => {
+                        useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+                    })
+                    .catch((err) => {
+                        logger.error(`Failed to refresh direct key status for room ${roomId}`, err);
+                        useChatStore.getState().setDirectKeyStatus(roomId, 'locked');
+                    });
             }
         };
         wsService.on('e2ee.direct_key_ready', handler);
@@ -264,7 +285,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                         <Lock className="h-6 w-6 text-muted-foreground"/>
                     </div>
-                    <p className="text-sm text-muted-foreground">等待對方上線解鎖</p>
+                    <p className="text-sm text-muted-foreground">聊天室尚未解鎖</p>
                 </div>
             )}
 
@@ -314,7 +335,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                 </div>
                 <p className="text-[11px] text-muted-foreground text-center mt-2">
                     {isDirectLocked
-                        ? '聊天室尚未解鎖，請等待對方上線'
+                        ? '尚未取得對話金鑰，請確認邀請與雙方裝置狀態'
                         : inputDisabled
                             ? 'You cannot send messages until the invitation is accepted'
                             : 'Enter to send · Shift+Enter for newline'}

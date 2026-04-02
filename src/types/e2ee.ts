@@ -39,3 +39,8 @@ export interface OneTimePreKey {
 export interface SenderKeyBundle {
     public_key: number[];
 }
+
+export interface SenderKeyEncryptedMessage {
+    ciphertext: number[];
+    nonce: number[];
+}

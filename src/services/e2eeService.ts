@@ -1,5 +1,6 @@
 import { e2eeApi } from '@/api/index.ts';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
+import { useUserStore } from '@/stores/userStore.ts';
 import { logger } from '@/utils/logger.ts';
 import {
     generateIdentityKeys,
@@ -9,6 +10,7 @@ import {
     performX3dhReceive,
     hasIdentityKeys,
     generateSenderKey,
+    encryptWithSenderKey,
 } from '@/bridge/e2ee.ts';
 import type {
     PublicKeyBundle,
@@ -24,10 +26,23 @@ const toBase64 = (bytes: number[]): string =>
 
 class E2eeService {
     async ensureInitialized(deviceId: string): Promise<void> {
-        const alreadyInitialized = await hasIdentityKeys();
-        logger.info(`E2EE already initialized: ${alreadyInitialized}`);
+        const locallyInitialized = await hasIdentityKeys();
+        logger.info(`E2EE locally initialized: ${locallyInitialized}`);
 
-        if (!alreadyInitialized) {
+        let needsUpload = !locallyInitialized;
+        if (locallyInitialized) {
+            const myUserId = useUserStore.getState().currentUser?.id;
+            if (myUserId) {
+                try {
+                    await e2eeApi.getKeyBundle(myUserId, deviceId);
+                } catch {
+                    logger.warn('E2EE backend missing keys despite local init — re-uploading');
+                    needsUpload = true;
+                }
+            }
+        }
+
+        if (needsUpload) {
             const identityKeys = await generateIdentityKeys();
             logger.info('E2EE keys generated');
             await e2eeApi.uploadIdentityKey(
@@ -57,7 +72,9 @@ class E2eeService {
             logger.info('E2EE keys initialized and uploaded');
         }
 
-        await this.replenishOTPKeys(deviceId, 10);
+        if (!needsUpload) {
+            await this.replenishOTPKeys(deviceId, 10);
+        }
     }
 
     async replenishOTPKeys(deviceId: string, threshold = 20): Promise<void> {
@@ -134,8 +151,49 @@ class E2eeService {
         logger.info(`Direct key exchange completed for room ${roomId}`);
     }
 
+    async encryptMessage(roomId: number, plaintext: string): Promise<string> {
+        const bytes = Array.from(new TextEncoder().encode(plaintext));
+        const { ciphertext, nonce } = await encryptWithSenderKey(roomId, bytes);
+        const combined = new Uint8Array([...nonce, ...ciphertext]);
+        const b64 = btoa(String.fromCharCode(...combined));
+        return `e2ee:v1:${b64}`;
+    }
+
+    // Called when the inviter receives e2ee.sender_key_needed.
+    // Encrypts own sender key using the requester's (invitee's) X3DH public key bundle and uploads it.
+    async performInviterKeyExchange(roomId: number, requesterUserId: number): Promise<void> {
+        const bundle = await e2eeApi.getKeyBundle(requesterUserId);
+
+        const keyBundle: PublicKeyBundle = {
+            identity_key_dh: fromBase64(bundle.identity_key),
+            identity_key_sign: fromBase64(bundle.identity_key_sign),
+            signed_pre_key: fromBase64(bundle.signed_pre_key),
+            spk_signature: fromBase64(bundle.spk_signature),
+            spk_key_id: bundle.spk_key_id,
+            one_time_pre_key: bundle.otp_pre_key ? fromBase64(bundle.otp_pre_key) : undefined,
+            otpk_key_id: bundle.otp_pre_key_id,
+        };
+
+        const senderKey = await generateSenderKey(roomId);
+        const initialMsg = await performX3dhSend(keyBundle, senderKey.public_key);
+
+        const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
+
+        await e2eeApi.uploadSenderKey(
+            roomId,
+            toBase64(senderKey.public_key),
+            toBase64(distMsgBytes),
+        );
+
+        logger.info(`Inviter key exchange completed for room ${roomId}`);
+    }
+
     async resolveDirectKey(roomId: number): Promise<boolean> {
         const status = await e2eeApi.getSenderKeyDistributionStatus(roomId);
+        if (!status || !Array.isArray(status.pending_from_members)) {
+            logger.warn(`Invalid sender key distribution status for room ${roomId}`, status);
+            return false;
+        }
         return status.pending_from_members.length === 0;
     }
 }

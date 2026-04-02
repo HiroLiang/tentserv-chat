@@ -188,3 +188,31 @@ pub async fn generate_sender_key(
     Ok(SenderKeyBundle { public_key: sk_public.to_bytes() })
 }
 
+#[derive(Serialize)]
+pub struct SenderKeyEncryptedMessage {
+    pub ciphertext: Vec<u8>,
+    pub nonce: [u8; 12],
+}
+
+#[tauri::command]
+pub async fn encrypt_with_sender_key(
+    app: tauri::AppHandle,
+    room_id: u32,
+    plaintext: Vec<u8>,
+) -> Result<SenderKeyEncryptedMessage, String> {
+    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
+
+    let sk_bytes = load_private_key(&app, &format!("sk_{room_id}"))?;
+    let cipher = Aes256Gcm::new_from_slice(&sk_bytes)
+        .map_err(|e| format!("Invalid sender key: {e}"))?;
+
+    let nonce_bytes: [u8; 12] = rand::random();
+    let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {e}"))?;
+
+    Ok(SenderKeyEncryptedMessage { ciphertext, nonce: nonce_bytes })
+}
+

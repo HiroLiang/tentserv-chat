@@ -89,7 +89,14 @@ export const AppInitializer = ({ children }: Props) => {
         });
         const token = useUserStore.getState().currentUser?.token;
         const deviceId = useDeviceStore.getState().deviceId;
-        wsService.connect(env.WS_BASE_URL, token, deviceId ?? undefined);
+        if (token && deviceId) {
+            wsService.connect(env.WS_BASE_URL, token, deviceId);
+        } else {
+            logger.warn('Skipping websocket connection due to missing session token or device ID', {
+                hasToken: Boolean(token),
+                deviceId,
+            });
+        }
 
         // 6. E2EE: ensure keys are generated & uploaded, then replenish if needed
         if (deviceId) {
@@ -109,6 +116,18 @@ export const AppInitializer = ({ children }: Props) => {
         initialize().catch(error => {
             logger.error('Uncaught initialization error', error);
         });
+    }, []);
+
+    // Global handler: when the server asks us to upload our sender key for a room.
+    useEffect(() => {
+        const handler = (data: unknown) => {
+            const payload = data as { room_id?: number; requester_user_id?: number };
+            if (!payload?.room_id || !payload?.requester_user_id) return;
+            e2eeService.performInviterKeyExchange(payload.room_id, payload.requester_user_id)
+                .catch(err => logger.error('performInviterKeyExchange failed', err));
+        };
+        wsService.on('e2ee.sender_key_needed', handler);
+        return () => wsService.off('e2ee.sender_key_needed', handler);
     }, []);
 
     return (

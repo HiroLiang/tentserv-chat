@@ -10,6 +10,7 @@ import type {
     UploadSenderKeyRequest,
     GetSenderKeysResponse,
     GetSenderKeyDistributionStatusResponse,
+    CreateSenderKeyRequestRequest,
 } from '@/api/types.ts';
 
 export const e2eeApi = {
@@ -36,4 +37,7 @@ export const e2eeApi = {
 
     getSenderKeyDistributionStatus: (room_id: number): Promise<GetSenderKeyDistributionStatusResponse> =>
         get(`/api/e2ee/sender-key-distributions/${room_id}`),
+
+    createSenderKeyRequest: (room_id: number, provider_member_id: number): Promise<void> =>
+        post('/api/e2ee/sender-key-request', { room_id, provider_member_id } as CreateSenderKeyRequestRequest),
 };
