@@ -2,7 +2,7 @@ use crate::commands::core::{
     clear_e2ee_keys_core, encrypt_with_sender_key_core, generate_identity_keys_core,
     generate_sender_key_core, generate_signed_pre_key_core, has_identity_keys_core,
     has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
-    replenish_otp_keys_core, store_member_sender_key_core,
+    replenish_otp_keys_core, store_member_sender_key_core, validate_e2ee_key_material_core,
 };
 use crate::commands::e2ee::IdentityKeyBundle;
 use crate::crypto::x3dh::{PublicKey, PublicKeyBundle, SigningKey, StaticSecret};
@@ -165,6 +165,55 @@ fn generate_spk_fails_without_identity_key() {
 
     // Then it returns an error (can't sign without ik_sign)
     assert!(result.is_err());
+}
+
+#[test]
+fn validate_e2ee_key_material_false_when_missing() {
+    // Given an empty DB
+    let (_dir, conn) = test_db();
+
+    // Then complete local key material is not present
+    let valid = validate_e2ee_key_material_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+    assert!(!valid);
+}
+
+#[test]
+fn validate_e2ee_key_material_false_when_spk_missing() {
+    // Given Alice has only identity keys
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+
+    // Then the material is incomplete because the SPK private key is missing
+    let valid = validate_e2ee_key_material_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+    assert!(!valid);
+}
+
+#[test]
+fn validate_e2ee_key_material_true_when_identity_and_spk_decrypt() {
+    // Given Alice has identity keys and the initial SPK under the same master key
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // Then validation succeeds
+    let valid = validate_e2ee_key_material_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+    assert!(valid);
+}
+
+#[test]
+fn validate_e2ee_key_material_errors_when_master_key_mismatches() {
+    // Given Alice's keys were encrypted with ZERO_KEY
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // When validating with a different master key
+    let wrong_key = [1u8; 32];
+    let result = validate_e2ee_key_material_core(&conn, &wrong_key, ALICE, 1);
+
+    // Then it fails loudly instead of reporting usable key material
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("decrypt failed"));
 }
 
 // ── OTP key scenarios ────────────────────────────────────────────────

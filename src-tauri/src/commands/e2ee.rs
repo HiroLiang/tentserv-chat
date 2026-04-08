@@ -22,7 +22,7 @@ use crate::commands::core::{
     generate_identity_keys_core, generate_sender_key_core, generate_signed_pre_key_core,
     get_identity_keys_core, get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
     perform_x3dh_receive_core, perform_x3dh_send_core, replenish_otp_keys_core,
-    store_member_sender_key_core,
+    store_member_sender_key_core, validate_e2ee_key_material_core,
 };
 use crate::crypto::x3dh::{InitialMessage, PublicKeyBundle};
 use crate::store::db::{get_or_create_master_key, open_db};
@@ -105,6 +105,20 @@ pub async fn get_signed_pre_key(
 pub fn has_identity_keys(app: tauri::AppHandle, user_id: String) -> Result<bool, String> {
     let conn = open_db(&app)?;
     has_identity_keys_core(&conn, &user_id)
+}
+
+/// Return true only when identity keys and the requested signed pre-key exist
+/// locally and their encrypted private bytes can be decrypted with this user's
+/// current master key.
+#[tauri::command]
+pub fn validate_e2ee_key_material(
+    app: tauri::AppHandle,
+    user_id: String,
+    spk_key_id: u32,
+) -> Result<bool, String> {
+    let conn = open_db(&app)?;
+    let key = get_or_create_master_key(&user_id)?;
+    validate_e2ee_key_material_core(&conn, &key, &user_id, spk_key_id)
 }
 
 // ── Pre-key commands ──────────────────────────────────────────────

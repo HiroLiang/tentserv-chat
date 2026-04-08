@@ -21,15 +21,22 @@ pub struct DeviceInfo {
     pub device_id: String,
     pub platform: String,
     pub device_name: String,
-    /// `true` once the device has been registered with the backend.
+    /// [EN] `true` once the device has been registered with the backend.
+    /// [中] 裝置成功註冊到後端後為 `true`。
+    /// [日] 端末が backend に登録された後に `true` になる。
     pub registered: bool,
-    /// Unix timestamp (milliseconds) when the device was first seen.
+    /// [EN] Unix timestamp in milliseconds from the first local device creation.
+    /// [中] 首次建立本地裝置時的 Unix 毫秒時間戳。
+    /// [日] ローカル端末を初回作成した時点の Unix ミリ秒 timestamp。
     pub created_at: i64,
 }
 
 // ── Inner functions (pub(super) for test access) ──────────────────
 
 pub(crate) fn store_device_info_inner(conn: &Connection, info: &DeviceInfo) -> Result<(), String> {
+    // [EN] Single-row upsert keeps the local device table simple and restart-safe.
+    // [中] 單列 upsert 讓本地裝置表保持簡單，並能安全跨重啟保存。
+    // [日] 単一行 upsert により、ローカル端末テーブルを単純かつ再起動に強く保つ。
     conn.execute(
         r#"INSERT INTO device_info (id, device_id, platform, device_name, registered, created_at)
            VALUES (1, ?1, ?2, ?3, ?4, ?5)

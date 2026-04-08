@@ -160,6 +160,21 @@ pub(crate) fn load_signed_pre_key_inner(
         .map_err(|_| "decrypted SPK is not 32 bytes".into())
 }
 
+pub(crate) fn has_signed_pre_key_inner(
+    conn: &Connection,
+    user_id: &str,
+    key_id: u32,
+) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM signed_pre_keys WHERE user_id = ?1 AND key_id = ?2",
+            params![user_id, key_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("has signed pre-key failed: {e}"))?;
+    Ok(count > 0)
+}
+
 /// Read the public key and signature for an existing signed pre-key without decrypting the private key.
 /// Both fields are stored in plaintext; no master key is needed.
 pub(crate) fn load_signed_pre_key_public_inner(

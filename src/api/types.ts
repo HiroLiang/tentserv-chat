@@ -77,6 +77,7 @@ export interface DeviceUpdateResponse {
     device_name?: string;
     platform?: string;
     success: boolean;
+    updated_at?: string;
 }
 
 export interface DeviceListItem {
@@ -303,6 +304,7 @@ export interface GetSenderKeysResponse {
 }
 
 export interface GetSenderKeyDistributionStatusResponse {
+    own_sender_key_exists: boolean; // whether my latest sender key exists on the server
     pending_receivers: number[];    // member IDs who haven't fetched my latest key
     pending_from_members: number[]; // member IDs whose key I haven't fetched yet
 }

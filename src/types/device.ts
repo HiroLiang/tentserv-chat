@@ -4,6 +4,7 @@ export interface DeviceInfo {
     device_name: string;
     registered: boolean;
     created_at: number;
+    updated_at?: number;
 }
 
 export interface DeviceInfoRequest {

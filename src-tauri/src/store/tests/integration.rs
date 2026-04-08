@@ -20,6 +20,7 @@ use crate::store::sender_key_store::{
 };
 use crate::store::token_store::{delete_token_inner, load_token_inner, store_token_inner};
 use rusqlite::Connection;
+use std::time::Instant;
 use tempfile::TempDir;
 
 const ZERO_KEY: [u8; 32] = [0u8; 32];
@@ -36,6 +37,7 @@ fn test_db() -> (TempDir, Connection) {
 
 #[test]
 fn scenario_1_device_startup_and_persistence() {
+    let started = Instant::now();
     // Given  the DB is empty (first launch)
     // When   a DeviceInfo is created and stored (simulating initializeDevice)
     // Then   loading returns the same UUID device_id
@@ -44,6 +46,7 @@ fn scenario_1_device_startup_and_persistence() {
     // When   registration is marked true
     // Then   registered=true on reload
     let (dir, conn1) = test_db();
+    println!("Given: empty local SQLite database for app startup simulation");
 
     // First launch: create and store device
     let info = DeviceInfo {
@@ -53,15 +56,19 @@ fn scenario_1_device_startup_and_persistence() {
         registered: false,
         created_at: 1_700_000_000_000,
     };
+    println!("Input: first_launch_device_info={info:?}");
+    println!("Action: store device info on first launch");
     store_device_info_inner(&conn1, &info).unwrap();
 
     // Simulate restart: open a second connection to the same DB file
+    println!("Action: reopen the same SQLite DB file to simulate app restart");
     let conn2 = Connection::open(dir.path().join("test.db")).unwrap();
     init_schema(&conn2).unwrap();
 
     let loaded = load_device_info_inner(&conn2)
         .unwrap()
         .expect("device must persist across connections");
+    println!("Output: loaded_after_restart={loaded:?}");
     assert_eq!(
         loaded.device_id, "uuid-stable-across-restarts",
         "device_id must not regenerate"
@@ -69,9 +76,16 @@ fn scenario_1_device_startup_and_persistence() {
     assert!(!loaded.registered);
 
     // Mark registered via conn2
+    println!("Input: registered=true");
+    println!("Action: update device registration flag after backend success");
     update_device_registered_inner(&conn2, true).unwrap();
 
     let after_reg = load_device_info_inner(&conn2).unwrap().unwrap();
+    println!("Output: loaded_after_registration={after_reg:?}");
+    println!(
+        "Mutation: device row persisted across restart and registered flag changed false -> true"
+    );
+    println!("Duration: {:?}", started.elapsed());
     assert!(after_reg.registered, "registered must be true after update");
 }
 

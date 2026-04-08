@@ -12,11 +12,13 @@ import {
     performX3dhSend,
     performX3dhReceive,
     hasIdentityKeys,
+    validateE2eeKeyMaterial,
     hasSenderKey,
     generateSenderKey,
     encryptWithSenderKey,
     decryptWithSenderKey,
     storeMemberSenderKey,
+    clearE2eeKeys,
 } from '@/bridge/e2ee.ts';
 
 export const WAITING_FOR_SENDER_KEY = '__E2EE_WAITING_KEY__';
@@ -31,6 +33,9 @@ const INITIAL_SPK_KEY_ID = 1;
 // Server expects base64.StdEncoding (standard, not URL-safe, with padding).
 const toBase64 = (bytes: number[]): string =>
     btoa(String.fromCharCode(...bytes));
+
+type IdentityKeys = Awaited<ReturnType<typeof generateIdentityKeys>>;
+type SignedPreKey = Awaited<ReturnType<typeof generateSignedPreKey>>;
 
 // [EN] E2eeService manages end-to-end encryption key lifecycle using Signal Protocol X3DH.
 //      Private keys live in the OS keyring (Tauri). Public keys are uploaded to the backend.
@@ -64,6 +69,52 @@ class E2eeService {
         }
 
         return me.member_id;
+    }
+
+    private async prepareLocalKeyMaterial(
+        userId: number,
+        locallyInitialized: boolean,
+    ): Promise<{ identityKeys: IdentityKeys; spk: SignedPreKey }> {
+        if (locallyInitialized) {
+            try {
+                const identityKeys = await getIdentityKeys(userId);
+                logger.info('E2EE reusing existing local identity key for re-upload');
+
+                let spk: SignedPreKey;
+                try {
+                    spk = await getSignedPreKey(userId, INITIAL_SPK_KEY_ID);
+                    logger.info('E2EE reusing existing local SPK for re-upload');
+                } catch {
+                    spk = await generateSignedPreKey(userId, INITIAL_SPK_KEY_ID);
+                    logger.info('E2EE generating new SPK (local not found)');
+                }
+
+                const usable = await validateE2eeKeyMaterial(userId, INITIAL_SPK_KEY_ID);
+                if (!usable) {
+                    throw new Error('local E2EE key material is incomplete');
+                }
+
+                return { identityKeys, spk };
+            } catch (err) {
+                logger.warn('E2EE local key material unusable; clearing and regenerating', err);
+                await clearE2eeKeys(userId);
+            }
+        }
+
+        const identityKeys = await generateIdentityKeys(userId);
+        logger.info(locallyInitialized
+            ? 'E2EE generating new identity key after local reset'
+            : 'E2EE generating new identity key (first time)');
+
+        const spk = await generateSignedPreKey(userId, INITIAL_SPK_KEY_ID);
+        logger.info('E2EE generating new SPK (identity key is new)');
+
+        const usable = await validateE2eeKeyMaterial(userId, INITIAL_SPK_KEY_ID);
+        if (!usable) {
+            throw new Error('E2EE key material validation failed after regeneration');
+        }
+
+        return { identityKeys, spk };
     }
 
     // [EN] ensureInitialized: generates identity keys if absent or if backend is missing them,
@@ -103,18 +154,22 @@ class E2eeService {
                 logger.warn('E2EE key status check failed — re-uploading');
                 needsUpload = true;
             }
+
+            try {
+                const localUsable = await validateE2eeKeyMaterial(userId, INITIAL_SPK_KEY_ID);
+                if (!localUsable) {
+                    logger.warn('E2EE local key material incomplete — re-uploading');
+                    needsUpload = true;
+                }
+            } catch (err) {
+                logger.warn('E2EE local key material validation failed — re-uploading', err);
+                needsUpload = true;
+            }
         }
 
         if (needsUpload) {
-            // Identity Key: reuse existing local key if present, generate new if first time
-            let identityKeys: Awaited<ReturnType<typeof generateIdentityKeys>>;
-            if (locallyInitialized) {
-                identityKeys = await getIdentityKeys(userId);
-                logger.info('E2EE reusing existing local identity key for re-upload');
-            } else {
-                identityKeys = await generateIdentityKeys(userId);
-                logger.info('E2EE generating new identity key (first time)');
-            }
+            const { identityKeys, spk } = await this.prepareLocalKeyMaterial(userId, locallyInitialized);
+
             await e2eeApi.uploadIdentityKey(
                 deviceId,
                 toBase64(identityKeys.identity_key_dh_pub),
@@ -122,15 +177,6 @@ class E2eeService {
             );
             logger.info('E2EE identity key uploaded');
 
-            // Signed Pre-Key: reuse existing local key if present, generate new if not found
-            let spk: Awaited<ReturnType<typeof generateSignedPreKey>>;
-            try {
-                spk = await getSignedPreKey(userId, INITIAL_SPK_KEY_ID);
-                logger.info('E2EE reusing existing local SPK for re-upload');
-            } catch {
-                spk = await generateSignedPreKey(userId, INITIAL_SPK_KEY_ID);
-                logger.info('E2EE generating new SPK (local not found)');
-            }
             await e2eeApi.uploadSignedPreKey(deviceId, spk.key_id, toBase64(spk.public_key), toBase64(spk.signature));
             logger.info('E2EE signed pre-key uploaded');
 
@@ -345,7 +391,20 @@ class E2eeService {
             logger.warn(`Invalid sender key distribution status for room ${roomId}`, status);
             return false;
         }
-        return status.pending_from_members.length === 0;
+
+        let myMemberId: number;
+        try {
+            myMemberId = this.resolveCurrentMemberId(roomId);
+        } catch (err) {
+            logger.warn(`Cannot resolve local sender key state for room ${roomId}`, err);
+            return false;
+        }
+
+        const userId = this.getCurrentUserId();
+        const localSenderKeyExists = await hasSenderKey(userId, myMemberId).catch(() => false);
+        return status.own_sender_key_exists
+            && localSenderKeyExists
+            && status.pending_from_members.length === 0;
     }
 }
 

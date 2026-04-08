@@ -18,9 +18,9 @@ use crate::store::device_store::{
 };
 use crate::store::key_store::{
     clear_all_keys_for_user_inner, delete_otp_key_inner, has_identity_key_inner,
-    load_identity_key_inner, load_identity_public_keys_inner, load_otp_key_inner,
-    load_signed_pre_key_inner, load_signed_pre_key_public_inner, next_opk_ids_inner,
-    store_identity_key_inner, store_otp_key_inner, store_signed_pre_key_inner,
+    has_signed_pre_key_inner, load_identity_key_inner, load_identity_public_keys_inner,
+    load_otp_key_inner, load_signed_pre_key_inner, load_signed_pre_key_public_inner,
+    next_opk_ids_inner, store_identity_key_inner, store_otp_key_inner, store_signed_pre_key_inner,
 };
 use crate::store::message_store::{
     get_decrypted_messages_inner, get_encrypted_messages_inner, store_decrypted_message_inner,
@@ -42,11 +42,17 @@ pub(crate) fn get_or_create_device_core(
     device_name: &str,
 ) -> Result<DeviceInfo, String> {
     if let Some(mut info) = load_device_info_inner(conn)? {
+        // [EN] Existing device rows keep their identity; only the display name is refreshed.
+        // [中] 既有裝置資料保留身分識別，只刷新顯示名稱。
+        // [日] 既存の端末行は identity を維持し、表示名だけを更新する。
         info.device_name = device_name.to_string();
         store_device_info_inner(conn, &info)?;
         return Ok(info);
     }
 
+    // [EN] First launch creates the local device identity before any user logs in.
+    // [中] 首次啟動會在任何使用者登入前建立本地裝置身分。
+    // [日] 初回起動では、ユーザーがログインする前にローカル端末 identity を作成する。
     let info = DeviceInfo {
         device_id: Uuid::new_v4().to_string(),
         platform: std::env::consts::OS.to_string(),
@@ -156,6 +162,29 @@ pub(crate) fn get_signed_pre_key_core(
 pub(crate) fn has_identity_keys_core(conn: &Connection, user_id: &str) -> Result<bool, String> {
     Ok(has_identity_key_inner(conn, user_id, "ik_dh")?
         && has_identity_key_inner(conn, user_id, "ik_sign")?)
+}
+
+pub(crate) fn validate_e2ee_key_material_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+    spk_key_id: u32,
+) -> Result<bool, String> {
+    if !has_identity_keys_core(conn, user_id)? {
+        return Ok(false);
+    }
+    if !has_signed_pre_key_inner(conn, user_id, spk_key_id)? {
+        return Ok(false);
+    }
+
+    load_identity_key_inner(conn, key, user_id, "ik_dh")
+        .map_err(|e| format!("validate ik_dh failed: {e}"))?;
+    load_identity_key_inner(conn, key, user_id, "ik_sign")
+        .map_err(|e| format!("validate ik_sign failed: {e}"))?;
+    load_signed_pre_key_inner(conn, key, user_id, spk_key_id)
+        .map_err(|e| format!("validate signed pre-key failed: {e}"))?;
+
+    Ok(true)
 }
 
 pub(crate) fn generate_signed_pre_key_core(

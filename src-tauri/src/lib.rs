@@ -2,13 +2,15 @@ mod commands;
 mod crypto;
 mod store;
 
-use commands::auth::{clear_auth_token, get_auth_token, get_auth_token_by_account, save_auth_token};
+use commands::auth::{
+    clear_auth_token, get_auth_token, get_auth_token_by_account, save_auth_token,
+};
 use commands::device::{clear_device_id, get_device_info, update_device_registration};
 use commands::e2ee::{
     clear_e2ee_keys, decrypt_with_sender_key, encrypt_with_sender_key, generate_identity_keys,
     generate_sender_key, generate_signed_pre_key, get_identity_keys, get_signed_pre_key,
     has_identity_keys, has_sender_key, perform_x3dh_receive, perform_x3dh_send, replenish_otp_keys,
-    store_member_sender_key,
+    store_member_sender_key, validate_e2ee_key_material,
 };
 use commands::messages::{
     get_decrypted_messages, get_encrypted_messages, store_decrypted_message,
@@ -52,6 +54,7 @@ pub fn run() {
             has_identity_keys,
             generate_identity_keys,
             get_identity_keys,
+            validate_e2ee_key_material,
             generate_signed_pre_key,
             get_signed_pre_key,
             replenish_otp_keys,

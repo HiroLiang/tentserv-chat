@@ -22,6 +22,9 @@ export const generateIdentityKeys = (userId: BridgeId): Promise<GenerateIdentity
 export const getIdentityKeys = (userId: BridgeId): Promise<GenerateIdentityKeysResult> =>
     invoke<GenerateIdentityKeysResult>('get_identity_keys', { userId: toBridgeId(userId) });
 
+export const validateE2eeKeyMaterial = (userId: BridgeId, spkKeyId: number): Promise<boolean> =>
+    invoke<boolean>('validate_e2ee_key_material', { userId: toBridgeId(userId), spkKeyId });
+
 export const generateSignedPreKey = (userId: BridgeId, keyId: number): Promise<GenerateSignedPreKeyResult> =>
     invoke<GenerateSignedPreKeyResult>('generate_signed_pre_key', { userId: toBridgeId(userId), keyId });
 
