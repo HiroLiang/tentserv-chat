@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/layout/Navbar.tsx';
 import { cn } from '@/lib/utils';
-import { friendApi } from '@/api/friend.ts';
 import { chatRoomService } from '@/services/chatRoomService.ts';
 import type { FriendResponse, FriendRequestResponse } from '@/api/types.ts';
 import { AddFriendDialog } from '@/components/friends/AddFriendDialog.tsx';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { env } from '@/config/env';
+import { friendService } from '@/services/friendService.ts';
 
 type Tab = 'friends' | 'requests';
 
@@ -28,18 +28,24 @@ export const FriendsPage = () => {
     const [messageError, setMessageError] = useState<string | null>(null);
 
     const fetchFriends = async () => {
-        const data = await friendApi.getFriends();
+        const data = await friendService.getFriendsTab();
         setFriends(data);
     };
 
     const fetchRequests = async () => {
-        const data = await friendApi.getFriendRequests();
+        const data = await friendService.getFriendRequests();
         setRequests(data);
+    };
+
+    const refreshLists = async () => {
+        const data = await friendService.refreshFriendsPage();
+        setFriends(data.friends);
+        setRequests(data.requests);
     };
 
     useEffect(() => {
         setLoading(true);
-        Promise.all([fetchFriends(), fetchRequests()]).finally(() => setLoading(false));
+        refreshLists().finally(() => setLoading(false));
     }, []);
 
     const handleOpenDirect = async (friend: FriendResponse) => {
@@ -63,19 +69,24 @@ export const FriendsPage = () => {
         }
     };
 
-    const handleCancel = async (friendshipId: number) => {
-        await friendApi.removeFriend(friendshipId);
-        await Promise.all([fetchFriends(), fetchRequests()]);
-    };
-
-    const handleAccept = async (friendshipId: number) => {
-        await friendApi.acceptFriend(friendshipId);
-        await Promise.all([fetchFriends(), fetchRequests()]);
+    const handleAccept = async (friendshipId: number, friendUserId: number, friendName: string) => {
+        await friendService.acceptFriend(friendshipId);
+        await refreshLists();
+        try {
+            const room = await chatRoomService.createRoom({
+                type: 'direct',
+                name: friendName,
+                member_ids: [friendUserId],
+            });
+            await chatRoomService.initializeDirectRoomEncryption(room.id);
+        } catch {
+            // best-effort; E2EE init failure should not block friendship acceptance
+        }
     };
 
     const handleReject = async (friendshipId: number) => {
-        await friendApi.removeFriend(friendshipId);
-        await Promise.all([fetchFriends(), fetchRequests()]);
+        await friendService.rejectFriend(friendshipId);
+        await refreshLists();
     };
 
     const filteredFriends = friends.filter(f =>
@@ -181,10 +192,10 @@ export const FriendsPage = () => {
                                                 </button>
                                             ) : (
                                                 <button
-                                                    onClick={() => handleCancel(f.friendship_id)}
-                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                    disabled
+                                                    className="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground opacity-60 cursor-not-allowed"
                                                 >
-                                                    Cancel
+                                                    Applying
                                                 </button>
                                             )}
                                         </div>
@@ -214,7 +225,7 @@ export const FriendsPage = () => {
                                             </div>
                                             <div className="flex gap-2">
                                                 <button
-                                                    onClick={() => handleAccept(r.friendship_id)}
+                                                    onClick={() => handleAccept(r.friendship_id, r.user_id, r.name)}
                                                     className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                                                 >
                                                     Accept
@@ -242,7 +253,7 @@ export const FriendsPage = () => {
                 <AddFriendDialog
                     onClose={() => {
                         setShowAddDialog(false);
-                        Promise.all([fetchFriends(), fetchRequests()]);
+                        void refreshLists();
                     }}
                 />
             )}

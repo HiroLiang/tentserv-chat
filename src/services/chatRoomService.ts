@@ -161,8 +161,8 @@ class ChatRoomService {
     // [中] initializeDirectRoomEncryption：確認本地與後端 sender key 狀態都存在，
     //      並為本地仍缺少 sender key 的成員建立請求。
     async initializeDirectRoomEncryption(roomId: number): Promise<void> {
-        const userId = useUserStore.getState().currentUser?.id;
-        if (!userId) return;
+        const accountId = useUserStore.getState().currentUser?.accountId;
+        if (!accountId) return;
 
         const chatStore = useChatStore.getState();
         chatStore.setDirectKeyStatus(roomId, 'loading');
@@ -180,7 +180,7 @@ class ChatRoomService {
             }
 
             const statusBefore = await e2eeApi.getSenderKeyDistributionStatus(roomId);
-            const hasLocalKey = await hasSenderKey(userId, myMemberId).catch(() => false);
+            const hasLocalKey = await hasSenderKey(accountId, myMemberId).catch(() => false);
 
             if (!(hasLocalKey && statusBefore.own_sender_key_exists)) {
                 const detail = useChatStore.getState().currentRoomDetail;

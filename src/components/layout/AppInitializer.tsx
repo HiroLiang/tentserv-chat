@@ -84,7 +84,7 @@ export const AppInitializer = ({ children }: Props) => {
                     return;
                 }
             } else {
-                navigate('/');
+                navigate('/login');
                 setStatus('ready');
                 return;
             }
@@ -153,6 +153,25 @@ export const AppInitializer = ({ children }: Props) => {
         };
         wsService.on('chat.member_joined', handler);
         return () => wsService.off('chat.member_joined', handler);
+    }, []);
+
+    // [EN] Global WS event handler: when server detects this device's OTP pool is below threshold,
+    //      re-count on the server and replenish only the missing delta.
+    // [中] 全域 WS 事件監聽：伺服器偵測此裝置 OTP pool 低於門檻時，重新向伺服器查數量並只補缺少的數量。
+    useEffect(() => {
+        const handler = (data: unknown) => {
+            const payload = data as { user_id?: number | string; device_id?: string };
+            const targetUserId = Number(payload?.user_id);
+            const currentUserId = useUserStore.getState().currentUser?.id;
+            const currentDeviceId = useDeviceStore.getState().deviceId;
+            if (!Number.isFinite(targetUserId) || !payload?.device_id) return;
+            if (targetUserId !== currentUserId || payload.device_id !== currentDeviceId) return;
+
+            e2eeService.replenishOTPKeys(payload.device_id)
+                .catch(err => logger.error('replenishOTPKeys failed', err));
+        };
+        wsService.on('e2ee.replenish_otp_keys', handler);
+        return () => wsService.off('e2ee.replenish_otp_keys', handler);
     }, []);
 
     return (

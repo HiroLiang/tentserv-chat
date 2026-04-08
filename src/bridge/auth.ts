@@ -14,6 +14,6 @@ export const getAuthTokenByAccount = (accountId: BridgeId): Promise<string | nul
     invoke<string | null>('get_auth_token_by_account', { accountId: toBridgeId(accountId) });
 
 export const clearAuthToken = (accountId?: BridgeId): Promise<void> => {
-    if (accountId === undefined) return Promise.resolve();
+    if (accountId === undefined) return invoke('clear_auth_token');
     return invoke('clear_auth_token', { accountId: toBridgeId(accountId) });
 };

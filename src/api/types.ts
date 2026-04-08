@@ -277,6 +277,18 @@ export interface CountOTPPreKeysResponse {
 export interface CheckKeyStatusResponse {
     identity_key_exists: boolean;
     signed_pre_key_exists: boolean;
+    device_id?: string;
+    identity_key?: string;
+    identity_key_sign?: string;
+    signed_pre_key?: string;
+    spk_signature?: string;
+    spk_key_id?: number;
+    otp_prekey_count: number;
+}
+
+export interface GetKeyPolicyResponse {
+    otp_prekey_target_count: number;
+    otp_prekey_replenish_threshold: number;
 }
 
 export interface GetKeyBundleResponse {
@@ -310,6 +322,20 @@ export interface GetSenderKeyDistributionStatusResponse {
 }
 
 export interface CreateSenderKeyRequestRequest {
+    room_id: number;
+    provider_member_id: number;
+}
+
+// ── E2EE WebSocket Payloads ────────────────────────────────────────────────────
+
+export interface SenderKeyNeededPayload {
+    room_id: number;
+    provider_member_id: number;
+    requester_member_id: number;
+    requester_user_id: number;
+}
+
+export interface DirectKeyReadyPayload {
     room_id: number;
     provider_member_id: number;
 }

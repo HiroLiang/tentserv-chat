@@ -28,6 +28,8 @@ import type {
 } from '@/types/e2ee.ts';
 
 const INITIAL_SPK_KEY_ID = 1;
+const DEFAULT_OTP_PREKEY_TARGET_COUNT = 20;
+const DEFAULT_OTP_PREKEY_REPLENISH_THRESHOLD = 5;
 
 // Rust returns [u8;32] / [u8;64] as number[] in JSON.
 // Server expects base64.StdEncoding (standard, not URL-safe, with padding).
@@ -36,6 +38,8 @@ const toBase64 = (bytes: number[]): string =>
 
 type IdentityKeys = Awaited<ReturnType<typeof generateIdentityKeys>>;
 type SignedPreKey = Awaited<ReturnType<typeof generateSignedPreKey>>;
+type KeyStatus = Awaited<ReturnType<typeof e2eeApi.checkKeyStatus>>;
+type KeyPolicy = Awaited<ReturnType<typeof e2eeApi.getKeyPolicy>>;
 
 // [EN] E2eeService manages end-to-end encryption key lifecycle using Signal Protocol X3DH.
 //      Private keys live in the OS keyring (Tauri). Public keys are uploaded to the backend.
@@ -47,11 +51,18 @@ type SignedPreKey = Awaited<ReturnType<typeof generateSignedPreKey>>;
 //      メッセージの暗号化にはルームごとの AES-256-GCM sender key を使用する。
 class E2eeService {
     private _initPromises = new Map<string, Promise<void>>();
+    private _replenishPromises = new Map<string, Promise<void>>();
 
     private getCurrentUserId(): number {
         const userId = useUserStore.getState().currentUser?.id;
         if (!userId) throw new Error('No current user');
         return userId;
+    }
+
+    private getCurrentAccountId(): number {
+        const accountId = useUserStore.getState().currentUser?.accountId;
+        if (!accountId) throw new Error('No current account');
+        return accountId;
     }
 
     private resolveCurrentMemberId(roomId: number, memberId?: number): number {
@@ -72,24 +83,24 @@ class E2eeService {
     }
 
     private async prepareLocalKeyMaterial(
-        userId: number,
+        accountId: number,
         locallyInitialized: boolean,
     ): Promise<{ identityKeys: IdentityKeys; spk: SignedPreKey }> {
         if (locallyInitialized) {
             try {
-                const identityKeys = await getIdentityKeys(userId);
+                const identityKeys = await getIdentityKeys(accountId);
                 logger.info('E2EE reusing existing local identity key for re-upload');
 
                 let spk: SignedPreKey;
                 try {
-                    spk = await getSignedPreKey(userId, INITIAL_SPK_KEY_ID);
+                    spk = await getSignedPreKey(accountId, INITIAL_SPK_KEY_ID);
                     logger.info('E2EE reusing existing local SPK for re-upload');
                 } catch {
-                    spk = await generateSignedPreKey(userId, INITIAL_SPK_KEY_ID);
+                    spk = await generateSignedPreKey(accountId, INITIAL_SPK_KEY_ID);
                     logger.info('E2EE generating new SPK (local not found)');
                 }
 
-                const usable = await validateE2eeKeyMaterial(userId, INITIAL_SPK_KEY_ID);
+                const usable = await validateE2eeKeyMaterial(accountId, INITIAL_SPK_KEY_ID);
                 if (!usable) {
                     throw new Error('local E2EE key material is incomplete');
                 }
@@ -97,19 +108,19 @@ class E2eeService {
                 return { identityKeys, spk };
             } catch (err) {
                 logger.warn('E2EE local key material unusable; clearing and regenerating', err);
-                await clearE2eeKeys(userId);
+                await clearE2eeKeys(accountId);
             }
         }
 
-        const identityKeys = await generateIdentityKeys(userId);
+        const identityKeys = await generateIdentityKeys(accountId);
         logger.info(locallyInitialized
             ? 'E2EE generating new identity key after local reset'
             : 'E2EE generating new identity key (first time)');
 
-        const spk = await generateSignedPreKey(userId, INITIAL_SPK_KEY_ID);
+        const spk = await generateSignedPreKey(accountId, INITIAL_SPK_KEY_ID);
         logger.info('E2EE generating new SPK (identity key is new)');
 
-        const usable = await validateE2eeKeyMaterial(userId, INITIAL_SPK_KEY_ID);
+        const usable = await validateE2eeKeyMaterial(accountId, INITIAL_SPK_KEY_ID);
         if (!usable) {
             throw new Error('E2EE key material validation failed after regeneration');
         }
@@ -117,101 +128,108 @@ class E2eeService {
         return { identityKeys, spk };
     }
 
-    // [EN] ensureInitialized: generates identity keys if absent or if backend is missing them,
-    //      uploads identity key + signed pre-key + 20 OTP pre-keys. If already initialized, replenishes OTP keys.
-    //      A Promise guard keyed by userId:deviceId prevents concurrent re-entrant calls.
-    // [中] ensureInitialized：若本地無身份金鑰或後端遺失，則生成並上傳身份金鑰、signed pre-key 及 20 個 OTP pre-key；
-    //      若已初始化則補充 OTP 金鑰。以 userId:deviceId 為 key 的 Promise 快取防止並發重入。
-    // [日] ensureInitialized：ローカルに identity key がない、またはバックエンドが欠損している場合に
-    //      identity key、signed pre-key、20 個の OTP pre-key を生成・アップロードする。既初期化時は OTP key を補充する。
-    //      userId:deviceId をキーとする Promise キャッシュで並行再入を防ぐ。
+    // [EN] ensureInitialized: bootstraps local account-scoped E2EE keys and reconciles them with remote public key status.
+    //      A Promise guard keyed by accountId:deviceId prevents concurrent re-entrant calls.
+    // [中] ensureInitialized：以 accountId 為本地命名空間初始化 E2EE key，並與遠端公開 key status 同步。
+    //      以 accountId:deviceId 為 key 的 Promise 快取防止並發重入。
+    // [日] ensureInitialized：accountId をローカル名前空間として E2EE key を初期化し、リモート公開 key status と同期する。
+    //      accountId:deviceId をキーとする Promise キャッシュで並行再入を防ぐ。
     async ensureInitialized(deviceId: string): Promise<void> {
+        const accountId = this.getCurrentAccountId();
         const userId = this.getCurrentUserId();
-        const key = `${userId}:${deviceId}`;
+        const key = `${accountId}:${deviceId}`;
         const existing = this._initPromises.get(key);
         if (existing) return existing;
 
-        const promise = this._doInitialize(userId, deviceId).finally(() => {
+        const promise = this._doInitialize(accountId, userId, deviceId).finally(() => {
             this._initPromises.delete(key);
         });
         this._initPromises.set(key, promise);
         return promise;
     }
 
-    private async _doInitialize(userId: number, deviceId: string): Promise<void> {
-        const locallyInitialized = await hasIdentityKeys(userId);
+    private async _doInitialize(accountId: number, userId: number, deviceId: string): Promise<void> {
+        const policy = normalizeKeyPolicy(await e2eeApi.getKeyPolicy());
+        const store = useE2eeStore.getState();
+        store.setKeyPolicy(policy.otp_prekey_target_count, policy.otp_prekey_replenish_threshold);
+
+        const locallyInitialized = await hasIdentityKeys(accountId);
         logger.info(`E2EE locally initialized: ${locallyInitialized}`);
 
-        let needsUpload = !locallyInitialized;
-        if (locallyInitialized) {
-            try {
-                const status = await e2eeApi.checkKeyStatus(userId, deviceId);
-                if (!status.identity_key_exists || !status.signed_pre_key_exists) {
-                    logger.warn('E2EE backend missing keys despite local init — re-uploading');
-                    needsUpload = true;
-                }
-            } catch {
-                logger.warn('E2EE key status check failed — re-uploading');
-                needsUpload = true;
-            }
+        const { identityKeys, spk } = await this.prepareLocalKeyMaterial(accountId, locallyInitialized);
+        const status = await e2eeApi.checkKeyStatus(userId, deviceId);
+        const identityNeedsUpload = !remoteIdentityMatches(status, identityKeys);
+        const spkNeedsUpload = identityNeedsUpload || !remoteSPKMatches(status, spk);
 
-            try {
-                const localUsable = await validateE2eeKeyMaterial(userId, INITIAL_SPK_KEY_ID);
-                if (!localUsable) {
-                    logger.warn('E2EE local key material incomplete — re-uploading');
-                    needsUpload = true;
-                }
-            } catch (err) {
-                logger.warn('E2EE local key material validation failed — re-uploading', err);
-                needsUpload = true;
-            }
+        if (identityNeedsUpload) {
+            await e2eeApi.uploadIdentityKey(deviceId, toBase64(identityKeys.identity_key_dh_pub), toBase64(identityKeys.identity_key_sign_pub));
+            logger.info('E2EE identity key uploaded');
         }
 
-        if (needsUpload) {
-            const { identityKeys, spk } = await this.prepareLocalKeyMaterial(userId, locallyInitialized);
-
-            await e2eeApi.uploadIdentityKey(
-                deviceId,
-                toBase64(identityKeys.identity_key_dh_pub),
-                toBase64(identityKeys.identity_key_sign_pub),
-            );
-            logger.info('E2EE identity key uploaded');
-
+        if (spkNeedsUpload) {
             await e2eeApi.uploadSignedPreKey(deviceId, spk.key_id, toBase64(spk.public_key), toBase64(spk.signature));
             logger.info('E2EE signed pre-key uploaded');
+        }
 
-            const otpKeys = await replenishOtpKeys(userId, 20);
-            logger.info('E2EE OTP pre-keys generated');
-            const { count: otpCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
+        let otpCount = status.otp_prekey_count ?? 0;
+        if (otpCount < policy.otp_prekey_target_count) {
+            const targetDelta = policy.otp_prekey_target_count - otpCount;
+            const otpKeys = await replenishOtpKeys(accountId, targetDelta);
+            logger.info(`E2EE OTP pre-keys generated: ${otpKeys.length}`);
+            const { count: uploadedOtpCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
                 key_id: k.key_id,
-                public_key: toBase64(k.public_key)
+                public_key: toBase64(k.public_key),
             })));
+            otpCount = uploadedOtpCount;
+            store.setOtpKeyCount(otpCount);
             logger.info('E2EE OTP pre-keys uploaded');
-
-            const e2eeState = useE2eeStore.getState();
-            e2eeState.setKeysUploaded(true);
-            e2eeState.setOtpKeyCount(otpCount);
-
-            logger.info('E2EE keys initialized and uploaded');
+        } else {
+            store.setOtpKeyCount(otpCount);
         }
 
-        if (!needsUpload) {
-            await this.replenishOTPKeys(deviceId, 10);
-        }
+        store.setKeysUploaded(true);
+        logger.info('E2EE keys initialized and reconciled');
     }
 
-    async replenishOTPKeys(deviceId: string, threshold = 20): Promise<void> {
-        const userId = this.getCurrentUserId();
+    async replenishOTPKeys(deviceId: string, threshold?: number): Promise<void> {
+        const accountId = this.getCurrentAccountId();
+        const key = `${accountId}:${deviceId}`;
+        const existing = this._replenishPromises.get(key);
+        if (existing) return existing;
+
+        const promise = this._doReplenishOTPKeys(accountId, deviceId, threshold).finally(() => {
+            this._replenishPromises.delete(key);
+        });
+        this._replenishPromises.set(key, promise);
+        return promise;
+    }
+
+    private async _doReplenishOTPKeys(accountId: number, deviceId: string, threshold?: number): Promise<void> {
         const { count } = await e2eeApi.countOTPPreKeys(deviceId);
         const store = useE2eeStore.getState();
         store.setOtpKeyCount(count);
 
-        if (count >= threshold) return;
+        const replenishThreshold = resolvePositiveNumber(
+            threshold,
+            store.otpReplenishThreshold,
+            DEFAULT_OTP_PREKEY_REPLENISH_THRESHOLD,
+        );
+        if (count >= replenishThreshold) return;
 
-        const otpKeys = await replenishOtpKeys(userId, 20);
+        const targetCount = resolvePositiveNumber(
+            undefined,
+            store.otpKeyTargetCount,
+            DEFAULT_OTP_PREKEY_TARGET_COUNT,
+        );
+        const delta = Math.max(targetCount - count, 0);
+        if (delta <= 0) return;
+
+        const otpKeys = await replenishOtpKeys(accountId, delta);
+        if (otpKeys.length === 0) return;
+
         const { count: newCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
             key_id: k.key_id,
-            public_key: toBase64(k.public_key)
+            public_key: toBase64(k.public_key),
         })));
         store.setOtpKeyCount(newCount);
 
@@ -223,7 +241,7 @@ class E2eeService {
         targetDeviceId: string,
         plaintext: string,
     ): Promise<InitialMessage> {
-        const userId = this.getCurrentUserId();
+        const accountId = this.getCurrentAccountId();
         const bundle = await e2eeApi.getKeyBundle(targetUserId, targetDeviceId);
 
         const keyBundle: PublicKeyBundle = {
@@ -236,7 +254,7 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        return performX3dhSend(userId, keyBundle, Array.from(new TextEncoder().encode(plaintext)));
+        return performX3dhSend(accountId, keyBundle, Array.from(new TextEncoder().encode(plaintext)));
     }
 
     async performReceive(
@@ -244,8 +262,8 @@ class E2eeService {
         spkKeyId: number,
         otpkKeyId?: number,
     ): Promise<string> {
-        const userId = this.getCurrentUserId();
-        const plaintextBytes = await performX3dhReceive(userId, msg, spkKeyId, otpkKeyId);
+        const accountId = this.getCurrentAccountId();
+        const plaintextBytes = await performX3dhReceive(accountId, msg, spkKeyId, otpkKeyId);
 
         return new TextDecoder().decode(new Uint8Array(plaintextBytes));
     }
@@ -258,7 +276,7 @@ class E2eeService {
     // [日] performDirectKeyExchange：相手の X3DH 公開鍵バンドルを取得し、sender key を生成して
     //      X3DH send で暗号化してバックエンドにアップロードする。招待者・被招待者の両方がそれぞれ呼び出す。
     async performDirectKeyExchange(roomId: number, inviterUserId: number, memberId?: number): Promise<void> {
-        const userId = this.getCurrentUserId();
+        const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
         const bundle = await e2eeApi.getKeyBundle(inviterUserId);
 
@@ -272,8 +290,8 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        const senderKey = await generateSenderKey(userId, myMemberId);
-        const initialMsg = await performX3dhSend(userId, keyBundle, senderKey.public_key);
+        const senderKey = await generateSenderKey(accountId, myMemberId);
+        const initialMsg = await performX3dhSend(accountId, keyBundle, senderKey.public_key);
 
         const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
 
@@ -292,10 +310,10 @@ class E2eeService {
     // [日] encryptMessage：ルームの AES-256-GCM sender key でプレーンテキストを暗号化し、
     //      "e2ee:v1:{base64(nonce + ciphertext)}" を返す。
     async encryptMessage(roomId: number, plaintext: string, memberId?: number): Promise<string> {
-        const userId = this.getCurrentUserId();
+        const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
         const bytes = Array.from(new TextEncoder().encode(plaintext));
-        const { ciphertext, nonce } = await encryptWithSenderKey(userId, myMemberId, bytes);
+        const { ciphertext, nonce } = await encryptWithSenderKey(accountId, myMemberId, bytes);
         const combined = new Uint8Array([...nonce, ...ciphertext]);
         const b64 = btoa(String.fromCharCode(...combined));
         return `e2ee:v1:${b64}`;
@@ -309,16 +327,16 @@ class E2eeService {
     async decryptMessage(content: string, senderMemberId: number): Promise<string> {
         const PREFIX = 'e2ee:v1:';
         if (!content.startsWith(PREFIX)) return content;
-        const userId = this.getCurrentUserId();
+        const accountId = this.getCurrentAccountId();
         try {
             const combined = Uint8Array.from(atob(content.slice(PREFIX.length)), c => c.charCodeAt(0));
             const nonce = Array.from(combined.slice(0, 12));
             const ciphertext = Array.from(combined.slice(12));
-            const plaintext = await decryptWithSenderKey(userId, senderMemberId, ciphertext, nonce);
+            const plaintext = await decryptWithSenderKey(accountId, senderMemberId, ciphertext, nonce);
             return new TextDecoder().decode(new Uint8Array(plaintext));
         } catch (err) {
             logger.warn(`Failed to decrypt message from member ${senderMemberId}`, err);
-            const keyExists = await hasSenderKey(userId, senderMemberId).catch(() => false);
+            const keyExists = await hasSenderKey(accountId, senderMemberId).catch(() => false);
             if (!keyExists) return WAITING_FOR_SENDER_KEY;
             return content;
         }
@@ -327,7 +345,7 @@ class E2eeService {
     // Called when the inviter receives e2ee.sender_key_needed.
     // Encrypts own sender key using the requester's (invitee's) X3DH public key bundle and uploads it.
     async performInviterKeyExchange(roomId: number, requesterUserId: number, memberId?: number): Promise<void> {
-        const userId = this.getCurrentUserId();
+        const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
         const bundle = await e2eeApi.getKeyBundle(requesterUserId);
 
@@ -341,8 +359,8 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        const senderKey = await generateSenderKey(userId, myMemberId);
-        const initialMsg = await performX3dhSend(userId, keyBundle, senderKey.public_key);
+        const senderKey = await generateSenderKey(accountId, myMemberId);
+        const initialMsg = await performX3dhSend(accountId, keyBundle, senderKey.public_key);
 
         const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
 
@@ -360,7 +378,7 @@ class E2eeService {
     // [中] resolveMemberSenderKeys：取得房間內所有成員的 sender key，
     //      用 X3DH receive 解密每個 distribution_message，並將 AES key bytes 存入本地 keyring。
     async resolveMemberSenderKeys(roomId: number): Promise<void> {
-        const userId = this.getCurrentUserId();
+        const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId);
         const resp = await e2eeApi.getSenderKeys(roomId);
         for (const item of resp.keys) {
@@ -377,8 +395,8 @@ class E2eeService {
                     ciphertext: number[];
                     nonce: number[];
                 };
-                const keyBytes = await performX3dhReceive(userId, initialMsg, initialMsg.spk_key_id, initialMsg.otpk_key_id);
-                await storeMemberSenderKey(userId, item.chat_member_id, keyBytes);
+                const keyBytes = await performX3dhReceive(accountId, initialMsg, initialMsg.spk_key_id, initialMsg.otpk_key_id);
+                await storeMemberSenderKey(accountId, item.chat_member_id, keyBytes);
             } catch (err) {
                 logger.warn(`Failed to resolve sender key for member ${item.chat_member_id}`, err);
             }
@@ -400,8 +418,8 @@ class E2eeService {
             return false;
         }
 
-        const userId = this.getCurrentUserId();
-        const localSenderKeyExists = await hasSenderKey(userId, myMemberId).catch(() => false);
+        const accountId = this.getCurrentAccountId();
+        const localSenderKeyExists = await hasSenderKey(accountId, myMemberId).catch(() => false);
         return status.own_sender_key_exists
             && localSenderKeyExists
             && status.pending_from_members.length === 0;
@@ -410,5 +428,31 @@ class E2eeService {
 
 const fromBase64 = (b64: string): number[] =>
     Array.from(atob(b64), c => c.charCodeAt(0));
+
+const normalizeKeyPolicy = (policy: KeyPolicy): Required<KeyPolicy> => ({
+    otp_prekey_target_count: policy.otp_prekey_target_count > 0
+        ? policy.otp_prekey_target_count
+        : DEFAULT_OTP_PREKEY_TARGET_COUNT,
+    otp_prekey_replenish_threshold: policy.otp_prekey_replenish_threshold > 0
+        ? policy.otp_prekey_replenish_threshold
+        : DEFAULT_OTP_PREKEY_REPLENISH_THRESHOLD,
+});
+
+const resolvePositiveNumber = (preferred: number | undefined, fallback: number, defaultValue: number): number => {
+    if (preferred !== undefined && preferred > 0) return preferred;
+    if (fallback > 0) return fallback;
+    return defaultValue;
+};
+
+const remoteIdentityMatches = (status: KeyStatus, identityKeys: IdentityKeys): boolean =>
+    status.identity_key_exists &&
+    status.identity_key === toBase64(identityKeys.identity_key_dh_pub) &&
+    status.identity_key_sign === toBase64(identityKeys.identity_key_sign_pub);
+
+const remoteSPKMatches = (status: KeyStatus, spk: SignedPreKey): boolean =>
+    status.signed_pre_key_exists &&
+    status.spk_key_id === spk.key_id &&
+    status.signed_pre_key === toBase64(spk.public_key) &&
+    status.spk_signature === toBase64(spk.signature);
 
 export const e2eeService = new E2eeService();

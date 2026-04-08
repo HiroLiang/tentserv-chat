@@ -28,11 +28,11 @@ class UserService {
             device_id: deviceState.deviceId ?? '',
         });
 
+        const token = useUserStore.getState().currentUser?.token;
         const currentUser = await this.fetchCurrentUser();
-        this.setAuthenticatedUser(currentUser);
+        this.setAuthenticatedUser(currentUser, token);
 
-        const userState = useUserStore.getState().currentUser;
-        if (userState?.token && userState.accountId) await saveAuthToken(userState.accountId, userState.token);
+        if (token && currentUser.accountId) await saveAuthToken(currentUser.accountId, token);
 
         return response;
     }
@@ -136,14 +136,16 @@ class UserService {
         };
     }
 
-    private setAuthenticatedUser(user: CurrentUserResponse): void {
+    private setAuthenticatedUser(user: CurrentUserResponse, token?: string): void {
         const state = useUserStore.getState();
+        const preservedToken = token ?? state.currentUser?.token;
         state.setCurrentUser({
             id: user.id,
             accountId: user.accountId,
             email: user.email,
             name: user.name,
             avatar: user.avatar_url,
+            token: preservedToken,
             isLoggedIn: true,
             roles: user.roles,
         });

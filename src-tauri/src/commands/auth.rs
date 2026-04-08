@@ -67,11 +67,22 @@ pub async fn save_auth_token(
 }
 
 /// Delete the stored token for `account_id`.
+/// If no account is provided, deletes the token for the current account.
 /// If this account was the current account, clears the current-account pointer too.
 #[tauri::command]
-pub async fn clear_auth_token(app: tauri::AppHandle, account_id: String) -> Result<(), String> {
+pub async fn clear_auth_token(
+    app: tauri::AppHandle,
+    account_id: Option<String>,
+) -> Result<(), String> {
+    let account_id = match account_id {
+        Some(account_id) => account_id,
+        None => match current_account_entry()?.get_password() {
+            Ok(account_id) => account_id,
+            Err(_) => return Ok(()),
+        },
+    };
     let conn = open_db(&app)?;
-    clear_auth_token_core(&conn, &account_id)?;
+    clear_auth_token_core(&conn, account_id.as_str())?;
     if let Ok(stored) = current_account_entry()?.get_password() {
         if stored == account_id {
             let _ = current_account_entry()?.delete_credential();

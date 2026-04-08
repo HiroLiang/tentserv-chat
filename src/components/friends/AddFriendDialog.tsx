@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react';
-import { friendApi } from '@/api/friend.ts';
+import { useEffect, useRef, useState } from 'react';
 import type { UserSearchResponse } from '@/api/types.ts';
-import { useUserStore } from '@/stores/userStore';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { env } from '@/config/env';
+import { friendService } from '@/services/friendService.ts';
 
 function getInitials(name: string) {
     return name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
@@ -17,27 +16,44 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<UserSearchResponse[]>([]);
     const [loading, setLoading] = useState(false);
-    const currentUser = useUserStore(s => s.currentUser);
+    const requestSequence = useRef(0);
 
     const search = async (q: string) => {
-        if (!q.trim()) return;
+        const keyword = q.trim();
+        if (!keyword) {
+            setResults([]);
+            return;
+        }
+
+        const requestId = ++requestSequence.current;
         setLoading(true);
         try {
-            const data = await friendApi.searchUsers({ name: q });
-            setResults(data.filter(u => u.user_id !== currentUser?.id));
+            const data = await friendService.searchUsersByName(keyword);
+            if (requestId === requestSequence.current) {
+                setResults(data);
+            }
         } finally {
-            setLoading(false);
+            if (requestId === requestSequence.current) {
+                setLoading(false);
+            }
         }
     };
 
     useEffect(() => {
-        if (!query.trim()) { setResults([]); return; }
-        const id = setTimeout(() => search(query), 600);
+        if (!query.trim()) {
+            requestSequence.current += 1;
+            setResults([]);
+            setLoading(false);
+            return;
+        }
+        const id = setTimeout(() => {
+            void search(query);
+        }, 600);
         return () => clearTimeout(id);
     }, [query]);
 
     const handleApply = async (userId: number) => {
-        await friendApi.applyFriend(userId);
+        await friendService.applyFriend(userId);
         setResults(prev => prev.map(u =>
             u.user_id === userId ? { ...u, friendship_status: 'pending' } : u
         ));
@@ -59,11 +75,15 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
                         placeholder="Search by name..."
                         value={query}
                         onChange={e => setQuery(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && search(query)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                                void search(query);
+                            }
+                        }}
                         className="flex-1 px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                     <button
-                        onClick={() => search(query)}
+                        onClick={() => void search(query)}
                         disabled={loading}
                         className="text-sm px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                     >
@@ -98,7 +118,7 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
                                     disabled
                                     className="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground opacity-60 cursor-not-allowed"
                                 >
-                                    Friends
+                                    Friend
                                 </button>
                             ) : u.friendship_status === 'pending' ? (
                                 <button

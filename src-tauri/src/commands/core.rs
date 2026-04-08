@@ -279,7 +279,7 @@ pub(crate) fn perform_x3dh_receive_core(
     let plaintext = x3dh_receiver(&ik, &spk, opk.as_ref(), msg)?;
 
     if let Some(id) = otpk_key_id {
-        let _ = delete_otp_key_inner(conn, user_id, id);
+        delete_otp_key_inner(conn, user_id, id)?;
     }
 
     Ok(plaintext)

@@ -3,13 +3,13 @@
 //! Signal Protocol key management exposed to the TypeScript frontend.
 //!
 //! ## Key hierarchy
-//! - **Identity keys** (`ik_dh` X25519, `ik_sign` Ed25519) — generated once per user
+//! - **Identity keys** (`ik_dh` X25519, `ik_sign` Ed25519) — generated once per account
 //! - **Signed pre-key (SPK)** — X25519, signed by `ik_sign`, rotated periodically
 //! - **One-time pre-keys (OPK)** — batch X25519 keys consumed once per X3DH exchange
-//! - **Sender keys** — per-(user, member_id) keys for group message encryption
+//! - **Sender keys** — per-(local account, member_id) keys for group message encryption
 //!
 //! ## Sender key semantics
-//! Sender keys are keyed by `(user_id, member_id)`.  `room_id` is not used because
+//! Sender keys are keyed by `(local account_id, member_id)`.  `room_id` is not used because
 //! `member_id` (`chat_members.id`) is a globally unique sequence PK.
 //! - **Own key** (`is_private=1`): the caller's key, stored encrypted.
 //! - **Peer key** (`is_private=0`): another participant's public key, stored plaintext.
@@ -63,48 +63,48 @@ pub struct SenderKeyEncryptedMessage {
 
 // ── Identity key commands ─────────────────────────────────────────
 
-/// Generate a fresh X25519 + Ed25519 identity key pair for `user_id`.
+/// Generate a fresh X25519 + Ed25519 identity key pair for `account_id`.
 /// Returns the public keys for upload to the server.
 #[tauri::command]
 pub async fn generate_identity_keys(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
 ) -> Result<IdentityKeyBundle, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    generate_identity_keys_core(&conn, &key, &user_id)
+    let key = get_or_create_master_key(&account_id)?;
+    generate_identity_keys_core(&conn, &key, &account_id)
 }
 
-/// Read the public keys of the existing identity key pair for `user_id`.
+/// Read the public keys of the existing identity key pair for `account_id`.
 /// Does NOT create or fetch the master key — public keys are stored in plaintext.
 /// Returns an error if no identity keys have been generated yet.
 #[tauri::command]
 pub async fn get_identity_keys(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
 ) -> Result<IdentityKeyBundle, String> {
     let conn = open_db(&app)?;
-    get_identity_keys_core(&conn, &user_id)
+    get_identity_keys_core(&conn, &account_id)
 }
 
-/// Read the public key and signature of an existing signed pre-key for `user_id`.
+/// Read the public key and signature of an existing signed pre-key for `account_id`.
 /// Does NOT create or fetch the master key — both fields are stored in plaintext.
 /// Returns an error if the key with `key_id` does not exist.
 #[tauri::command]
 pub async fn get_signed_pre_key(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     key_id: u32,
 ) -> Result<SignedPreKeyBundle, String> {
     let conn = open_db(&app)?;
-    get_signed_pre_key_core(&conn, &user_id, key_id)
+    get_signed_pre_key_core(&conn, &account_id, key_id)
 }
 
-/// Return `true` if both `ik_dh` and `ik_sign` exist for `user_id`.
+/// Return `true` if both `ik_dh` and `ik_sign` exist for `account_id`.
 #[tauri::command]
-pub fn has_identity_keys(app: tauri::AppHandle, user_id: String) -> Result<bool, String> {
+pub fn has_identity_keys(app: tauri::AppHandle, account_id: String) -> Result<bool, String> {
     let conn = open_db(&app)?;
-    has_identity_keys_core(&conn, &user_id)
+    has_identity_keys_core(&conn, &account_id)
 }
 
 /// Return true only when identity keys and the requested signed pre-key exist
@@ -113,40 +113,40 @@ pub fn has_identity_keys(app: tauri::AppHandle, user_id: String) -> Result<bool,
 #[tauri::command]
 pub fn validate_e2ee_key_material(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     spk_key_id: u32,
 ) -> Result<bool, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    validate_e2ee_key_material_core(&conn, &key, &user_id, spk_key_id)
+    let key = get_or_create_master_key(&account_id)?;
+    validate_e2ee_key_material_core(&conn, &key, &account_id, spk_key_id)
 }
 
 // ── Pre-key commands ──────────────────────────────────────────────
 
-/// Generate a new Signed Pre-Key for `user_id` with `key_id`.
+/// Generate a new Signed Pre-Key for `account_id` with `key_id`.
 /// Signs the public key with `ik_sign`; returns public key + signature for upload.
 #[tauri::command]
 pub async fn generate_signed_pre_key(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     key_id: u32,
 ) -> Result<SignedPreKeyBundle, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    generate_signed_pre_key_core(&conn, &key, &user_id, key_id)
+    let key = get_or_create_master_key(&account_id)?;
+    generate_signed_pre_key_core(&conn, &key, &account_id, key_id)
 }
 
-/// Generate `count` new One-Time Pre-Keys for `user_id`.
+/// Generate `count` new One-Time Pre-Keys for `account_id`.
 /// Key IDs are allocated from a monotonic counter — they never repeat.
 #[tauri::command]
 pub async fn replenish_otp_keys(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     count: u32,
 ) -> Result<Vec<OneTimePreKey>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    replenish_otp_keys_core(&conn, &key, &user_id, count)
+    let key = get_or_create_master_key(&account_id)?;
+    replenish_otp_keys_core(&conn, &key, &account_id, count)
 }
 
 // ── X3DH commands ─────────────────────────────────────────────────
@@ -156,13 +156,13 @@ pub async fn replenish_otp_keys(
 #[tauri::command]
 pub async fn perform_x3dh_send(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     bundle: PublicKeyBundle,
     plaintext: Vec<u8>,
 ) -> Result<InitialMessage, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    perform_x3dh_send_core(&conn, &key, &user_id, &bundle, &plaintext)
+    let key = get_or_create_master_key(&account_id)?;
+    perform_x3dh_send_core(&conn, &key, &account_id, &bundle, &plaintext)
 }
 
 /// Run X3DH as the receiver: derive the shared secret and decrypt `msg`.
@@ -170,43 +170,43 @@ pub async fn perform_x3dh_send(
 #[tauri::command]
 pub async fn perform_x3dh_receive(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     msg: InitialMessage,
     spk_key_id: u32,
     otpk_key_id: Option<u32>,
 ) -> Result<Vec<u8>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    perform_x3dh_receive_core(&conn, &key, &user_id, &msg, spk_key_id, otpk_key_id)
+    let key = get_or_create_master_key(&account_id)?;
+    perform_x3dh_receive_core(&conn, &key, &account_id, &msg, spk_key_id, otpk_key_id)
 }
 
 // ── Sender key commands ───────────────────────────────────────────
 //
 // `member_id` = chat_members.id of the key owner (globally unique sequence PK).
-// It is NOT the same as `user_id` or `participant_id`.
+// It is NOT the same as `account_id`, remote user id, or `participant_id`.
 
-/// Generate a new sender key for `user_id` with their participant `member_id`.
+/// Generate a new sender key for `account_id` with their participant `member_id`.
 /// Returns the public key for distribution to other participants.
 #[tauri::command]
 pub async fn generate_sender_key(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     member_id: String,
 ) -> Result<SenderKeyBundle, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    generate_sender_key_core(&conn, &key, &user_id, &member_id)
+    let key = get_or_create_master_key(&account_id)?;
+    generate_sender_key_core(&conn, &key, &account_id, &member_id)
 }
 
-/// Return `true` if a sender key exists for `(user_id, member_id)`.
+/// Return `true` if a sender key exists for `(account_id, member_id)`.
 #[tauri::command]
 pub fn has_sender_key(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     member_id: String,
 ) -> Result<bool, String> {
     let conn = open_db(&app)?;
-    has_sender_key_core(&conn, &user_id, &member_id)
+    has_sender_key_core(&conn, &account_id, &member_id)
 }
 
 /// Store a peer's sender key received after X3DH decryption.
@@ -215,25 +215,25 @@ pub fn has_sender_key(
 #[tauri::command]
 pub async fn store_member_sender_key(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     member_id: String,
     key_bytes: Vec<u8>,
 ) -> Result<(), String> {
     let conn = open_db(&app)?;
-    store_member_sender_key_core(&conn, &user_id, &member_id, key_bytes)
+    store_member_sender_key_core(&conn, &account_id, &member_id, key_bytes)
 }
 
 /// Encrypt `plaintext` with the caller's own sender key for `member_id`.
 #[tauri::command]
 pub async fn encrypt_with_sender_key(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     member_id: String,
     plaintext: Vec<u8>,
 ) -> Result<SenderKeyEncryptedMessage, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    encrypt_with_sender_key_core(&conn, &key, &user_id, &member_id, &plaintext)
+    let key = get_or_create_master_key(&account_id)?;
+    encrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &plaintext)
 }
 
 /// Decrypt `ciphertext` using the sender key for `member_id`.
@@ -241,24 +241,24 @@ pub async fn encrypt_with_sender_key(
 #[tauri::command]
 pub async fn decrypt_with_sender_key(
     app: tauri::AppHandle,
-    user_id: String,
+    account_id: String,
     member_id: String,
     ciphertext: Vec<u8>,
     nonce: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
-    decrypt_with_sender_key_core(&conn, &key, &user_id, &member_id, &ciphertext, &nonce)
+    let key = get_or_create_master_key(&account_id)?;
+    decrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &ciphertext, &nonce)
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────
 
-/// Delete all E2EE key material for `user_id`.
+/// Delete all E2EE key material for `account_id`.
 /// Auth tokens are NOT cleared here — call `clear_auth_token` separately on logout.
 #[tauri::command]
-pub fn clear_e2ee_keys(app: tauri::AppHandle, user_id: String) -> Result<(), String> {
+pub fn clear_e2ee_keys(app: tauri::AppHandle, account_id: String) -> Result<(), String> {
     let conn = open_db(&app)?;
-    clear_e2ee_keys_core(&conn, &user_id)
+    clear_e2ee_keys_core(&conn, &account_id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

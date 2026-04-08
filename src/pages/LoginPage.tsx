@@ -1,5 +1,5 @@
 import { Navbar } from "@/components/layout/Navbar.tsx";
-import { type SubmitEvent, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { toast } from "sonner";
@@ -21,7 +21,7 @@ export const LoginPage = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
 
-    const handleSubmit = async (e: SubmitEvent<HTMLFormElement>) => {
+    const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         setIsLoading(true);
         setError('');
@@ -35,8 +35,10 @@ export const LoginPage = () => {
             // connect to websocket
             const token = useUserStore.getState().currentUser?.token;
             const deviceId = useDeviceStore.getState().deviceId ?? undefined;
+            await chatService.initialize().catch(err => {
+                logger.warn('Participant initialization failed on login', err);
+            });
             wsService.connect(env.WS_BASE_URL, token ?? '', deviceId);
-            chatService.initialize();
             if (deviceId) {
                 e2eeService.ensureInitialized(deviceId).catch(err => {
                     logger.error('E2EE initialization failed on login', err);
