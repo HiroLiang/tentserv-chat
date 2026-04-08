@@ -35,6 +35,7 @@ export interface AuthUserProfileItem {
 }
 
 export interface AuthProfileResponse {
+    account_id: number;
     account_name?: string;
     current_user: AuthUserProfileItem;
     email: string;
@@ -270,6 +271,11 @@ export interface UploadOTPPreKeysResponse {
 
 export interface CountOTPPreKeysResponse {
     count: number;
+}
+
+export interface CheckKeyStatusResponse {
+    identity_key_exists: boolean;
+    signed_pre_key_exists: boolean;
 }
 
 export interface GetKeyBundleResponse {

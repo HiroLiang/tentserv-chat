@@ -4495,7 +4495,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-opener",
  "tauri-plugin-store",
- "tracing",
+ "tempfile",
  "uuid",
  "x25519-dalek",
  "zeroize",

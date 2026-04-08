@@ -7,6 +7,14 @@ type MessageHandler = (data: unknown) => void;
 
 type WSStatus = "idle" | "connecting" | "connected" | "reconnecting" | "disconnected";
 
+// [EN] WebSocketService is a singleton managing a single WebSocket connection.
+//      Features: exponential-backoff reconnect (3s→30s), offline message queue (flushed on connect),
+//      typed message dispatching via handlers map, and auto-ACK for delivery_id messages.
+// [中] WebSocketService 是單例，管理唯一的 WebSocket 連線。
+//      功能：指數退避重連（3s→30s）、離線訊息佇列（連線後自動補發）、型別化訊息分發、delivery_id 自動 ACK。
+// [日] WebSocketService はシングルトンで、単一の WebSocket 接続を管理する。
+//      機能：指数バックオフ再接続（3s→30s）、オフラインメッセージキュー（接続後に自動送信）、
+//      型別メッセージディスパッチ、delivery_id の自動 ACK。
 class WebSocketService {
     private ws: WebSocket | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -28,6 +36,9 @@ class WebSocketService {
         return this.status;
     }
 
+    // [EN] connect: guards (user logged in + network healthy), then calls createConnection().
+    // [中] connect：確認用戶已登入且網路健康後，呼叫 createConnection() 建立連線。
+    // [日] connect：ユーザーログイン済みかつネットワーク正常を確認してから createConnection() を呼び出す。
     connect(url: string, token?: string, deviceId?: string) {
         this.url = url;
         this.token = token ?? null;
@@ -114,6 +125,12 @@ class WebSocketService {
         this.handlers.get(type)?.delete(handler);
     }
 
+    // [EN] createConnection: builds the WebSocket URL (appending token + device_id as query params),
+    //      sets up onopen/onmessage/onclose/onerror handlers, and starts heartbeat on connect.
+    // [中] createConnection：建立 WebSocket URL（附加 token + device_id 為 query params），
+    //      設定 onopen/onmessage/onclose/onerror，並在連線成功後啟動心跳。
+    // [日] createConnection：WebSocket URL を組み立て（token + device_id をクエリパラメータに付加）、
+    //      onopen/onmessage/onclose/onerror を設定し、接続成功後にハートビートを開始する。
     private createConnection() {
         if (!this.url) return;
         if (this.ws?.readyState === WebSocket.OPEN) return;
@@ -192,6 +209,9 @@ class WebSocketService {
         };
     }
 
+    // [EN] scheduleReconnect: waits reconnectDelay then doubles it (max 30s) and calls createConnection().
+    // [中] scheduleReconnect：等待 reconnectDelay 後將延遲翻倍（上限 30s），再呼叫 createConnection()。
+    // [日] scheduleReconnect：reconnectDelay 後に遅延を 2 倍に増加（最大 30s）し、createConnection() を呼び出す。
     private scheduleReconnect() {
         this.clearReconnectTimer();
 

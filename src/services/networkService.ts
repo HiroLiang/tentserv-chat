@@ -3,6 +3,11 @@ import { logger } from "@/utils/logger.ts";
 import { toast } from "sonner";
 import { wsService } from "@/services/wsService.ts";
 
+// [EN] NetworkService monitors connectivity: registers browser online/offline events and polls /api/health every 30s.
+//      On reconnect, it also triggers a WebSocket force-reconnect.
+// [中] NetworkService 監控網路狀態：監聽瀏覽器 online/offline 事件並每 30 秒輪詢 /api/health；重新上線時觸發 WebSocket 強制重連。
+// [日] NetworkService はネットワーク監視：ブラウザの online/offline イベントを登録し、30 秒ごとに /api/health をポーリングする。
+//      再接続時は WebSocket の強制再接続もトリガーする。
 class NetworkService {
     private initialized: boolean = false;
     private pollingInterval: ReturnType<typeof setInterval> | null = null;

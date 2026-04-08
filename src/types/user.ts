@@ -1,5 +1,6 @@
 export interface User {
     id: number;
+    accountId?: number;
     name?: string;
     email?: string;
     avatar?: string;
@@ -21,6 +22,7 @@ export interface AuthMessageResponse {
 
 export interface CurrentUserResponse {
     id: number;
+    accountId: number;
     name: string;
     email: string;
     avatar_url?: string;

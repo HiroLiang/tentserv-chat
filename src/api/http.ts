@@ -5,6 +5,17 @@ import { useUserStore } from "@/stores/userStore.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import type { ErrorResponse } from "@/types/api.ts";
 
+// [EN] Axios HTTP client with two interceptors:
+//      Request: attaches Bearer token (from userStore) + X-Device-ID (from deviceStore) to every request.
+//      Response: if a new token appears in the Authorization header, updates userStore automatically.
+//      Errors are normalized to {message, code} objects for consistent handling in services.
+// [中] Axios HTTP 客戶端，含兩個攔截器：
+//      請求：自動附加 Bearer token（來自 userStore）與 X-Device-ID（來自 deviceStore）。
+//      回應：若 Authorization header 含新 token 則自動更新 userStore；錯誤統一轉為 {message, code} 物件。
+// [日] Axios HTTP クライアント（インターセプター 2 つ）：
+//      リクエスト：Bearer token（userStore）と X-Device-ID（deviceStore）を全リクエストに付加する。
+//      レスポンス：Authorization ヘッダに新トークンがある場合は userStore を自動更新する。
+//      エラーは {message, code} オブジェクトに正規化してサービス層での処理を一貫させる。
 export const http = axios.create({
     baseURL: env.API_BASE_URL,
     timeout: 10000,

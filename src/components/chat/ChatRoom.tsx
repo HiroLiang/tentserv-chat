@@ -4,7 +4,7 @@ import type { ChatGroup, ChatMessage } from '@/types/ui';
 import { Bot, Lock, Send, Users } from 'lucide-react';
 import { useChatStore } from '@/stores/chatStore';
 import { chatRoomService } from '@/services/chatRoomService';
-import { e2eeService } from '@/services/e2eeService';
+import { e2eeService, WAITING_FOR_SENDER_KEY } from '@/services/e2eeService';
 import { wsService } from '@/services/wsService';
 import { logger } from '@/utils/logger';
 import { toast } from 'sonner';
@@ -93,7 +93,12 @@ function MessageBubble({ message, chat }: { message: ChatMessage; chat: ChatGrou
                         ? 'bg-primary text-primary-foreground rounded-tl-2xl rounded-tr-sm rounded-bl-2xl'
                         : 'bg-muted text-foreground rounded-tr-2xl rounded-tl-sm rounded-br-2xl',
                 )}>
-                    {message.content}
+                    {message.content === WAITING_FOR_SENDER_KEY
+                        ? <span className="italic text-muted-foreground flex items-center gap-1">
+                            <Lock className="h-3 w-3"/> 等待用戶密鑰
+                          </span>
+                        : message.content
+                    }
                 </div>
                 <span className="text-[11px] text-muted-foreground mt-1 px-1">{message.timestamp}</span>
             </div>
@@ -122,8 +127,16 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
         };
 
         if (chat.type === 'group') {
-            void chatRoomService.loadMyRoomInvitation(Number(chat.id));
-            useChatStore.getState().setDirectKeyStatus(Number(chat.id), 'unlocked');
+            const roomId = Number(chat.id);
+            void (async () => {
+                const invitation = await chatRoomService.loadMyRoomInvitation(roomId);
+                useChatStore.getState().setDirectKeyStatus(roomId, 'unlocked');
+                if (!invitation?.found) {
+                    chatRoomService.initializeGroupRoomEncryption(roomId).catch(err =>
+                        logger.warn(`Group E2EE init failed for room ${roomId}`, err)
+                    );
+                }
+            })();
         } else if (chat.type === 'direct') {
             const roomId = Number(chat.id);
             setDirectStatus('loading');
@@ -169,6 +182,11 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                 void e2eeService.resolveDirectKey(roomId)
                     .then((unlocked) => {
                         useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
+                        if (unlocked) {
+                            e2eeService.resolveMemberSenderKeys(roomId).catch(err =>
+                                logger.warn(`Failed to resolve sender keys after unlock for room ${roomId}`, err)
+                            );
+                        }
                     })
                     .catch((err) => {
                         logger.error(`Failed to refresh direct key status for room ${roomId}`, err);

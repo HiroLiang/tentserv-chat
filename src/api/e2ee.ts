@@ -6,6 +6,7 @@ import type {
     UploadOTPPreKeysRequest,
     UploadOTPPreKeysResponse,
     CountOTPPreKeysResponse,
+    CheckKeyStatusResponse,
     GetKeyBundleResponse,
     UploadSenderKeyRequest,
     GetSenderKeysResponse,
@@ -25,6 +26,9 @@ export const e2eeApi = {
 
     countOTPPreKeys: (device_id: string): Promise<CountOTPPreKeysResponse> =>
         get(`/api/e2ee/otp-prekeys/count`, { params: { device_id } }),
+
+    checkKeyStatus: (user_id: number, device_id?: string): Promise<CheckKeyStatusResponse> =>
+        get(`/api/e2ee/key-status/${user_id}`, { params: device_id ? { device_id } : {} }),
 
     getKeyBundle: (user_id: number, device_id?: string): Promise<GetKeyBundleResponse> =>
         get(`/api/e2ee/key-bundle/${user_id}`, { params: device_id ? { device_id } : {} }),

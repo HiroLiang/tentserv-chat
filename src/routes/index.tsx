@@ -12,6 +12,14 @@ import { SettingsPage } from "@/pages/SettingsPage.tsx";
 import { FriendsPage } from "@/pages/FriendsPage.tsx";
 import { Loader2 } from 'lucide-react';
 
+// [EN] Routing config: public routes (/, /login, /register), protected routes (ProtectedRoute checks isLoggedIn),
+//      and /console (AdminRoute verifies role server-side; AdminPage is lazy-loaded so unauthorized users
+//      never download its JS bundle).
+// [中] 路由設定：公開路由（/, /login, /register）、受保護路由（ProtectedRoute 檢查登入狀態）
+//      及 /console（AdminRoute 在伺服器端驗證角色；AdminPage 懶載入，未授權使用者不會下載其 JS bundle）。
+// [日] ルーティング設定：公開ルート（/, /login, /register）、保護ルート（ProtectedRoute がログイン確認）、
+//      /console（AdminRoute がサーバー側でロールを検証；AdminPage は遅延読み込みで未認可ユーザーには JS バンドルを配信しない）。
+
 // Lazy-load the admin page so its bundle chunk is only fetched
 // after the AdminRoute guard confirms the user is authorized.
 const AdminPage = React.lazy(() =>

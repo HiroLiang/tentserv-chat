@@ -11,6 +11,7 @@ import { e2eeService } from "@/services/e2eeService.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { env } from "@/config/env.ts";
+import { logger } from "@/utils/logger.ts";
 
 export const LoginPage = () => {
     const navigate = useNavigate();
@@ -37,7 +38,9 @@ export const LoginPage = () => {
             wsService.connect(env.WS_BASE_URL, token ?? '', deviceId);
             chatService.initialize();
             if (deviceId) {
-                e2eeService.ensureInitialized(deviceId).catch(() => {});
+                e2eeService.ensureInitialized(deviceId).catch(err => {
+                    logger.error('E2EE initialization failed on login', err);
+                });
             }
             navigate("/");
         } catch (err) {

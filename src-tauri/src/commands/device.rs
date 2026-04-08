@@ -1,88 +1,51 @@
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tauri_plugin_store::StoreExt;
-use uuid::Uuid;
-use chrono::Utc;
+//! # Device Commands
+//!
+//! Manages the device's identity (UUID, platform, name, registration state).
+//! Device info is stored in the `device_info` SQLite table via `store::device_store`.
+//!
+//! If no device exists on the first call, a new UUID is generated and persisted.
+//! Subsequent calls return the stored record — the UUID never changes.
+
+use crate::commands::core::{
+    clear_device_core, get_or_create_device_core, update_device_registration_core,
+};
+use crate::store::db::open_db;
+use crate::store::device_store::DeviceInfo;
 use sysinfo::System;
 
-#[allow(dead_code)]
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct DeviceInfo {
-    pub device_id: String,
-    pub platform: String,
-    pub device_name: String,
-    pub registered: bool,
-    pub created_at: i64,
-}
+// ── Commands ──────────────────────────────────────────────────────
 
-#[allow(dead_code)]
+/// Return the device's persistent info, creating a new record on first launch.
+///
+/// The `device_name` is refreshed from the OS on every call (hostname can change),
+/// but `device_id`, `platform`, and `created_at` are immutable once written.
 #[tauri::command]
 pub fn get_device_info(app: tauri::AppHandle) -> Result<DeviceInfo, String> {
-
-    // Get store
-    let store = app.store("store.json").map_err(|e| e.to_string())?;
-
-    // Get device name
     let device_full_name = System::host_name().unwrap_or_else(|| "Unknown".to_string());
-    let device_name = device_full_name.strip_suffix(".local")
-        .unwrap_or(&device_full_name).to_string();
-
-    // Check if device_info exists
-    if let Some(device_info_value) = store.get("device_info") {
-        if let Ok(mut device_info) = serde_json::from_value::<DeviceInfo>(device_info_value) {
-            device_info.device_name = device_name;
-
-            store.set("device_info", json!(device_info));
-            store.save().map_err(|e| e.to_string())?;
-
-            return Ok(device_info);
-        }
-    }
-
-    // Create device_info
-    let platform = std::env::consts::OS;
-    let device_info = DeviceInfo {
-        device_id: Uuid::new_v4().to_string(),
-        platform: platform.to_string(),
-        device_name,
-        registered: false,
-        created_at: Utc::now().timestamp_millis(),
-    };
-
-    // Save device_info
-    store.set("device_info", json!(device_info));
-    store.save().map_err(|e| e.to_string())?;
-
-    Ok(device_info)
+    let device_name = device_full_name
+        .strip_suffix(".local")
+        .unwrap_or(&device_full_name)
+        .to_string();
+    let conn = open_db(&app)?;
+    get_or_create_device_core(&conn, &device_name)
 }
 
-#[allow(dead_code)]
+/// Mark the device as registered (or unregistered) with the backend.
 #[tauri::command]
-pub fn update_device_registration(
-    app: tauri::AppHandle,
-    registered: bool,
-) -> Result<(), String> {
-    let store = app.store("store.json").map_err(|e| e.to_string())?;
-
-    if let Some(device_info_value) = store.get("device_info") {
-        if let Ok(mut device_info) = serde_json::from_value::<DeviceInfo>(device_info_value) {
-            device_info.registered = registered;
-            store.set("device_info", json!(device_info));
-            store.save().map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-    }
-
-    Err("Device info not found".to_string())
+pub fn update_device_registration(app: tauri::AppHandle, registered: bool) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    update_device_registration_core(&conn, registered)
 }
 
-#[allow(dead_code)]
+/// Remove the device record. Used during factory-reset / full uninstallation flows.
 #[tauri::command]
 pub fn clear_device_id(app: tauri::AppHandle) -> Result<(), String> {
-    let store = app.store("store.json").map_err(|e| e.to_string())?;
-
-    store.delete("device_info");
-    store.save().map_err(|e| e.to_string())?;
-
-    Ok(())
+    let conn = open_db(&app)?;
+    clear_device_core(&conn)
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "tests/device_tests.rs"]
+mod tests;

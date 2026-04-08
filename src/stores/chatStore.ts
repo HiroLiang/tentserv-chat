@@ -35,6 +35,18 @@ interface ChatState {
     resetChat: () => void;
 }
 
+// [EN] chatStore (Zustand): central chat state.
+//      rooms: categorized room lists (direct/group/channel/bot).
+//      messages: keyed by roomId, supports pagination via prependMessages (older) / appendMessage (new WS messages).
+//      directKeyStatus: tracks E2EE key exchange state per direct room ('loading'|'locked'|'unlocked').
+//      pendingInvitation: current user's pending room invitation.
+// [中] chatStore（Zustand）：中央聊天狀態。
+//      rooms 依類型分類（direct/group/channel/bot）；messages 以 roomId 為鍵，支援分頁（舊訊息 prepend，新 WS 訊息 append）。
+//      directKeyStatus 追蹤每個直接聊天室的 E2EE 金鑰交換狀態；pendingInvitation 為當前待處理邀請。
+// [日] chatStore（Zustand）：チャットの中央状態。
+//      rooms はタイプ別（direct/group/channel/bot）；messages は roomId をキーにページネーション対応
+//      （古いメッセージは prepend、新 WS メッセージは append）。
+//      directKeyStatus は各ダイレクトルームの E2EE 鍵交換状態を追跡；pendingInvitation は保留中の招待。
 export const useChatStore = create<ChatState>((set) => ({
     rooms: { direct: [], group: [], channel: [], bot: [] },
     currentRoomId: null,
