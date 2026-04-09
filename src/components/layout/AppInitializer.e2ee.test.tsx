@@ -17,7 +17,8 @@ import {
     hasIdentityKeys,
     performX3dhSend,
     replenishOtpKeys,
-    validateE2eeKeyMaterial,
+    validateIdentityKeys,
+    validateSignedPreKey,
 } from "@/bridge/e2ee.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useE2eeStore } from "@/stores/e2eeStore.ts";
@@ -95,17 +96,19 @@ vi.mock("@/api/index.ts", () => ({
 
 vi.mock("@/bridge/e2ee.ts", () => ({
     generateIdentityKeys: vi.fn(),
-    getIdentityKeys: vi.fn(),
-    generateSignedPreKey: vi.fn(),
-    getSignedPreKey: vi.fn(),
-    replenishOtpKeys: vi.fn(),
-    performX3dhSend: vi.fn(),
-    performX3dhReceive: vi.fn(),
-    hasIdentityKeys: vi.fn(),
-    validateE2eeKeyMaterial: vi.fn(),
-    hasSenderKey: vi.fn(),
-    generateSenderKey: vi.fn(),
-    encryptWithSenderKey: vi.fn(),
+        getIdentityKeys: vi.fn(),
+        generateSignedPreKey: vi.fn(),
+        getSignedPreKey: vi.fn(),
+        replenishOtpKeys: vi.fn(),
+        performX3dhSend: vi.fn(),
+        performX3dhReceive: vi.fn(),
+        hasIdentityKeys: vi.fn(),
+        validateIdentityKeys: vi.fn(),
+        validateSignedPreKey: vi.fn(),
+        validateE2eeKeyMaterial: vi.fn(),
+        hasSenderKey: vi.fn(),
+        generateSenderKey: vi.fn(),
+        encryptWithSenderKey: vi.fn(),
     decryptWithSenderKey: vi.fn(),
     storeMemberSenderKey: vi.fn(),
     clearE2eeKeys: vi.fn(),
@@ -262,7 +265,8 @@ describe("AppInitializer E2EE replenish integration", () => {
         vi.mocked(hasIdentityKeys).mockResolvedValue(true);
         vi.mocked(getIdentityKeys).mockResolvedValue(identityKeys);
         vi.mocked(getSignedPreKey).mockResolvedValue(signedPreKey);
-        vi.mocked(validateE2eeKeyMaterial).mockResolvedValue(true);
+        vi.mocked(validateIdentityKeys).mockResolvedValue(true);
+        vi.mocked(validateSignedPreKey).mockResolvedValue(true);
         vi.mocked(generateSenderKey).mockResolvedValue(senderKeyBundle);
         vi.mocked(performX3dhSend).mockResolvedValue(initialMessage);
         vi.mocked(replenishOtpKeys).mockImplementation(async (_accountId, count) => otpKeys(count));

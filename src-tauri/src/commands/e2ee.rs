@@ -18,11 +18,12 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use crate::commands::core::{
-    clear_e2ee_keys_core, decrypt_with_sender_key_core, encrypt_with_sender_key_core,
-    generate_identity_keys_core, generate_sender_key_core, generate_signed_pre_key_core,
-    get_identity_keys_core, get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
-    perform_x3dh_receive_core, perform_x3dh_send_core, replenish_otp_keys_core,
-    store_member_sender_key_core, validate_e2ee_key_material_core,
+    bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, decrypt_with_sender_key_core,
+    encrypt_with_sender_key_core, generate_identity_keys_core, generate_sender_key_core,
+    generate_signed_pre_key_core, get_identity_keys_core, get_signed_pre_key_core,
+    has_identity_keys_core, has_sender_key_core, perform_x3dh_receive_core,
+    perform_x3dh_send_core, replenish_otp_keys_core, store_member_sender_key_core,
+    validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
 };
 use crate::crypto::x3dh::{InitialMessage, PublicKeyBundle};
 use crate::store::db::{get_or_create_master_key, open_db};
@@ -119,6 +120,24 @@ pub fn validate_e2ee_key_material(
     let conn = open_db(&app)?;
     let key = get_or_create_master_key(&account_id)?;
     validate_e2ee_key_material_core(&conn, &key, &account_id, spk_key_id)
+}
+
+#[tauri::command]
+pub fn validate_identity_keys(app: tauri::AppHandle, account_id: String) -> Result<bool, String> {
+    let conn = open_db(&app)?;
+    let key = get_or_create_master_key(&account_id)?;
+    validate_identity_keys_core(&conn, &key, &account_id)
+}
+
+#[tauri::command]
+pub fn validate_signed_pre_key(
+    app: tauri::AppHandle,
+    account_id: String,
+    key_id: u32,
+) -> Result<bool, String> {
+    let conn = open_db(&app)?;
+    let key = get_or_create_master_key(&account_id)?;
+    validate_signed_pre_key_core(&conn, &key, &account_id, key_id)
 }
 
 // ── Pre-key commands ──────────────────────────────────────────────
@@ -249,6 +268,46 @@ pub async fn decrypt_with_sender_key(
     let conn = open_db(&app)?;
     let key = get_or_create_master_key(&account_id)?;
     decrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &ciphertext, &nonce)
+}
+
+// ── Bootstrap (combined local key lifecycle) ──────────────────────
+
+/// Return value of `bootstrap_local_e2ee_keys`.
+/// Carries the public material needed for remote key-status reconciliation.
+#[derive(Serialize)]
+pub struct LocalBootstrapResult {
+    pub identity_keys: IdentityKeyBundle,
+    pub spk: SignedPreKeyBundle,
+    pub identity_regenerated: bool,
+    pub spk_regenerated: bool,
+}
+
+/// Bootstrap all local E2EE key material in a single call.
+///
+/// Obtains the master key **once**, then validates IK and the initial SPK.
+/// If either is missing or unreadable (AEAD mismatch), the `identity_keys`
+/// and `signed_pre_keys` rows are cleared and regenerated cleanly with the
+/// current key.  OTP keys and sender keys are never touched.
+///
+/// Replaces the previous multi-command pattern of separate `validate_identity_keys`,
+/// `generate_identity_keys`, and `generate_signed_pre_key` calls, which could
+/// each receive a different ephemeral master key when the OS keychain entry was
+/// unstable, leaving newly written material unreadable by the next call.
+#[tauri::command]
+pub async fn bootstrap_local_e2ee_keys(
+    app: tauri::AppHandle,
+    account_id: String,
+    spk_key_id: u32,
+) -> Result<LocalBootstrapResult, String> {
+    let conn = open_db(&app)?;
+    let key = get_or_create_master_key(&account_id)?;
+    let r = bootstrap_local_e2ee_keys_core(&conn, &key, &account_id, spk_key_id)?;
+    Ok(LocalBootstrapResult {
+        identity_keys: r.identity_keys,
+        spk: r.spk,
+        identity_regenerated: r.identity_regenerated,
+        spk_regenerated: r.spk_regenerated,
+    })
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────

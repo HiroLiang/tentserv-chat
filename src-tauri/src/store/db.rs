@@ -48,7 +48,7 @@ pub(crate) fn get_or_create_master_key(account_id: &str) -> Result<[u8; 32], Str
                 .try_into()
                 .map_err(|_| "invalid master key length".into())
         }
-        Err(_) => {
+        Err(keyring::Error::NoEntry) => {
             // First access for this user — generate and store a new random key.
             let mut key = [0u8; 32];
             rand::rng().fill(&mut key);
@@ -57,6 +57,7 @@ pub(crate) fn get_or_create_master_key(account_id: &str) -> Result<[u8; 32], Str
                 .map_err(|e| e.to_string())?;
             Ok(key)
         }
+        Err(e) => Err(format!("keyring read failed for account '{account_id}': {e}")),
     }
 }
 
@@ -433,3 +434,9 @@ pub(crate) fn decrypt_bytes(
         .decrypt(Nonce::from_slice(nonce), ciphertext)
         .map_err(|e| format!("decrypt failed: {e}"))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "tests/db_tests.rs"]
+mod tests;

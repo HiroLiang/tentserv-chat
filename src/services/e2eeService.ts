@@ -4,21 +4,15 @@ import { useChatStore } from '@/stores/chatStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
 import { logger } from '@/utils/logger.ts';
 import {
-    generateIdentityKeys,
-    getIdentityKeys,
-    generateSignedPreKey,
-    getSignedPreKey,
+    bootstrapLocalE2eeKeys,
     replenishOtpKeys,
     performX3dhSend,
     performX3dhReceive,
-    hasIdentityKeys,
-    validateE2eeKeyMaterial,
     hasSenderKey,
     generateSenderKey,
     encryptWithSenderKey,
     decryptWithSenderKey,
     storeMemberSenderKey,
-    clearE2eeKeys,
 } from '@/bridge/e2ee.ts';
 
 export const WAITING_FOR_SENDER_KEY = '__E2EE_WAITING_KEY__';
@@ -36,8 +30,8 @@ const DEFAULT_OTP_PREKEY_REPLENISH_THRESHOLD = 5;
 const toBase64 = (bytes: number[]): string =>
     btoa(String.fromCharCode(...bytes));
 
-type IdentityKeys = Awaited<ReturnType<typeof generateIdentityKeys>>;
-type SignedPreKey = Awaited<ReturnType<typeof generateSignedPreKey>>;
+type IdentityKeys = Awaited<ReturnType<typeof bootstrapLocalE2eeKeys>>['identity_keys'];
+type SignedPreKey = Awaited<ReturnType<typeof bootstrapLocalE2eeKeys>>['spk'];
 type KeyStatus = Awaited<ReturnType<typeof e2eeApi.checkKeyStatus>>;
 type KeyPolicy = Awaited<ReturnType<typeof e2eeApi.getKeyPolicy>>;
 
@@ -82,50 +76,50 @@ class E2eeService {
         return me.member_id;
     }
 
-    private async prepareLocalKeyMaterial(
+    private async ensureRemoteBootstrap(
         accountId: number,
-        locallyInitialized: boolean,
-    ): Promise<{ identityKeys: IdentityKeys; spk: SignedPreKey }> {
-        if (locallyInitialized) {
-            try {
-                const identityKeys = await getIdentityKeys(accountId);
-                logger.info('E2EE reusing existing local identity key for re-upload');
+        userId: number,
+        deviceId: string,
+        identityKeys: IdentityKeys,
+        spk: SignedPreKey,
+        policy: Required<KeyPolicy>,
+        identityRegenerated: boolean,
+        spkRegenerated: boolean,
+    ): Promise<number> {
+        const status = await e2eeApi.checkKeyStatus(userId, deviceId);
+        const identityNeedsUpload = identityRegenerated || !remoteIdentityMatches(status, identityKeys);
+        const spkNeedsUpload = identityNeedsUpload || spkRegenerated || !remoteSPKMatches(status, spk);
 
-                let spk: SignedPreKey;
-                try {
-                    spk = await getSignedPreKey(accountId, INITIAL_SPK_KEY_ID);
-                    logger.info('E2EE reusing existing local SPK for re-upload');
-                } catch {
-                    spk = await generateSignedPreKey(accountId, INITIAL_SPK_KEY_ID);
-                    logger.info('E2EE generating new SPK (local not found)');
-                }
+        if (identityNeedsUpload) {
+            await e2eeApi.uploadIdentityKey(deviceId, toBase64(identityKeys.identity_key_dh_pub), toBase64(identityKeys.identity_key_sign_pub));
+            logger.info('E2EE identity key uploaded');
+        }
 
-                const usable = await validateE2eeKeyMaterial(accountId, INITIAL_SPK_KEY_ID);
-                if (!usable) {
-                    throw new Error('local E2EE key material is incomplete');
-                }
+        if (spkNeedsUpload) {
+            await e2eeApi.uploadSignedPreKey(deviceId, spk.key_id, toBase64(spk.public_key), toBase64(spk.signature));
+            logger.info('E2EE signed pre-key uploaded');
+        }
 
-                return { identityKeys, spk };
-            } catch (err) {
-                logger.warn('E2EE local key material unusable; clearing and regenerating', err);
-                await clearE2eeKeys(accountId);
+        let otpCount = status.otp_prekey_count ?? 0;
+        const shouldReplenish = identityRegenerated || otpCount < policy.otp_prekey_target_count;
+        if (shouldReplenish) {
+            // When IK was regenerated, old OTP private keys are gone — force a full batch.
+            const targetDelta = identityRegenerated
+                ? policy.otp_prekey_target_count
+                : policy.otp_prekey_target_count - otpCount;
+            if (targetDelta > 0) {
+                const otpKeys = await replenishOtpKeys(accountId, targetDelta);
+                logger.info(`E2EE OTP pre-keys generated: ${otpKeys.length}`);
+                const { count: uploadedOtpCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
+                    key_id: k.key_id,
+                    public_key: toBase64(k.public_key),
+                })));
+                otpCount = uploadedOtpCount;
+                logger.info('E2EE OTP pre-keys uploaded');
             }
         }
 
-        const identityKeys = await generateIdentityKeys(accountId);
-        logger.info(locallyInitialized
-            ? 'E2EE generating new identity key after local reset'
-            : 'E2EE generating new identity key (first time)');
-
-        const spk = await generateSignedPreKey(accountId, INITIAL_SPK_KEY_ID);
-        logger.info('E2EE generating new SPK (identity key is new)');
-
-        const usable = await validateE2eeKeyMaterial(accountId, INITIAL_SPK_KEY_ID);
-        if (!usable) {
-            throw new Error('E2EE key material validation failed after regeneration');
-        }
-
-        return { identityKeys, spk };
+        return otpCount;
     }
 
     // [EN] ensureInitialized: bootstraps local account-scoped E2EE keys and reconciles them with remote public key status.
@@ -153,40 +147,24 @@ class E2eeService {
         const store = useE2eeStore.getState();
         store.setKeyPolicy(policy.otp_prekey_target_count, policy.otp_prekey_replenish_threshold);
 
-        const locallyInitialized = await hasIdentityKeys(accountId);
-        logger.info(`E2EE locally initialized: ${locallyInitialized}`);
+        // Single Tauri call: validates, clears if corrupted, regenerates with ONE master key read.
+        const local = await bootstrapLocalE2eeKeys(accountId, INITIAL_SPK_KEY_ID);
+        logger.info('E2EE local bootstrap complete', {
+            identityRegenerated: local.identity_regenerated,
+            spkRegenerated: local.spk_regenerated,
+        });
 
-        const { identityKeys, spk } = await this.prepareLocalKeyMaterial(accountId, locallyInitialized);
-        const status = await e2eeApi.checkKeyStatus(userId, deviceId);
-        const identityNeedsUpload = !remoteIdentityMatches(status, identityKeys);
-        const spkNeedsUpload = identityNeedsUpload || !remoteSPKMatches(status, spk);
-
-        if (identityNeedsUpload) {
-            await e2eeApi.uploadIdentityKey(deviceId, toBase64(identityKeys.identity_key_dh_pub), toBase64(identityKeys.identity_key_sign_pub));
-            logger.info('E2EE identity key uploaded');
-        }
-
-        if (spkNeedsUpload) {
-            await e2eeApi.uploadSignedPreKey(deviceId, spk.key_id, toBase64(spk.public_key), toBase64(spk.signature));
-            logger.info('E2EE signed pre-key uploaded');
-        }
-
-        let otpCount = status.otp_prekey_count ?? 0;
-        if (otpCount < policy.otp_prekey_target_count) {
-            const targetDelta = policy.otp_prekey_target_count - otpCount;
-            const otpKeys = await replenishOtpKeys(accountId, targetDelta);
-            logger.info(`E2EE OTP pre-keys generated: ${otpKeys.length}`);
-            const { count: uploadedOtpCount } = await e2eeApi.uploadOTPPreKeys(deviceId, otpKeys.map(k => ({
-                key_id: k.key_id,
-                public_key: toBase64(k.public_key),
-            })));
-            otpCount = uploadedOtpCount;
-            store.setOtpKeyCount(otpCount);
-            logger.info('E2EE OTP pre-keys uploaded');
-        } else {
-            store.setOtpKeyCount(otpCount);
-        }
-
+        const otpCount = await this.ensureRemoteBootstrap(
+            accountId,
+            userId,
+            deviceId,
+            local.identity_keys,
+            local.spk,
+            policy,
+            local.identity_regenerated,
+            local.spk_regenerated,
+        );
+        store.setOtpKeyCount(otpCount);
         store.setKeysUploaded(true);
         logger.info('E2EE keys initialized and reconciled');
     }

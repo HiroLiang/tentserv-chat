@@ -25,6 +25,12 @@ export const getIdentityKeys = (accountId: BridgeId): Promise<GenerateIdentityKe
 export const validateE2eeKeyMaterial = (accountId: BridgeId, spkKeyId: number): Promise<boolean> =>
     invoke<boolean>('validate_e2ee_key_material', { accountId: toBridgeId(accountId), spkKeyId });
 
+export const validateIdentityKeys = (accountId: BridgeId): Promise<boolean> =>
+    invoke<boolean>('validate_identity_keys', { accountId: toBridgeId(accountId) });
+
+export const validateSignedPreKey = (accountId: BridgeId, keyId: number): Promise<boolean> =>
+    invoke<boolean>('validate_signed_pre_key', { accountId: toBridgeId(accountId), keyId });
+
 export const generateSignedPreKey = (accountId: BridgeId, keyId: number): Promise<GenerateSignedPreKeyResult> =>
     invoke<GenerateSignedPreKeyResult>('generate_signed_pre_key', { accountId: toBridgeId(accountId), keyId });
 
@@ -112,3 +118,19 @@ export const decryptWithSenderKey = (
 
 export const clearE2eeKeys = (accountId: BridgeId): Promise<void> =>
     invoke('clear_e2ee_keys', { accountId: toBridgeId(accountId) });
+
+export type LocalBootstrapResult = {
+    identity_keys: GenerateIdentityKeysResult;
+    spk: GenerateSignedPreKeyResult;
+    identity_regenerated: boolean;
+    spk_regenerated: boolean;
+};
+
+export const bootstrapLocalE2eeKeys = (
+    accountId: BridgeId,
+    spkKeyId: number,
+): Promise<LocalBootstrapResult> =>
+    invoke<LocalBootstrapResult>('bootstrap_local_e2ee_keys', {
+        accountId: toBridgeId(accountId),
+        spkKeyId,
+    });

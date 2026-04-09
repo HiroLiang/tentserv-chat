@@ -168,7 +168,7 @@ describe("AppInitializer", () => {
         expect(userService.login).not.toHaveBeenCalled();
     });
 
-    it("redirects unauthenticated production startup to login", async () => {
+    it("redirects unauthenticated startup to login", async () => {
         renderInitializer();
 
         expect(await screen.findByText("Login Route")).toBeInTheDocument();
@@ -196,24 +196,16 @@ describe("AppInitializer", () => {
         expect(e2eeService.ensureInitialized).toHaveBeenCalledWith("device-1");
     });
 
-    it("uses dev auto-login when restore has no token", async () => {
+    it("does not auto-login in dev when no cached token exists", async () => {
         envMock.IS_DEV = true;
-        vi.mocked(userService.login).mockImplementation(async () => {
-            useUserStore.getState().setCurrentUser({
-                id: 501,
-                accountId: 42,
-                token: "token-dev",
-                isLoggedIn: true,
-            });
-            return { message: "Login successfully" };
-        });
 
         renderInitializer();
 
-        await waitFor(() => expect(userService.login).toHaveBeenCalledWith("hiromichi.liang@gmail.com", "string"));
-        expect(chatService.initialize).toHaveBeenCalledTimes(1);
-        expect(wsService.connect).toHaveBeenCalledWith("ws://ws.test", "token-dev", "device-1");
-        expect(e2eeService.ensureInitialized).toHaveBeenCalledWith("device-1");
+        expect(await screen.findByText("Login Route")).toBeInTheDocument();
+        expect(userService.login).not.toHaveBeenCalled();
+        expect(chatService.initialize).not.toHaveBeenCalled();
+        expect(wsService.connect).not.toHaveBeenCalled();
+        expect(e2eeService.ensureInitialized).not.toHaveBeenCalled();
     });
 
     it("registers and cleans up the OTP replenish websocket handler", async () => {

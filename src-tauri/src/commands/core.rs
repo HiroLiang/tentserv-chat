@@ -17,10 +17,11 @@ use crate::store::device_store::{
     update_device_registered_inner, DeviceInfo,
 };
 use crate::store::key_store::{
-    clear_all_keys_for_user_inner, delete_otp_key_inner, has_identity_key_inner,
-    has_signed_pre_key_inner, load_identity_key_inner, load_identity_public_keys_inner,
-    load_otp_key_inner, load_signed_pre_key_inner, load_signed_pre_key_public_inner,
-    next_opk_ids_inner, store_identity_key_inner, store_otp_key_inner, store_signed_pre_key_inner,
+    clear_all_keys_for_user_inner, delete_identity_and_spk_for_user_inner, delete_otp_key_inner,
+    has_identity_key_inner, has_signed_pre_key_inner, load_identity_key_inner,
+    load_identity_public_keys_inner, load_otp_key_inner, load_signed_pre_key_inner,
+    load_signed_pre_key_public_inner, next_opk_ids_inner, store_identity_key_inner,
+    store_otp_key_inner, store_signed_pre_key_inner,
 };
 use crate::store::message_store::{
     get_decrypted_messages_inner, get_encrypted_messages_inner, store_decrypted_message_inner,
@@ -170,10 +171,19 @@ pub(crate) fn validate_e2ee_key_material_core(
     user_id: &str,
     spk_key_id: u32,
 ) -> Result<bool, String> {
-    if !has_identity_keys_core(conn, user_id)? {
+    let identity_valid = validate_identity_keys_core(conn, key, user_id)?;
+    if !identity_valid {
         return Ok(false);
     }
-    if !has_signed_pre_key_inner(conn, user_id, spk_key_id)? {
+    validate_signed_pre_key_core(conn, key, user_id, spk_key_id)
+}
+
+pub(crate) fn validate_identity_keys_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+) -> Result<bool, String> {
+    if !has_identity_keys_core(conn, user_id)? {
         return Ok(false);
     }
 
@@ -181,7 +191,21 @@ pub(crate) fn validate_e2ee_key_material_core(
         .map_err(|e| format!("validate ik_dh failed: {e}"))?;
     load_identity_key_inner(conn, key, user_id, "ik_sign")
         .map_err(|e| format!("validate ik_sign failed: {e}"))?;
-    load_signed_pre_key_inner(conn, key, user_id, spk_key_id)
+
+    Ok(true)
+}
+
+pub(crate) fn validate_signed_pre_key_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+    key_id: u32,
+) -> Result<bool, String> {
+    if !has_signed_pre_key_inner(conn, user_id, key_id)? {
+        return Ok(false);
+    }
+
+    load_signed_pre_key_inner(conn, key, user_id, key_id)
         .map_err(|e| format!("validate signed pre-key failed: {e}"))?;
 
     Ok(true)
@@ -370,6 +394,72 @@ pub(crate) fn decrypt_with_sender_key_core(
     cipher
         .decrypt(nonce_ref, ciphertext)
         .map_err(|e| format!("decryption failed: {e}"))
+}
+
+/// Return value of `bootstrap_local_e2ee_keys_core`.
+pub(crate) struct LocalBootstrapResult {
+    pub identity_keys: IdentityKeyBundle,
+    pub spk: SignedPreKeyBundle,
+    pub identity_regenerated: bool,
+    pub spk_regenerated: bool,
+}
+
+/// Bootstrap local E2EE key material using a **single** master-key read.
+///
+/// Validates IK and SPK against `key`.  On validation failure (e.g. master-key
+/// mismatch between keychain calls) the existing `identity_keys` and
+/// `signed_pre_keys` rows are deleted before clean regeneration so that the
+/// UPSERT path cannot silently leave stale ciphertext behind.
+/// `one_time_pre_keys`, `opk_counter`, and `sender_keys` are never touched.
+pub(crate) fn bootstrap_local_e2ee_keys_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+    spk_key_id: u32,
+) -> Result<LocalBootstrapResult, String> {
+    // ── Identity keys ─────────────────────────────────────────────
+    let (identity_keys, identity_regenerated) = {
+        let ik_exists = has_identity_keys_core(conn, user_id)?;
+        let ik_valid = ik_exists
+            && validate_identity_keys_core(conn, key, user_id).unwrap_or(false);
+
+        if ik_valid {
+            let ik = get_identity_keys_core(conn, user_id)?;
+            (ik, false)
+        } else {
+            // Corrupted or missing: delete IK + SPK first, then regenerate
+            // with the current key so all subsequent reads in this call succeed.
+            delete_identity_and_spk_for_user_inner(conn, user_id)?;
+            let ik = generate_identity_keys_core(conn, key, user_id)?;
+            (ik, true)
+        }
+    };
+
+    // ── Signed pre-key ────────────────────────────────────────────
+    let (spk, spk_regenerated) = if !identity_regenerated {
+        let spk_exists = has_signed_pre_key_inner(conn, user_id, spk_key_id)?;
+        let spk_valid = spk_exists
+            && validate_signed_pre_key_core(conn, key, user_id, spk_key_id).unwrap_or(false);
+
+        if spk_valid {
+            let spk = get_signed_pre_key_core(conn, user_id, spk_key_id)?;
+            (spk, false)
+        } else {
+            let spk = generate_signed_pre_key_core(conn, key, user_id, spk_key_id)?;
+            (spk, true)
+        }
+    } else {
+        // IK was regenerated: SPK must be regenerated to sign with the new ik_sign.
+        let spk = generate_signed_pre_key_core(conn, key, user_id, spk_key_id)?;
+        (spk, true)
+    };
+
+    Ok(LocalBootstrapResult {
+        identity_keys,
+        spk,
+        identity_regenerated,
+        spk_regenerated,
+    })
 }
 
 pub(crate) fn clear_e2ee_keys_core(conn: &Connection, user_id: &str) -> Result<(), String> {

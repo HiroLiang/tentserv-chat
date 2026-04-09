@@ -8,6 +8,8 @@ import {
     performX3dhReceive,
     performX3dhSend,
     replenishOtpKeys,
+    validateIdentityKeys,
+    validateSignedPreKey,
 } from "./e2ee.ts";
 import type { PublicKeyBundle } from "@/types/e2ee.ts";
 
@@ -32,11 +34,15 @@ describe("e2ee bridge", () => {
     it("uses accountId for local identity key commands", async () => {
         await hasIdentityKeys(42);
         await generateIdentityKeys(42);
+        await validateIdentityKeys(42);
+        await validateSignedPreKey(42, 1);
         await replenishOtpKeys(42, 20);
 
         expect(invoke).toHaveBeenNthCalledWith(1, "has_identity_keys", { accountId: "42" });
         expect(invoke).toHaveBeenNthCalledWith(2, "generate_identity_keys", { accountId: "42" });
-        expect(invoke).toHaveBeenNthCalledWith(3, "replenish_otp_keys", { accountId: "42", count: 20 });
+        expect(invoke).toHaveBeenNthCalledWith(3, "validate_identity_keys", { accountId: "42" });
+        expect(invoke).toHaveBeenNthCalledWith(4, "validate_signed_pre_key", { accountId: "42", keyId: 1 });
+        expect(invoke).toHaveBeenNthCalledWith(5, "replenish_otp_keys", { accountId: "42", count: 20 });
     });
 
     it("uses accountId for local X3DH and sender key commands", async () => {

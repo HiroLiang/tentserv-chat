@@ -1,9 +1,10 @@
 use crate::commands::core::{
-    clear_e2ee_keys_core, encrypt_with_sender_key_core, generate_identity_keys_core,
-    generate_sender_key_core, generate_signed_pre_key_core, get_identity_keys_core,
-    get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
+    bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, encrypt_with_sender_key_core,
+    generate_identity_keys_core, generate_sender_key_core, generate_signed_pre_key_core,
+    get_identity_keys_core, get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
     perform_x3dh_receive_core, perform_x3dh_send_core, replenish_otp_keys_core,
-    store_member_sender_key_core, validate_e2ee_key_material_core,
+    store_member_sender_key_core, validate_e2ee_key_material_core, validate_identity_keys_core,
+    validate_signed_pre_key_core,
 };
 use crate::commands::e2ee::IdentityKeyBundle;
 use crate::crypto::x3dh::{PublicKey, PublicKeyBundle, SigningKey, StaticSecret};
@@ -182,6 +183,27 @@ fn validate_e2ee_key_material_false_when_missing() {
 }
 
 #[test]
+fn validate_identity_keys_false_when_missing() {
+    // Given an empty DB
+    let (_dir, conn) = test_db();
+
+    // Then identity keys are not valid yet
+    let valid = validate_identity_keys_core(&conn, &ZERO_KEY, ALICE).unwrap();
+    assert!(!valid);
+}
+
+#[test]
+fn validate_identity_keys_true_when_both_components_decrypt() {
+    // Given Alice has both identity key components
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+
+    // Then identity validation succeeds independently of SPK state
+    let valid = validate_identity_keys_core(&conn, &ZERO_KEY, ALICE).unwrap();
+    assert!(valid);
+}
+
+#[test]
 fn validate_e2ee_key_material_false_when_spk_missing() {
     // Given Alice has only identity keys
     let (_dir, conn) = test_db();
@@ -190,6 +212,29 @@ fn validate_e2ee_key_material_false_when_spk_missing() {
     // Then the material is incomplete because the SPK private key is missing
     let valid = validate_e2ee_key_material_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
     assert!(!valid);
+}
+
+#[test]
+fn validate_signed_pre_key_false_when_missing() {
+    // Given Alice has identity keys but no SPK yet
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+
+    // Then SPK validation stays false
+    let valid = validate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+    assert!(!valid);
+}
+
+#[test]
+fn validate_signed_pre_key_true_when_private_key_decrypts() {
+    // Given Alice has a signed pre-key under the same master key
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // Then SPK validation succeeds without re-checking identity bootstrap state
+    let valid = validate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+    assert!(valid);
 }
 
 #[test]
@@ -202,6 +247,37 @@ fn validate_e2ee_key_material_true_when_identity_and_spk_decrypt() {
     // Then validation succeeds
     let valid = validate_e2ee_key_material_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
     assert!(valid);
+}
+
+#[test]
+fn validate_identity_keys_errors_when_master_key_mismatches() {
+    // Given Alice's identity keys were encrypted with ZERO_KEY
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+
+    // When validating with a different master key
+    let wrong_key = [1u8; 32];
+    let result = validate_identity_keys_core(&conn, &wrong_key, ALICE);
+
+    // Then it fails loudly instead of returning a false success
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("decrypt failed"));
+}
+
+#[test]
+fn validate_signed_pre_key_errors_when_master_key_mismatches() {
+    // Given Alice's SPK was encrypted with ZERO_KEY
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // When validating the SPK with a different master key
+    let wrong_key = [1u8; 32];
+    let result = validate_signed_pre_key_core(&conn, &wrong_key, ALICE, 1);
+
+    // Then it fails loudly instead of reporting usable key material
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("decrypt failed"));
 }
 
 #[test]
@@ -271,6 +347,25 @@ fn validate_e2ee_key_material_errors_when_master_key_mismatches() {
     // Then it fails loudly instead of reporting usable key material
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("decrypt failed"));
+}
+
+#[test]
+fn regenerating_identity_preserves_existing_spk_otp_and_sender_keys() {
+    // Given Alice already has SPK, OTP, and sender keys stored locally
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+    replenish_otp_keys_core(&conn, &ZERO_KEY, ALICE, 2).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
+
+    // When identity keys are generated again
+    generate_identity_keys_core(&conn, &ZERO_KEY, ALICE).unwrap();
+
+    // Then the other key classes remain available
+    assert!(validate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap());
+    assert!(crate::store::key_store::load_otp_key_inner(&conn, &ZERO_KEY, ALICE, 0).is_ok());
+    assert!(crate::store::key_store::load_otp_key_inner(&conn, &ZERO_KEY, ALICE, 1).is_ok());
+    assert!(has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
 }
 
 // ── OTP key scenarios ────────────────────────────────────────────────
@@ -648,4 +743,108 @@ fn clear_e2ee_on_empty_db_is_ok() {
 
     // Then it succeeds silently
     assert!(result.is_ok());
+}
+
+// ── bootstrap_local_e2ee_keys_core scenarios ─────────────────────
+
+#[test]
+fn bootstrap_from_empty_state_generates_ik_and_spk() {
+    // Given: empty DB
+    let (_dir, conn) = test_db();
+
+    // When: bootstrap with no pre-existing keys
+    let result = bootstrap_local_e2ee_keys_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // Then: both keys are generated, regenerated flags are true
+    assert!(result.identity_regenerated);
+    assert!(result.spk_regenerated);
+    assert_ne!(result.identity_keys.identity_key_dh_pub, [0u8; 32]);
+    assert_ne!(result.identity_keys.identity_key_sign_pub, [0u8; 32]);
+    assert_eq!(result.spk.key_id, 1);
+    // And: material is readable with the same key
+    assert!(validate_e2ee_key_material_core(&conn, &ZERO_KEY, ALICE, 1).unwrap());
+}
+
+#[test]
+fn bootstrap_reuses_valid_existing_keys() {
+    // Given: valid IK and SPK already exist
+    let (_dir, conn) = test_db();
+    let original_ik = setup_identity(&conn, ALICE);
+    let original_spk = generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // When: bootstrap with same master key
+    let result = bootstrap_local_e2ee_keys_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // Then: existing public material is reused, no regeneration
+    assert!(!result.identity_regenerated);
+    assert!(!result.spk_regenerated);
+    assert_eq!(result.identity_keys.identity_key_dh_pub, original_ik.identity_key_dh_pub);
+    assert_eq!(result.spk.public_key, original_spk.public_key);
+}
+
+#[test]
+fn bootstrap_clears_corrupted_ik_and_regenerates_with_correct_key() {
+    // Given: IK written with ZERO_KEY (old master key)
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // When: bootstrap is called with a DIFFERENT master key (simulates keychain mismatch)
+    let wrong_key = [1u8; 32];
+    let result = bootstrap_local_e2ee_keys_core(&conn, &wrong_key, ALICE, 1).unwrap();
+
+    // Then: corrupted rows are cleared and new keys are generated with wrong_key
+    assert!(result.identity_regenerated);
+    assert!(result.spk_regenerated);
+    // And: new material is readable with the new key
+    assert!(validate_e2ee_key_material_core(&conn, &wrong_key, ALICE, 1).unwrap());
+    // And: old ZERO_KEY can no longer decrypt the new material
+    assert!(validate_identity_keys_core(&conn, &ZERO_KEY, ALICE).is_err());
+}
+
+#[test]
+fn bootstrap_regenerates_spk_when_ik_valid_but_spk_missing() {
+    // Given: valid IK but no SPK
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+
+    // When: bootstrap
+    let result = bootstrap_local_e2ee_keys_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+
+    // Then: IK is reused, SPK is newly generated
+    assert!(!result.identity_regenerated);
+    assert!(result.spk_regenerated);
+    assert_eq!(result.spk.key_id, 1);
+    assert!(validate_e2ee_key_material_core(&conn, &ZERO_KEY, ALICE, 1).unwrap());
+}
+
+#[test]
+fn bootstrap_preserves_otp_and_sender_keys_on_ik_recovery() {
+    // Given: valid IK + SPK + OTP keys + sender key
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
+    replenish_otp_keys_core(&conn, &ZERO_KEY, ALICE, 3).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
+
+    // When: bootstrap with a different key (IK is corrupted → recovery path)
+    let wrong_key = [2u8; 32];
+    let result = bootstrap_local_e2ee_keys_core(&conn, &wrong_key, ALICE, 1).unwrap();
+
+    // Then: IK + SPK are regenerated
+    assert!(result.identity_regenerated);
+    assert!(result.spk_regenerated);
+    // And: OTP private keys and sender key are still present (not cleared)
+    assert!(
+        crate::store::key_store::load_otp_key_inner(&conn, &ZERO_KEY, ALICE, 0).is_ok(),
+        "OTP key_id=0 should survive bootstrap recovery"
+    );
+    assert!(
+        crate::store::key_store::load_otp_key_inner(&conn, &ZERO_KEY, ALICE, 1).is_ok(),
+        "OTP key_id=1 should survive bootstrap recovery"
+    );
+    assert!(
+        has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap(),
+        "Sender key should survive bootstrap recovery"
+    );
 }

@@ -311,6 +311,27 @@ pub(crate) fn next_opk_ids_inner(
     result
 }
 
+// ── Selective clear ───────────────────────────────────────────────
+
+/// Delete only `identity_keys` and `signed_pre_keys` rows for `user_id`.
+/// Preserves `one_time_pre_keys`, `opk_counter`, and `sender_keys` so that
+/// existing OTP material and sender key sessions remain intact.
+/// Called during bootstrap recovery when IK or SPK private material is
+/// unreadable (e.g. master-key mismatch) before clean regeneration.
+pub(crate) fn delete_identity_and_spk_for_user_inner(
+    conn: &Connection,
+    user_id: &str,
+) -> Result<(), String> {
+    for table in &["identity_keys", "signed_pre_keys"] {
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE user_id = ?1"),
+            params![user_id],
+        )
+        .map_err(|e| format!("delete {table} failed: {e}"))?;
+    }
+    Ok(())
+}
+
 // ── Bulk clear ────────────────────────────────────────────────────
 
 /// Delete all E2EE key material for `user_id` (identity, SPK, OTP, sender, counter).

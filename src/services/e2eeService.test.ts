@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { e2eeApi } from "@/api/index.ts";
 import {
-    clearE2eeKeys,
     generateIdentityKeys,
     generateSignedPreKey,
     getIdentityKeys,
@@ -9,7 +8,8 @@ import {
     hasIdentityKeys,
     performX3dhSend,
     replenishOtpKeys,
-    validateE2eeKeyMaterial,
+    validateIdentityKeys,
+    validateSignedPreKey,
 } from "@/bridge/e2ee.ts";
 import { useE2eeStore } from "@/stores/e2eeStore.ts";
 import { useUserStore } from "@/stores/userStore.ts";
@@ -36,6 +36,8 @@ vi.mock("@/bridge/e2ee.ts", () => ({
     performX3dhSend: vi.fn(),
     performX3dhReceive: vi.fn(),
     hasIdentityKeys: vi.fn(),
+    validateIdentityKeys: vi.fn(),
+    validateSignedPreKey: vi.fn(),
     validateE2eeKeyMaterial: vi.fn(),
     hasSenderKey: vi.fn(),
     generateSenderKey: vi.fn(),
@@ -134,9 +136,9 @@ const resetMocks = () => {
     vi.mocked(getIdentityKeys).mockResolvedValue(identityKeys);
     vi.mocked(generateSignedPreKey).mockResolvedValue(signedPreKey);
     vi.mocked(getSignedPreKey).mockResolvedValue(signedPreKey);
-    vi.mocked(validateE2eeKeyMaterial).mockResolvedValue(true);
+    vi.mocked(validateIdentityKeys).mockResolvedValue(true);
+    vi.mocked(validateSignedPreKey).mockResolvedValue(true);
     vi.mocked(replenishOtpKeys).mockImplementation(async (_accountID, count) => otpKeys(count));
-    vi.mocked(clearE2eeKeys).mockResolvedValue(undefined);
     vi.mocked(performX3dhSend).mockResolvedValue({
         identity_key_dh_pub: bytes(1, 32),
         identity_key_sign_pub: bytes(2, 32),
@@ -160,7 +162,6 @@ describe("e2eeService.ensureInitialized", () => {
         expect(hasIdentityKeys).toHaveBeenCalledWith(42);
         expect(generateIdentityKeys).toHaveBeenCalledWith(42);
         expect(generateSignedPreKey).toHaveBeenCalledWith(42, 1);
-        expect(validateE2eeKeyMaterial).toHaveBeenCalledWith(42, 1);
         expect(e2eeApi.checkKeyStatus).toHaveBeenCalledWith(501, deviceId);
         expect(e2eeApi.uploadIdentityKey).toHaveBeenCalledWith(
             deviceId,
@@ -192,6 +193,8 @@ describe("e2eeService.ensureInitialized", () => {
 
         await e2eeService.ensureInitialized("device-match");
 
+        expect(validateIdentityKeys).toHaveBeenCalledWith(42);
+        expect(validateSignedPreKey).toHaveBeenCalledWith(42, 1);
         expect(getIdentityKeys).toHaveBeenCalledWith(42);
         expect(getSignedPreKey).toHaveBeenCalledWith(42, 1);
         expect(e2eeApi.uploadIdentityKey).not.toHaveBeenCalled();
@@ -229,15 +232,31 @@ describe("e2eeService.ensureInitialized", () => {
         expect(replenishOtpKeys).not.toHaveBeenCalled();
     });
 
-    it("clears account-id local keys and regenerates when local material is unusable", async () => {
+    it("regenerates identity and SPK when local identity material is unusable", async () => {
         vi.mocked(hasIdentityKeys).mockResolvedValue(true);
-        vi.mocked(getIdentityKeys).mockRejectedValue(new Error("corrupt local identity"));
+        vi.mocked(validateIdentityKeys).mockResolvedValue(false);
 
         await e2eeService.ensureInitialized("device-corrupt-local");
 
-        expect(clearE2eeKeys).toHaveBeenCalledWith(42);
         expect(generateIdentityKeys).toHaveBeenCalledWith(42);
         expect(generateSignedPreKey).toHaveBeenCalledWith(42, 1);
+        expect(getSignedPreKey).not.toHaveBeenCalled();
+    });
+
+    it("regenerates only the SPK when local signed pre-key material is unusable", async () => {
+        vi.mocked(hasIdentityKeys).mockResolvedValue(true);
+        vi.mocked(e2eeApi.checkKeyStatus).mockResolvedValue(matchingStatus(20));
+        vi.mocked(validateIdentityKeys).mockResolvedValue(true);
+        vi.mocked(validateSignedPreKey).mockResolvedValue(false);
+
+        await e2eeService.ensureInitialized("device-spk-invalid-local");
+
+        expect(getIdentityKeys).toHaveBeenCalledWith(42);
+        expect(generateIdentityKeys).not.toHaveBeenCalled();
+        expect(validateSignedPreKey).toHaveBeenCalledWith(42, 1);
+        expect(generateSignedPreKey).toHaveBeenCalledWith(42, 1);
+        expect(e2eeApi.uploadIdentityKey).not.toHaveBeenCalled();
+        expect(e2eeApi.uploadSignedPreKey).toHaveBeenCalledTimes(1);
     });
 
     it("uses the server policy target to decide OTP batch size", async () => {

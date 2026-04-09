@@ -71,23 +71,11 @@ export const AppInitializer = ({ children }: Props) => {
 
         const isLoggedIn = restored || useUserStore.getState().currentUser?.isLoggedIn === true;
 
-        // 4. If not logged in: auto-login in dev, navigate to /login in prod
+        // 4. If no cached session can be restored, navigate to /login
         if (!isLoggedIn) {
-            if (env.IS_DEV) {
-                const loginOk = await userService.login('hiromichi.liang@gmail.com', 'string').then(() => true).catch(err => {
-                    toast.error(err.message);
-                    return false;
-                });
-                if (!loginOk) {
-                    navigate('/login');
-                    setStatus('ready');
-                    return;
-                }
-            } else {
-                navigate('/login');
-                setStatus('ready');
-                return;
-            }
+            navigate('/login');
+            setStatus('ready');
+            return;
         }
 
         // 5. Ensure the participant record exists, then connect WebSocket

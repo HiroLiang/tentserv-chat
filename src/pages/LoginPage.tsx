@@ -40,9 +40,23 @@ export const LoginPage = () => {
             });
             wsService.connect(env.WS_BASE_URL, token ?? '', deviceId);
             if (deviceId) {
-                e2eeService.ensureInitialized(deviceId).catch(err => {
-                    logger.error('E2EE initialization failed on login', err);
-                });
+                const initE2EE = async () => {
+                    const MAX_ATTEMPTS = 2;
+                    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                        try {
+                            await e2eeService.ensureInitialized(deviceId);
+                            return;
+                        } catch (err) {
+                            logger.error(`E2EE initialization attempt ${attempt}/${MAX_ATTEMPTS} failed`, err);
+                            if (attempt === MAX_ATTEMPTS) {
+                                toast.warning(
+                                    'E2EE key initialization failed. Messages may not be encrypted. Please restart the app.',
+                                );
+                            }
+                        }
+                    }
+                };
+                initE2EE();
             }
             navigate("/");
         } catch (err) {
