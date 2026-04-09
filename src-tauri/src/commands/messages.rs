@@ -72,7 +72,7 @@ pub async fn store_decrypted_message(
     is_deleted: bool,
 ) -> Result<(), String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
+    let key = get_or_create_master_key(&app, &user_id)?;
     store_decrypted_message_core(
         &conn,
         &key,
@@ -100,7 +100,7 @@ pub async fn get_decrypted_messages(
     before_timestamp: Option<i64>,
 ) -> Result<Vec<DecryptedMessageRow>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&user_id)?;
+    let key = get_or_create_master_key(&app, &user_id)?;
     get_decrypted_messages_core(&conn, &key, &user_id, &room_id, limit, before_timestamp)
 }
 

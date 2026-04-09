@@ -2,13 +2,13 @@
 //!
 //! Core infrastructure shared by all store modules:
 //! - SQLite connection management (`open_db`, `init_schema`)
-//! - Per-user AES-256-GCM master key via OS keyring (`get_or_create_master_key`)
+//! - Per-user AES-256-GCM master key via local file storage (`get_or_create_master_key`)
 //! - Encryption/decryption helpers (`encrypt_bytes`, `decrypt_bytes`)
-//! - Keyring validation (`validate_master_key`)
+//! - Key file validation (`validate_master_key`)
 //!
 //! All sensitive fields in every table are encrypted with the owner account's master key
-//! before hitting the database. The master key itself lives in the OS keyring under
-//! the label `db_master_key_{account_id}`, one entry per account.
+//! before hitting the database.  The master key itself is stored as a hex-encoded file at
+//! `{app_data_dir}/keys/mk_{account_id}` via [`crate::store::key_provider::LocalKeyStore`].
 //!
 //! ## Schema versioning
 //!
@@ -23,42 +23,30 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use keyring::Entry;
 use rand::RngExt;
 use rusqlite::Connection;
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
+use crate::store::key_provider::LocalKeyStore;
+
 pub(crate) const DB_FILE_NAME: &str = "tentserv.db";
 
 // ── Master key ────────────────────────────────────────────────────
 //
-// Each account has exactly ONE keyring entry: `db_master_key_{account_id}`.
+// Each account has exactly ONE key file: `{app_data_dir}/keys/mk_{account_id}`.
 // That key encrypts every sensitive column belonging to that account.
-// Trade-off: O(N accounts) keyring entries instead of O(N private keys).
+// Trade-off: O(N accounts) files instead of O(N private keys).
+//
+// All I/O is delegated to `LocalKeyStore` so the backend can be replaced
+// (e.g., back to OS keyring) by changing only that module.
 
-pub(crate) fn get_or_create_master_key(account_id: &str) -> Result<[u8; 32], String> {
-    let entry = Entry::new("tentserv-chat", &format!("db_master_key_{account_id}"))
-        .map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(hex_str) => {
-            let bytes = hex::decode(&hex_str).map_err(|e| e.to_string())?;
-            bytes
-                .try_into()
-                .map_err(|_| "invalid master key length".into())
-        }
-        Err(keyring::Error::NoEntry) => {
-            // First access for this user — generate and store a new random key.
-            let mut key = [0u8; 32];
-            rand::rng().fill(&mut key);
-            entry
-                .set_password(&hex::encode(key))
-                .map_err(|e| e.to_string())?;
-            Ok(key)
-        }
-        Err(e) => Err(format!("keyring read failed for account '{account_id}': {e}")),
-    }
+pub(crate) fn get_or_create_master_key(
+    app: &tauri::AppHandle,
+    account_id: &str,
+) -> Result<[u8; 32], String> {
+    LocalKeyStore::new(app)?.get_or_create_master_key(account_id)
 }
 
 // ── Database path & connection ────────────────────────────────────
@@ -380,27 +368,18 @@ pub(crate) fn migrate_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-// ── Keyring validation ────────────────────────────────────────────
+// ── Key file validation ───────────────────────────────────────────
 
-/// Read-only validation: confirms that the keyring entry for `account_id` exists
-/// and contains a valid 32-byte hex-encoded master key.
+/// Read-only validation: confirms the key file for `account_id` exists and
+/// contains a valid 32-byte hex-encoded master key.
 /// Returns `Ok(())` on success; returns `Err` with a description on failure.
 /// Unlike `get_or_create_master_key`, this function never creates a new entry.
-pub(crate) fn validate_master_key(account_id: &str) -> Result<(), String> {
-    let entry = Entry::new("tentserv-chat", &format!("db_master_key_{account_id}"))
-        .map_err(|e| e.to_string())?;
-    let hex_str = entry
-        .get_password()
-        .map_err(|_| format!("keyring entry not found for account '{account_id}'"))?;
-    let bytes = hex::decode(&hex_str)
-        .map_err(|e| format!("master key for '{account_id}' is not valid hex: {e}"))?;
-    if bytes.len() != 32 {
-        return Err(format!(
-            "master key for '{account_id}' has length {}, expected 32",
-            bytes.len()
-        ));
-    }
-    Ok(())
+#[allow(dead_code)]
+pub(crate) fn validate_master_key(
+    app: &tauri::AppHandle,
+    account_id: &str,
+) -> Result<(), String> {
+    LocalKeyStore::new(app)?.validate_master_key(account_id)
 }
 
 // ── AES-256-GCM helpers ───────────────────────────────────────────

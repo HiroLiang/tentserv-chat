@@ -72,7 +72,7 @@ pub async fn generate_identity_keys(
     account_id: String,
 ) -> Result<IdentityKeyBundle, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     generate_identity_keys_core(&conn, &key, &account_id)
 }
 
@@ -118,14 +118,14 @@ pub fn validate_e2ee_key_material(
     spk_key_id: u32,
 ) -> Result<bool, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     validate_e2ee_key_material_core(&conn, &key, &account_id, spk_key_id)
 }
 
 #[tauri::command]
 pub fn validate_identity_keys(app: tauri::AppHandle, account_id: String) -> Result<bool, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     validate_identity_keys_core(&conn, &key, &account_id)
 }
 
@@ -136,7 +136,7 @@ pub fn validate_signed_pre_key(
     key_id: u32,
 ) -> Result<bool, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     validate_signed_pre_key_core(&conn, &key, &account_id, key_id)
 }
 
@@ -151,7 +151,7 @@ pub async fn generate_signed_pre_key(
     key_id: u32,
 ) -> Result<SignedPreKeyBundle, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     generate_signed_pre_key_core(&conn, &key, &account_id, key_id)
 }
 
@@ -164,7 +164,7 @@ pub async fn replenish_otp_keys(
     count: u32,
 ) -> Result<Vec<OneTimePreKey>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     replenish_otp_keys_core(&conn, &key, &account_id, count)
 }
 
@@ -180,7 +180,7 @@ pub async fn perform_x3dh_send(
     plaintext: Vec<u8>,
 ) -> Result<InitialMessage, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     perform_x3dh_send_core(&conn, &key, &account_id, &bundle, &plaintext)
 }
 
@@ -195,7 +195,7 @@ pub async fn perform_x3dh_receive(
     otpk_key_id: Option<u32>,
 ) -> Result<Vec<u8>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     perform_x3dh_receive_core(&conn, &key, &account_id, &msg, spk_key_id, otpk_key_id)
 }
 
@@ -213,7 +213,7 @@ pub async fn generate_sender_key(
     member_id: String,
 ) -> Result<SenderKeyBundle, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     generate_sender_key_core(&conn, &key, &account_id, &member_id)
 }
 
@@ -251,7 +251,7 @@ pub async fn encrypt_with_sender_key(
     plaintext: Vec<u8>,
 ) -> Result<SenderKeyEncryptedMessage, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     encrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &plaintext)
 }
 
@@ -266,7 +266,7 @@ pub async fn decrypt_with_sender_key(
     nonce: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     decrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &ciphertext, &nonce)
 }
 
@@ -300,7 +300,7 @@ pub async fn bootstrap_local_e2ee_keys(
     spk_key_id: u32,
 ) -> Result<LocalBootstrapResult, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     let r = bootstrap_local_e2ee_keys_core(&conn, &key, &account_id, spk_key_id)?;
     Ok(LocalBootstrapResult {
         identity_keys: r.identity_keys,

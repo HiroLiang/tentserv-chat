@@ -4,10 +4,10 @@
 //!
 //! ## Token storage
 //! Auth tokens are stored in SQLite (`user_tokens` table) via `store::token_store`,
-//! encrypted with the per-account AES master key from the OS keyring.
+//! encrypted with the per-account AES master key from the local key file.
 //!
 //! ## Current account pointer
-//! The keyring entry `tentserv-chat / current_account_id` records which account is currently
+//! The file `{app_data_dir}/keys/current_account` records which account is currently
 //! active.  `get_auth_token` reads this pointer, then loads that account's token.
 //! On logout the pointer is cleared so the next launch starts unauthenticated.
 //!
@@ -18,11 +18,7 @@ use crate::commands::core::{
     clear_auth_token_core, get_auth_token_by_account_core, save_auth_token_core,
 };
 use crate::store::db::{get_or_create_master_key, open_db};
-use keyring::Entry;
-
-fn current_account_entry() -> Result<Entry, String> {
-    Entry::new("tentserv-chat", "current_account_id").map_err(|e| e.to_string())
-}
+use crate::store::key_provider::LocalKeyStore;
 
 // ── Commands ──────────────────────────────────────────────────────
 
@@ -30,12 +26,12 @@ fn current_account_entry() -> Result<Entry, String> {
 /// Returns `None` if no account is logged in or the token has been cleared.
 #[tauri::command]
 pub async fn get_auth_token(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let account_id = match current_account_entry()?.get_password() {
-        Ok(s) => s,
-        Err(_) => return Ok(None),
+    let account_id = match LocalKeyStore::new(&app)?.get_current_account()? {
+        Some(id) => id,
+        None => return Ok(None),
     };
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     get_auth_token_by_account_core(&conn, &key, &account_id)
 }
 
@@ -47,7 +43,7 @@ pub async fn get_auth_token_by_account(
     account_id: String,
 ) -> Result<Option<String>, String> {
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     get_auth_token_by_account_core(&conn, &key, &account_id)
 }
 
@@ -58,11 +54,9 @@ pub async fn save_auth_token(
     account_id: String,
     token: String,
 ) -> Result<(), String> {
-    current_account_entry()?
-        .set_password(&account_id)
-        .map_err(|e| e.to_string())?;
+    LocalKeyStore::new(&app)?.set_current_account(&account_id)?;
     let conn = open_db(&app)?;
-    let key = get_or_create_master_key(&account_id)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
     save_auth_token_core(&conn, &key, &account_id, &token)
 }
 
@@ -74,18 +68,19 @@ pub async fn clear_auth_token(
     app: tauri::AppHandle,
     account_id: Option<String>,
 ) -> Result<(), String> {
+    let store = LocalKeyStore::new(&app)?;
     let account_id = match account_id {
-        Some(account_id) => account_id,
-        None => match current_account_entry()?.get_password() {
-            Ok(account_id) => account_id,
-            Err(_) => return Ok(()),
+        Some(id) => id,
+        None => match store.get_current_account()? {
+            Some(id) => id,
+            None => return Ok(()),
         },
     };
     let conn = open_db(&app)?;
     clear_auth_token_core(&conn, account_id.as_str())?;
-    if let Ok(stored) = current_account_entry()?.get_password() {
+    if let Ok(Some(stored)) = store.get_current_account() {
         if stored == account_id {
-            let _ = current_account_entry()?.delete_credential();
+            let _ = store.delete_current_account();
         }
     }
     Ok(())

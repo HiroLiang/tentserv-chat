@@ -17,6 +17,7 @@
 
 pub mod db;
 pub mod device_store;
+pub mod key_provider;
 pub mod key_store;
 pub mod message_store;
 pub mod sender_key_store;
