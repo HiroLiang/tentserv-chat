@@ -7,11 +7,12 @@ use commands::auth::{
 };
 use commands::device::{clear_device_id, get_device_info, update_device_registration};
 use commands::e2ee::{
-    bootstrap_local_e2ee_keys, clear_e2ee_keys, decrypt_with_sender_key, encrypt_with_sender_key,
-    generate_identity_keys, generate_sender_key, generate_signed_pre_key, get_identity_keys,
-    get_signed_pre_key, has_identity_keys, has_sender_key, perform_x3dh_receive, perform_x3dh_send,
-    replenish_otp_keys, store_member_sender_key, validate_e2ee_key_material,
-    validate_identity_keys, validate_signed_pre_key,
+    bootstrap_local_e2ee_keys, clear_e2ee_keys, consume_sender_key_distribution,
+    decrypt_with_sender_key, encrypt_with_sender_key, generate_identity_keys, generate_sender_key,
+    generate_signed_pre_key, get_identity_keys, get_sender_key_states, get_signed_pre_key,
+    has_identity_keys, has_sender_key, perform_x3dh_receive, perform_x3dh_send,
+    prepare_sender_key_distribution, replenish_otp_keys, store_member_sender_key,
+    validate_e2ee_key_material, validate_identity_keys, validate_signed_pre_key,
 };
 use commands::messages::{
     get_decrypted_messages, get_encrypted_messages, store_decrypted_message,
@@ -68,7 +69,10 @@ pub fn run() {
             // Sender keys
             generate_sender_key,
             has_sender_key,
+            get_sender_key_states,
             store_member_sender_key,
+            prepare_sender_key_distribution,
+            consume_sender_key_distribution,
             encrypt_with_sender_key,
             decrypt_with_sender_key,
             // Messages

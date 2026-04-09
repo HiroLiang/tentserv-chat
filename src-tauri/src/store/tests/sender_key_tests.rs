@@ -5,7 +5,7 @@
 
 use super::{
     has_sender_key_inner, load_own_sender_key_inner, load_peer_sender_key_inner,
-    store_own_sender_key_inner, store_peer_sender_key_inner,
+    store_own_sender_key_with_version_inner, store_peer_sender_key_with_version_inner,
 };
 use crate::store::db::init_schema;
 use rusqlite::Connection;
@@ -31,7 +31,7 @@ fn scenario_own_key_encrypted_storage() {
     let (_dir, conn) = test_db();
     let private_key: [u8; 32] = [0xAAu8; 32];
 
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", &private_key).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &private_key, 0).unwrap();
 
     let loaded = load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice").unwrap();
     assert_eq!(loaded, private_key);
@@ -59,7 +59,7 @@ fn scenario_peer_key_plaintext_storage() {
     let (_dir, conn) = test_db();
     let public_key: [u8; 32] = [0xBBu8; 32];
 
-    store_peer_sender_key_inner(&conn, "alice", "m_bob", &public_key).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &public_key, 0).unwrap();
 
     let loaded = load_peer_sender_key_inner(&conn, "alice", "m_bob").unwrap();
     assert_eq!(loaded, public_key);
@@ -85,8 +85,8 @@ fn scenario_has_sender_key_both_types() {
     // And    returns false for an unknown member
     let (_dir, conn) = test_db();
 
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32]).unwrap();
-    store_peer_sender_key_inner(&conn, "alice", "m_bob", &[0x02u8; 32]).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32], 0).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &[0x02u8; 32], 0).unwrap();
 
     assert!(has_sender_key_inner(&conn, "alice", "m_alice").unwrap());
     assert!(has_sender_key_inner(&conn, "alice", "m_bob").unwrap());
@@ -101,7 +101,7 @@ fn scenario_load_peer_via_own_api_returns_err() {
     // When   load_own_sender_key_inner is called for the same member_id
     // Then   it returns an error (is_private mismatch)
     let (_dir, conn) = test_db();
-    store_peer_sender_key_inner(&conn, "alice", "m_bob", &[0xCCu8; 32]).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &[0xCCu8; 32], 0).unwrap();
 
     let result = load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_bob");
     assert!(result.is_err(), "must not load a peer key via own-key API");
@@ -114,7 +114,7 @@ fn scenario_load_own_via_peer_api_returns_err() {
     // When   load_peer_sender_key_inner is called for the same member_id
     // Then   it returns an error (is_private mismatch)
     let (_dir, conn) = test_db();
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0xDDu8; 32]).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0xDDu8; 32], 0).unwrap();
 
     let result = load_peer_sender_key_inner(&conn, "alice", "m_alice");
     assert!(result.is_err(), "must not load an own key via peer-key API");
@@ -130,8 +130,8 @@ fn scenario_upsert_replaces_old_key() {
     // Then   loading returns [0x02;32]
     let (_dir, conn) = test_db();
 
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32]).unwrap();
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x02u8; 32]).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32], 0).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x02u8; 32], 1).unwrap();
 
     assert_eq!(
         load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice").unwrap(),
@@ -150,8 +150,8 @@ fn scenario_user_isolation() {
     let alice_key: [u8; 32] = [0xAAu8; 32];
     let bob_key: [u8; 32] = [0xBBu8; 32];
 
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_x", &alice_key).unwrap();
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "bob", "m_x", &bob_key).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_x", &alice_key, 0).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "bob", "m_x", &bob_key, 0).unwrap();
 
     assert_eq!(
         load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_x").unwrap(),

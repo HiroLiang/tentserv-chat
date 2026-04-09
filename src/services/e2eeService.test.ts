@@ -33,6 +33,8 @@ vi.mock("@/bridge/e2ee.ts", () => ({
     generateSignedPreKey: vi.fn(),
     getSignedPreKey: vi.fn(),
     replenishOtpKeys: vi.fn(),
+    prepareSenderKeyDistribution: vi.fn(),
+    consumeSenderKeyDistribution: vi.fn(),
     performX3dhSend: vi.fn(),
     performX3dhReceive: vi.fn(),
     hasIdentityKeys: vi.fn(),

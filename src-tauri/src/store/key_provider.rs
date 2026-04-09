@@ -57,10 +57,7 @@ impl LocalKeyStore {
     ///
     /// On first call the key is generated, written to `keys/mk_{account_id}`,
     /// and returned.  On subsequent calls the persisted key is returned unchanged.
-    pub(crate) fn get_or_create_master_key(
-        &self,
-        account_id: &str,
-    ) -> Result<[u8; 32], String> {
+    pub(crate) fn get_or_create_master_key(&self, account_id: &str) -> Result<[u8; 32], String> {
         let path = self.master_key_path(account_id)?;
         match fs::read(&path) {
             Ok(bytes) => {
@@ -89,9 +86,8 @@ impl LocalKeyStore {
     /// valid 32-byte hex-encoded key.  Does not create a new key.
     pub(crate) fn validate_master_key(&self, account_id: &str) -> Result<(), String> {
         let path = self.master_key_path(account_id)?;
-        let bytes = fs::read(&path).map_err(|_| {
-            format!("master key file not found for account '{account_id}'")
-        })?;
+        let bytes = fs::read(&path)
+            .map_err(|_| format!("master key file not found for account '{account_id}'"))?;
         let hex = String::from_utf8(bytes)
             .map_err(|e| format!("master key file is not valid UTF-8: {e}"))?;
         let decoded = hex::decode(hex.trim())

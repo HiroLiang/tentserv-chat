@@ -69,7 +69,7 @@ class ChatRoomService {
             const decryptAll = (msgs: typeof messages) =>
                 Promise.all(msgs.map(async m => ({
                     ...m,
-                    content: await e2eeService.decryptMessage(m.content, m.sender_id).catch(() => m.content),
+                    content: await e2eeService.decryptMessage(m.content, m.sender_id, roomId).catch(() => m.content),
                 })));
             const decrypted = await decryptAll(messages);
             if (beforeId === undefined) {
@@ -222,10 +222,11 @@ class ChatRoomService {
         }
     }
 
-    // [EN] initializeGroupRoomEncryption: checks for missing sender keys in the room,
-    //      sends requests for any pending members, and fetches available keys into local storage.
-    // [中] initializeGroupRoomEncryption：檢查房間內缺少的 sender key，
-    //      對待處理成員建立請求，並將已有的 sender key 存入本地。
+    // [EN] initializeGroupRoomEncryption: uploads own sender key to all room members if missing,
+    //      checks for missing sender keys in the room, sends requests for any pending members,
+    //      and fetches available keys into local storage.
+    // [中] initializeGroupRoomEncryption：若自身 sender key 尚未上傳則對所有房間成員提供，
+    //      檢查房間內缺少的 sender key，對待處理成員建立請求，並將已有的 sender key 存入本地。
     async initializeGroupRoomEncryption(roomId: number): Promise<void> {
         if (useE2eeStore.getState().bootstrapStatus !== 'ready') {
             logger.warn(`Skipping group room E2EE initialization for room ${roomId}: bootstrap not ready`, {
@@ -234,9 +235,38 @@ class ChatRoomService {
             return;
         }
 
+        const accountId = useUserStore.getState().currentUser?.accountId;
+        if (!accountId) return;
+
+        // Ensure room detail is loaded so we can resolve member IDs.
+        if (!useChatStore.getState().currentRoomDetail || useChatStore.getState().currentRoomDetail?.room_id !== roomId) {
+            await this.loadRoomDetail(roomId).catch(() => {});
+        }
+
+        const myMemberId = this.resolveCurrentMemberId(roomId);
         const status = await e2eeApi.getSenderKeyDistributionStatus(roomId);
+
+        // Upload own sender key to all room members if not yet provided.
+        const hasLocalKey = myMemberId !== null
+            ? await hasSenderKey(accountId, myMemberId).catch(() => false)
+            : false;
+        if (myMemberId !== null && !(hasLocalKey && status.own_sender_key_exists)) {
+            const detail = useChatStore.getState().currentRoomDetail;
+            const myParticipantId = useUserStore.getState().participantId;
+            const otherMembers = (detail?.members ?? []).filter(
+                m => m.participant_id !== myParticipantId && m.user_id !== undefined
+            );
+            for (const member of otherMembers) {
+                await e2eeService.performDirectKeyExchange(roomId, member.user_id!, myMemberId).catch(err =>
+                    logger.warn(`Failed to upload sender key to member ${member.member_id} in group room ${roomId}`, err)
+                );
+            }
+        }
+
+        // Request sender keys from members whose keys are still missing.
+        const refreshedStatus = await e2eeApi.getSenderKeyDistributionStatus(roomId);
         const e2eeStore = useE2eeStore.getState();
-        for (const memberID of (status?.pending_from_members ?? [])) {
+        for (const memberID of (refreshedStatus?.pending_from_members ?? [])) {
             if (e2eeStore.hasSenderKeyRequest(roomId, memberID)) continue;
             e2eeStore.addSenderKeyRequest(roomId, memberID);
             await e2eeApi.createSenderKeyRequest(roomId, memberID).catch(() => {});
@@ -266,6 +296,9 @@ class ChatRoomService {
                 const store = useChatStore.getState();
                 store.setDirectKeyStatus(ctx.roomId, 'loading');
                 try {
+                    if (!useChatStore.getState().currentRoomDetail || useChatStore.getState().currentRoomDetail?.room_id !== ctx.roomId) {
+                        await this.loadRoomDetail(ctx.roomId);
+                    }
                     const memberId = response.member_id ?? this.resolveCurrentMemberId(ctx.roomId) ?? undefined;
                     // Upload invitee's sender key (encrypted with inviter's X3DH public keys).
                     await e2eeService.performDirectKeyExchange(ctx.roomId, ctx.inviterUserId, memberId);

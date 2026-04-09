@@ -16,7 +16,7 @@ use crate::store::key_store::{
 };
 use crate::store::sender_key_store::{
     has_sender_key_inner, load_own_sender_key_inner, load_peer_sender_key_inner,
-    store_own_sender_key_inner, store_peer_sender_key_inner,
+    store_own_sender_key_with_version_inner, store_peer_sender_key_with_version_inner,
 };
 use crate::store::token_store::{delete_token_inner, load_token_inner, store_token_inner};
 use rusqlite::Connection;
@@ -190,8 +190,8 @@ fn scenario_4_sender_keys_own_and_peer_coexist() {
     let alice_key: [u8; 32] = [0x01u8; 32];
     let bob_key: [u8; 32] = [0x02u8; 32];
 
-    store_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", &alice_key).unwrap();
-    store_peer_sender_key_inner(&conn, "alice", "m_bob", &bob_key).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &alice_key, 0).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &bob_key, 0).unwrap();
 
     assert!(has_sender_key_inner(&conn, "alice", "m_alice").unwrap());
     assert!(has_sender_key_inner(&conn, "alice", "m_bob").unwrap());

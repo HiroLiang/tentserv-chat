@@ -11,11 +11,10 @@ import { wsService } from "@/services/wsService.ts";
 import { chatRoomService } from "@/services/chatRoomService.ts";
 import { e2eeApi } from "@/api/index.ts";
 import {
-    generateSenderKey,
     getIdentityKeys,
     getSignedPreKey,
     hasIdentityKeys,
-    performX3dhSend,
+    prepareSenderKeyDistribution,
     replenishOtpKeys,
     validateIdentityKeys,
     validateSignedPreKey,
@@ -100,14 +99,14 @@ vi.mock("@/bridge/e2ee.ts", () => ({
         generateSignedPreKey: vi.fn(),
         getSignedPreKey: vi.fn(),
         replenishOtpKeys: vi.fn(),
-        performX3dhSend: vi.fn(),
+        prepareSenderKeyDistribution: vi.fn(),
+        consumeSenderKeyDistribution: vi.fn(),
         performX3dhReceive: vi.fn(),
         hasIdentityKeys: vi.fn(),
         validateIdentityKeys: vi.fn(),
         validateSignedPreKey: vi.fn(),
         validateE2eeKeyMaterial: vi.fn(),
         hasSenderKey: vi.fn(),
-        generateSenderKey: vi.fn(),
         encryptWithSenderKey: vi.fn(),
     decryptWithSenderKey: vi.fn(),
     storeMemberSenderKey: vi.fn(),
@@ -144,17 +143,9 @@ const signedPreKey = {
     signature: bytes(4, 64),
 };
 
-const senderKeyBundle = {
-    public_key: bytes(6, 32),
-};
-
-const initialMessage = {
-    identity_key_dh_pub: bytes(7, 32),
-    identity_key_sign_pub: bytes(8, 32),
-    ephemeral_key_pub: bytes(9, 32),
-    spk_key_id: 1,
-    ciphertext: bytes(10, 12),
-    nonce: bytes(11, 12),
+const preparedSenderKeyDistribution = {
+    distribution_message: bytes(6, 32),
+    sender_key_version: 1234,
 };
 
 const otpKeys = (count: number) =>
@@ -267,8 +258,7 @@ describe("AppInitializer E2EE replenish integration", () => {
         vi.mocked(getSignedPreKey).mockResolvedValue(signedPreKey);
         vi.mocked(validateIdentityKeys).mockResolvedValue(true);
         vi.mocked(validateSignedPreKey).mockResolvedValue(true);
-        vi.mocked(generateSenderKey).mockResolvedValue(senderKeyBundle);
-        vi.mocked(performX3dhSend).mockResolvedValue(initialMessage);
+        vi.mocked(prepareSenderKeyDistribution).mockResolvedValue(preparedSenderKeyDistribution);
         vi.mocked(replenishOtpKeys).mockImplementation(async (_accountId, count) => otpKeys(count));
     });
 
@@ -303,27 +293,26 @@ describe("AppInitializer E2EE replenish integration", () => {
         await waitFor(() => expect(wsService.on).toHaveBeenCalledWith("e2ee.sender_key_needed", expect.any(Function)));
 
         vi.mocked(e2eeApi.getKeyBundle).mockClear();
-        vi.mocked(generateSenderKey).mockClear();
-        vi.mocked(performX3dhSend).mockClear();
+        vi.mocked(prepareSenderKeyDistribution).mockClear();
         vi.mocked(e2eeApi.uploadSenderKey).mockClear();
 
         const handler = getWSHandler("e2ee.sender_key_needed");
-        handler({ room_id: 77, requester_user_id: 601, provider_member_id: 702 });
+        handler({ room_id: 77, requester_user_id: 601, provider_member_id: 702, requester_member_id: 703 });
 
         await waitFor(() => expect(e2eeApi.getKeyBundle).toHaveBeenCalledWith(601));
-        expect(generateSenderKey).toHaveBeenCalledWith(42, 702);
-        expect(performX3dhSend).toHaveBeenCalledWith(42, expect.objectContaining({
+        expect(prepareSenderKeyDistribution).toHaveBeenCalledWith(42, 702, expect.objectContaining({
             spk_key_id: 1,
-        }), senderKeyBundle.public_key);
+        }));
         expect(e2eeApi.uploadSenderKey).toHaveBeenCalledWith(
             77,
-            toBase64(senderKeyBundle.public_key),
+            703,
+            preparedSenderKeyDistribution.sender_key_version,
             expect.any(String),
         );
 
-        const distributionMessage = vi.mocked(e2eeApi.uploadSenderKey).mock.calls[0][2];
+        const distributionMessage = vi.mocked(e2eeApi.uploadSenderKey).mock.calls[0][3];
         const decoded = atob(distributionMessage);
-        expect(JSON.parse(decoded)).toEqual(initialMessage);
+        expect(Array.from(decoded, c => c.charCodeAt(0))).toEqual(preparedSenderKeyDistribution.distribution_message);
     });
 });
 

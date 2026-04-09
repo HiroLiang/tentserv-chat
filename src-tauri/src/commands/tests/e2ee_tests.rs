@@ -778,7 +778,10 @@ fn bootstrap_reuses_valid_existing_keys() {
     // Then: existing public material is reused, no regeneration
     assert!(!result.identity_regenerated);
     assert!(!result.spk_regenerated);
-    assert_eq!(result.identity_keys.identity_key_dh_pub, original_ik.identity_key_dh_pub);
+    assert_eq!(
+        result.identity_keys.identity_key_dh_pub,
+        original_ik.identity_key_dh_pub
+    );
     assert_eq!(result.spk.public_key, original_spk.public_key);
 }
 

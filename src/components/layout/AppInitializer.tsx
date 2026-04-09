@@ -120,9 +120,16 @@ export const AppInitializer = ({ children }: Props) => {
     //      payload 含 provider_member_id，不在當前房間時仍可正確執行。
     useEffect(() => {
         const handler = (data: unknown) => {
-            const payload = data as { room_id?: number; requester_user_id?: number; provider_member_id?: number };
+            const payload = data as { room_id?: number; requester_user_id?: number; provider_member_id?: number; requester_member_id?: number };
             if (!payload?.room_id || !payload?.requester_user_id) return;
-            e2eeService.performInviterKeyExchange(payload.room_id, payload.requester_user_id, payload.provider_member_id)
+            e2eeService.performInviterKeyExchange(payload.room_id, payload.requester_user_id, payload.provider_member_id, payload.requester_member_id)
+                .then(() => {
+                    // Reverse check: do we also need the requester's key?
+                    if (payload.requester_member_id) {
+                        e2eeService.checkAndRequestReverseKey(payload.room_id!, payload.requester_member_id)
+                            .catch(err => logger.warn('checkAndRequestReverseKey failed', err));
+                    }
+                })
                 .catch(err => logger.error('performInviterKeyExchange failed', err));
         };
         wsService.on('e2ee.sender_key_needed', handler);

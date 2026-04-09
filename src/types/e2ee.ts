@@ -37,10 +37,31 @@ export interface OneTimePreKey {
 }
 
 export interface SenderKeyBundle {
-    public_key: number[];
+    sender_key_version: number;
 }
 
 export interface SenderKeyEncryptedMessage {
     ciphertext: number[];
     nonce: number[];
+}
+
+export interface SenderKeyState {
+    member_id: string;
+    is_own_key: boolean;
+    sender_key_version: number;
+    updated_at: number;
+}
+
+export interface PreparedSenderKeyDistribution {
+    distribution_message: number[];
+    sender_key_version: number;
+}
+
+export interface ConsumeSenderKeyDistributionResult {
+    status: 'consumed' | 'stale' | 'failed';
+}
+
+export interface DecryptSenderKeyResult {
+    status: 'ok' | 'missing_key' | 'stale_key' | 'decrypt_failed';
+    plaintext?: number[];
 }

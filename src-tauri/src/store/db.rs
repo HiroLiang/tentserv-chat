@@ -18,6 +18,7 @@
 //! - 2: `one_time_pre_keys` drops dead `used` column; `decrypted_messages` gains
 //!      `reply_to_id`, `is_edited`, `is_deleted`
 //! - 3: `user_tokens` primary key column renamed from `user_id` to `account_id`
+//! - 4: `sender_keys` gains `sender_key_version` for sender-key state reconciliation
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -151,6 +152,7 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
             is_private INTEGER NOT NULL DEFAULT 0,
             key_blob   BLOB    NOT NULL,
             nonce      BLOB,
+            sender_key_version INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY (user_id, member_id)
         );
@@ -338,24 +340,20 @@ pub(crate) fn migrate_schema(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("migrate_schema (1→2) failed: {e}"))?;
     }
 
-    // version 2 → 3: rename user_tokens.user_id → account_id.
+    // version 2 → 3: rebuild user_tokens with account_id as primary key.
+    // DROP + CREATE ensures the column name is correct regardless of prior schema.
     if version < 3 {
         conn.execute_batch(
             r#"
             BEGIN;
 
-            CREATE TABLE IF NOT EXISTS user_tokens_new (
+            DROP TABLE IF EXISTS user_tokens;
+            CREATE TABLE user_tokens (
                 account_id      TEXT PRIMARY KEY,
                 encrypted_token BLOB NOT NULL,
                 nonce           BLOB NOT NULL,
                 updated_at      INTEGER NOT NULL
             );
-            INSERT OR IGNORE INTO user_tokens_new
-                (account_id, encrypted_token, nonce, updated_at)
-            SELECT user_id, encrypted_token, nonce, updated_at
-            FROM   user_tokens;
-            DROP TABLE user_tokens;
-            ALTER TABLE user_tokens_new RENAME TO user_tokens;
 
             PRAGMA user_version = 3;
 
@@ -363,6 +361,60 @@ pub(crate) fn migrate_schema(conn: &Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|e| format!("migrate_schema (2→3) failed: {e}"))?;
+    }
+
+    // version 3 → 4: add sender_key_version to sender_keys and seed it from updated_at.
+    // Guard: check if the column already exists before attempting ALTER TABLE.
+    // (Fresh installs via init_schema already include this column, so ALTER would fail and
+    // leave a dangling transaction that causes the fallback BEGIN to error.)
+    if version < 4 {
+        let column_already_exists: bool = conn
+            .prepare("PRAGMA table_info(sender_keys)")
+            .ok()
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get::<_, String>(1))
+                    .ok()
+                    .map(|rows| {
+                        rows.filter_map(|r| r.ok())
+                            .any(|name| name == "sender_key_version")
+                    })
+            })
+            .unwrap_or(false);
+
+        if column_already_exists {
+            // Column already present (fresh install via init_schema, or a prior partial run).
+            // Skip ALTER TABLE; only seed existing rows and bump version.
+            conn.execute_batch(
+                r#"
+                BEGIN;
+                UPDATE sender_keys
+                SET sender_key_version = CASE
+                    WHEN sender_key_version > 0 THEN sender_key_version
+                    ELSE updated_at
+                END;
+                PRAGMA user_version = 4;
+                COMMIT;
+                "#,
+            )
+            .map_err(|e| format!("migrate_schema (3→4) failed: {e}"))?;
+        } else {
+            // Upgrading from a real v3 DB that does not yet have sender_key_version.
+            conn.execute_batch(
+                r#"
+                BEGIN;
+                ALTER TABLE sender_keys
+                    ADD COLUMN sender_key_version INTEGER NOT NULL DEFAULT 0;
+                UPDATE sender_keys
+                SET sender_key_version = CASE
+                    WHEN sender_key_version > 0 THEN sender_key_version
+                    ELSE updated_at
+                END;
+                PRAGMA user_version = 4;
+                COMMIT;
+                "#,
+            )
+            .map_err(|e| format!("migrate_schema (3→4) failed: {e}"))?;
+        }
     }
 
     Ok(())
@@ -375,10 +427,7 @@ pub(crate) fn migrate_schema(conn: &Connection) -> Result<(), String> {
 /// Returns `Ok(())` on success; returns `Err` with a description on failure.
 /// Unlike `get_or_create_master_key`, this function never creates a new entry.
 #[allow(dead_code)]
-pub(crate) fn validate_master_key(
-    app: &tauri::AppHandle,
-    account_id: &str,
-) -> Result<(), String> {
+pub(crate) fn validate_master_key(app: &tauri::AppHandle, account_id: &str) -> Result<(), String> {
     LocalKeyStore::new(app)?.validate_master_key(account_id)
 }
 

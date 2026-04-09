@@ -5,8 +5,12 @@ import type {
     OneTimePreKey,
     SenderKeyBundle,
     SenderKeyEncryptedMessage,
+    SenderKeyState,
     PublicKeyBundle,
     InitialMessage,
+    PreparedSenderKeyDistribution,
+    ConsumeSenderKeyDistributionResult,
+    DecryptSenderKeyResult,
 } from '@/types/e2ee.ts';
 
 type BridgeId = string | number;
@@ -92,6 +96,39 @@ export const storeMemberSenderKey = (
         keyBytes,
     });
 
+export const getSenderKeyStates = (
+    accountId: BridgeId,
+    memberIds: BridgeId[],
+): Promise<SenderKeyState[]> =>
+    invoke<SenderKeyState[]>('get_sender_key_states', {
+        accountId: toBridgeId(accountId),
+        memberIds: memberIds.map(toBridgeId),
+    });
+
+export const prepareSenderKeyDistribution = (
+    accountId: BridgeId,
+    ownMemberId: BridgeId,
+    requesterBundle: PublicKeyBundle,
+): Promise<PreparedSenderKeyDistribution> =>
+    invoke<PreparedSenderKeyDistribution>('prepare_sender_key_distribution', {
+        accountId: toBridgeId(accountId),
+        ownMemberId: toBridgeId(ownMemberId),
+        requesterBundle,
+    });
+
+export const consumeSenderKeyDistribution = (
+    accountId: BridgeId,
+    senderMemberId: BridgeId,
+    distributionMessage: number[],
+    senderKeyVersion: number,
+): Promise<ConsumeSenderKeyDistributionResult> =>
+    invoke<ConsumeSenderKeyDistributionResult>('consume_sender_key_distribution', {
+        accountId: toBridgeId(accountId),
+        senderMemberId: toBridgeId(senderMemberId),
+        distributionMessage,
+        senderKeyVersion,
+    });
+
 export const encryptWithSenderKey = (
     accountId: BridgeId,
     memberId: BridgeId,
@@ -108,8 +145,8 @@ export const decryptWithSenderKey = (
     memberId: BridgeId,
     ciphertext: number[],
     nonce: number[],
-): Promise<number[]> =>
-    invoke<number[]>('decrypt_with_sender_key', {
+): Promise<DecryptSenderKeyResult> =>
+    invoke<DecryptSenderKeyResult>('decrypt_with_sender_key', {
         accountId: toBridgeId(accountId),
         memberId: toBridgeId(memberId),
         ciphertext,

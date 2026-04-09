@@ -303,7 +303,8 @@ export interface GetKeyBundleResponse {
 
 export interface UploadSenderKeyRequest {
     room_id: number;
-    sender_key_public: string;   // base64
+    receiver_member_id: number;
+    sender_key_version: number;
     distribution_message: string; // base64
 }
 
@@ -317,6 +318,8 @@ export interface GetSenderKeysResponse {
 
 export interface GetSenderKeyDistributionStatusResponse {
     own_sender_key_exists: boolean; // whether my latest sender key exists on the server
+    requestable_member_ids: number[];
+    available_from_member_ids: number[];
     pending_receivers: number[];    // member IDs who haven't fetched my latest key
     pending_from_members: number[]; // member IDs whose key I haven't fetched yet
 }
@@ -326,6 +329,22 @@ export interface CreateSenderKeyRequestRequest {
     provider_member_id: number;
 }
 
+export interface PendingSenderKeyDistributionItem {
+    distribution_id: number;
+    sender_member_id: number;
+    receiver_member_id: number;
+    sender_key_version: number;
+    distribution_message: string;
+}
+
+export interface GetPendingSenderKeyDistributionsResponse {
+    distributions: PendingSenderKeyDistributionItem[];
+}
+
+export interface ConsumeSenderKeyDistributionRequest {
+    status: 'consumed' | 'failed';
+}
+
 // ── E2EE WebSocket Payloads ────────────────────────────────────────────────────
 
 export interface SenderKeyNeededPayload {
@@ -333,6 +352,14 @@ export interface SenderKeyNeededPayload {
     provider_member_id: number;
     requester_member_id: number;
     requester_user_id: number;
+}
+
+export interface SenderKeyDistributionAvailablePayload {
+    room_id: number;
+    distribution_id: number;
+    sender_member_id: number;
+    receiver_member_id: number;
+    sender_key_version: number;
 }
 
 export interface DirectKeyReadyPayload {

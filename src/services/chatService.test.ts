@@ -74,6 +74,8 @@ describe("chatService sender-key handling", () => {
         vi.mocked(chatRoomService.loadRooms).mockResolvedValue(undefined);
         vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue({
             own_sender_key_exists: true,
+            requestable_member_ids: [],
+            available_from_member_ids: [],
             pending_receivers: [],
             pending_from_members: [],
         });

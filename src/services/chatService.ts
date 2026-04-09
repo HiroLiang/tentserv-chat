@@ -7,7 +7,7 @@ import { chatRoomService } from "./chatRoomService.ts";
 import { e2eeService } from "./e2eeService.ts";
 import { e2eeApi } from "@/api/index.ts";
 import type { Message, MessageType } from "@/types/chat.ts";
-import type { DirectKeyReadyPayload } from "@/api/types.ts";
+import type { DirectKeyReadyPayload, SenderKeyDistributionAvailablePayload } from "@/api/types.ts";
 
 type WsMessagePayload = {
     message_id: number;
@@ -53,7 +53,7 @@ class ChatService {
             logger.info('New message received:', payload);
             const raw = payload as WsMessagePayload;
             if (raw?.room_id === undefined) return;
-            const content = await e2eeService.decryptMessage(raw.content, raw.sender_id).catch(() => raw.content);
+            const content = await e2eeService.decryptMessage(raw.content, raw.sender_id, raw.room_id).catch(() => raw.content);
             const msg: Message = {
                 message_id: raw.message_id,
                 sender_id: raw.sender_id,
@@ -70,9 +70,24 @@ class ChatService {
             logger.info('Typing indicator received:', payload);
         });
 
+        wsService.on('e2ee.sender_key_distribution_available', this.handleSenderKeyDistributionAvailable.bind(this));
         wsService.on('e2ee.direct_key_ready', this.handleDirectKeyReady.bind(this));
 
         this.fulfillPendingE2EEState().catch(() => {});
+    }
+
+    private async handleSenderKeyDistributionAvailable(payload: unknown): Promise<void> {
+        const raw = payload as SenderKeyDistributionAvailablePayload;
+        if (!raw?.room_id) return;
+        try {
+            await e2eeService.resolveMemberSenderKeys(raw.room_id);
+            const unlocked = await e2eeService.resolveDirectKey(raw.room_id).catch(() => false);
+            if (useChatStore.getState().directKeyStatus[raw.room_id] !== undefined) {
+                useChatStore.getState().setDirectKeyStatus(raw.room_id, unlocked ? 'unlocked' : 'locked');
+            }
+        } catch (err) {
+            logger.error(`Failed to handle e2ee.sender_key_distribution_available for room ${raw.room_id}`, err);
+        }
     }
 
     // [EN] handleDirectKeyReady: called when the backend notifies that the provider has uploaded
@@ -108,7 +123,24 @@ class ChatService {
             try {
                 const status = await e2eeApi.getSenderKeyDistributionStatus(room.room_id);
                 if (!status.own_sender_key_exists) {
-                    await chatRoomService.initializeDirectRoomEncryption(room.room_id);
+                    if (room.room_type === 'direct') {
+                        await chatRoomService.initializeDirectRoomEncryption(room.room_id);
+                    } else {
+                        await chatRoomService.initializeGroupRoomEncryption(room.room_id);
+                    }
+                } else {
+                    // Consume any available distributions first.
+                    await e2eeService.resolveMemberSenderKeys(room.room_id).catch(() => {});
+                    // Request sender keys from members we still don't have keys for.
+                    const refreshed = await e2eeApi.getSenderKeyDistributionStatus(room.room_id).catch(() => null);
+                    if (refreshed) {
+                        const e2eeStore = useE2eeStore.getState();
+                        for (const memberID of (refreshed.pending_from_members ?? [])) {
+                            if (e2eeStore.hasSenderKeyRequest(room.room_id, memberID)) continue;
+                            e2eeStore.addSenderKeyRequest(room.room_id, memberID);
+                            await e2eeApi.createSenderKeyRequest(room.room_id, memberID).catch(() => {});
+                        }
+                    }
                 }
             } catch {
                 // best-effort; skip this room

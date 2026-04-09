@@ -13,6 +13,8 @@ import type {
     GetSenderKeysResponse,
     GetSenderKeyDistributionStatusResponse,
     CreateSenderKeyRequestRequest,
+    GetPendingSenderKeyDistributionsResponse,
+    ConsumeSenderKeyDistributionRequest,
 } from '@/api/types.ts';
 
 export const e2eeApi = {
@@ -37,14 +39,20 @@ export const e2eeApi = {
     getKeyBundle: (user_id: number, device_id?: string): Promise<GetKeyBundleResponse> =>
         get(`/api/e2ee/key-bundle/${user_id}`, { params: device_id ? { device_id } : {} }),
 
-    uploadSenderKey: (room_id: number, sender_key_public: string, distribution_message: string): Promise<void> =>
-        post('/api/e2ee/sender-key', { room_id, sender_key_public, distribution_message } as UploadSenderKeyRequest),
+    uploadSenderKey: (room_id: number, receiver_member_id: number, sender_key_version: number, distribution_message: string): Promise<void> =>
+        post('/api/e2ee/sender-key', { room_id, receiver_member_id, sender_key_version, distribution_message } as UploadSenderKeyRequest),
 
     getSenderKeys: (room_id: number): Promise<GetSenderKeysResponse> =>
         get(`/api/e2ee/sender-keys/${room_id}`),
 
     getSenderKeyDistributionStatus: (room_id: number): Promise<GetSenderKeyDistributionStatusResponse> =>
         get(`/api/e2ee/sender-key-distributions/${room_id}`),
+
+    getPendingSenderKeyDistributions: (room_id: number): Promise<GetPendingSenderKeyDistributionsResponse> =>
+        get(`/api/e2ee/sender-key-distributions/${room_id}/pending`),
+
+    consumeSenderKeyDistribution: (distribution_id: number, status: 'consumed' | 'failed'): Promise<void> =>
+        post(`/api/e2ee/sender-key-distributions/${distribution_id}/consume`, { status } as ConsumeSenderKeyDistributionRequest),
 
     createSenderKeyRequest: (room_id: number, provider_member_id: number): Promise<void> =>
         post('/api/e2ee/sender-key-request', { room_id, provider_member_id } as CreateSenderKeyRequestRequest),

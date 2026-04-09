@@ -4,8 +4,9 @@
 //! they are fully deterministic and pass in every environment (no OS keyring,
 //! no code-signing requirements).
 
-use crate::store::db::{decrypt_bytes, encrypt_bytes};
+use crate::store::db::{decrypt_bytes, encrypt_bytes, init_schema, migrate_schema};
 use crate::store::key_provider::LocalKeyStore;
+use rusqlite::Connection;
 use tempfile::tempdir;
 
 // ── Master key — file-based ───────────────────────────────────────
@@ -14,8 +15,7 @@ use tempfile::tempdir;
 #[test]
 fn first_call_creates_valid_32_byte_key() {
     let dir = tempdir().expect("tempdir must succeed");
-    let store =
-        LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
+    let store = LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
     println!("Given: empty keys directory");
 
     let key = store
@@ -30,8 +30,7 @@ fn first_call_creates_valid_32_byte_key() {
 #[test]
 fn different_accounts_get_different_keys() {
     let dir = tempdir().expect("tempdir must succeed");
-    let store =
-        LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
+    let store = LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
     println!("Given: two distinct accounts '1' and '2'");
 
     let key_a = store
@@ -49,8 +48,7 @@ fn different_accounts_get_different_keys() {
 #[test]
 fn key_persists_across_calls() {
     let dir = tempdir().expect("tempdir must succeed");
-    let store =
-        LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
+    let store = LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
     println!("Given: empty keys directory for account '1'");
 
     let key1 = store
@@ -71,8 +69,7 @@ fn key_persists_across_calls() {
 #[test]
 fn validate_errors_for_unknown_account() {
     let dir = tempdir().expect("tempdir must succeed");
-    let store =
-        LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
+    let store = LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
     println!("Given: account '999' has no key file");
 
     let result = store.validate_master_key("999");
@@ -84,15 +81,17 @@ fn validate_errors_for_unknown_account() {
             "Ok (unexpected)"
         }
     );
-    assert!(result.is_err(), "validate must fail when no key file exists");
+    assert!(
+        result.is_err(),
+        "validate must fail when no key file exists"
+    );
 }
 
 /// `validate_master_key` returns Ok after `get_or_create_master_key` writes the key.
 #[test]
 fn validate_ok_after_create() {
     let dir = tempdir().expect("tempdir must succeed");
-    let store =
-        LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
+    let store = LocalKeyStore::from_dir(dir.path().to_path_buf()).expect("store init must succeed");
     println!("Given: no key file for account '1'");
 
     store
@@ -113,13 +112,19 @@ fn validate_ok_after_create() {
 fn aes_gcm_encrypt_decrypt_roundtrip() {
     let key = [0x42u8; 32];
     let plaintext = b"hello keychain test";
-    println!("Given: 32-byte key, plaintext '{}'", std::str::from_utf8(plaintext).unwrap());
+    println!(
+        "Given: 32-byte key, plaintext '{}'",
+        std::str::from_utf8(plaintext).unwrap()
+    );
 
     let (ciphertext, nonce) = encrypt_bytes(&key, plaintext).expect("encrypt must succeed");
     let decrypted = decrypt_bytes(&key, &nonce, &ciphertext).expect("decrypt must succeed");
 
     println!("Output: roundtrip matches = {}", decrypted == plaintext);
-    assert_eq!(decrypted, plaintext, "round-trip must restore original plaintext");
+    assert_eq!(
+        decrypted, plaintext,
+        "round-trip must restore original plaintext"
+    );
 }
 
 /// `decrypt_bytes` with the wrong key must fail — AEAD authentication rejects it.
@@ -141,7 +146,10 @@ fn aes_gcm_wrong_key_returns_err() {
             "Ok (unexpected)"
         }
     );
-    assert!(result.is_err(), "wrong key must cause AEAD authentication failure");
+    assert!(
+        result.is_err(),
+        "wrong key must cause AEAD authentication failure"
+    );
 }
 
 /// `decrypt_bytes` with an invalid nonce length must fail before touching AES.
@@ -153,4 +161,87 @@ fn aes_gcm_bad_nonce_length_returns_err() {
     println!("Action: decrypt with 8-byte nonce (invalid; must be 12)");
     let result = decrypt_bytes(&key, &[0u8; 8], &ciphertext);
     assert!(result.is_err(), "invalid nonce length must return Err");
+}
+
+// ── Schema migration ─────────────────────────────────────────────
+
+/// Fresh install: init_schema creates sender_keys with sender_key_version already present.
+/// migrate_schema must complete v0→v4 without hitting a nested transaction error.
+#[test]
+fn migration_v3_to_v4_fresh_install_no_nested_transaction() {
+    let conn = Connection::open_in_memory().expect("in-memory db must open");
+    println!("Given: fresh install — init_schema builds sender_keys with sender_key_version");
+
+    init_schema(&conn).expect("init_schema must succeed");
+    let result = migrate_schema(&conn);
+    println!("Output: migrate_schema result = {:?}", result);
+    assert!(result.is_ok(), "fresh install must not fail: {:?}", result);
+
+    let ver: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("user_version must be readable");
+    assert_eq!(ver, 4, "user_version must reach 4 after all migrations");
+}
+
+/// Existing user upgrading from v3: sender_keys lacks sender_key_version.
+/// migrate_schema must add the column and seed values from updated_at.
+#[test]
+fn migration_v3_to_v4_upgrades_real_v3_db() {
+    let conn = Connection::open_in_memory().expect("in-memory db must open");
+    println!("Given: real v3 DB — sender_keys has no sender_key_version column");
+
+    conn.execute_batch(
+        r#"
+        CREATE TABLE sender_keys (
+            user_id    TEXT    NOT NULL,
+            member_id  TEXT    NOT NULL,
+            is_private INTEGER NOT NULL DEFAULT 0,
+            key_blob   BLOB    NOT NULL,
+            nonce      BLOB,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, member_id)
+        );
+        INSERT INTO sender_keys (user_id, member_id, is_private, key_blob, updated_at)
+        VALUES ('u1', 'm1', 1, X'AABB', 1700000000);
+        PRAGMA user_version = 3;
+        "#,
+    )
+    .expect("v3 fixture setup must succeed");
+
+    println!("Action: migrate_schema with user_version=3");
+    let result = migrate_schema(&conn);
+    println!("Output: {:?}", result);
+    assert!(result.is_ok(), "v3→v4 upgrade must succeed: {:?}", result);
+
+    let ver: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("user_version must be readable");
+    assert_eq!(ver, 4);
+
+    let skv: i64 = conn
+        .query_row(
+            "SELECT sender_key_version FROM sender_keys WHERE user_id='u1'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("sender_key_version must exist after migration");
+    assert_eq!(
+        skv, 1700000000,
+        "sender_key_version must be seeded from updated_at"
+    );
+}
+
+/// Calling migrate_schema twice must be idempotent — all version < N guards skip on second call.
+#[test]
+fn migration_is_idempotent_after_v4() {
+    let conn = Connection::open_in_memory().expect("in-memory db must open");
+    println!("Given: fresh install reaching v4 after first call");
+
+    init_schema(&conn).expect("init_schema must succeed");
+    migrate_schema(&conn).expect("first migrate_schema must succeed");
+
+    println!("Action: second migrate_schema call (should be no-op)");
+    let result = migrate_schema(&conn);
+    println!("Output: {:?}", result);
+    assert!(result.is_ok(), "second call must be no-op: {:?}", result);
 }

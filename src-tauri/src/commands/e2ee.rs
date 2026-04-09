@@ -18,12 +18,14 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use crate::commands::core::{
-    bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, decrypt_with_sender_key_core,
-    encrypt_with_sender_key_core, generate_identity_keys_core, generate_sender_key_core,
-    generate_signed_pre_key_core, get_identity_keys_core, get_signed_pre_key_core,
-    has_identity_keys_core, has_sender_key_core, perform_x3dh_receive_core,
-    perform_x3dh_send_core, replenish_otp_keys_core, store_member_sender_key_core,
+    bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, consume_sender_key_distribution_core,
+    decrypt_with_sender_key_result_core, encrypt_with_sender_key_core, generate_identity_keys_core,
+    generate_sender_key_core, generate_signed_pre_key_core, get_identity_keys_core,
+    get_sender_key_states_core, get_signed_pre_key_core, has_identity_keys_core,
+    has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
+    prepare_sender_key_distribution_core, replenish_otp_keys_core, store_member_sender_key_core,
     validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
+    ConsumeSenderKeyDistributionResult, PreparedSenderKeyDistribution, SenderKeyDecryptResult,
 };
 use crate::crypto::x3dh::{InitialMessage, PublicKeyBundle};
 use crate::store::db::{get_or_create_master_key, open_db};
@@ -53,13 +55,38 @@ pub struct OneTimePreKey {
 
 #[derive(Serialize, Deserialize)]
 pub struct SenderKeyBundle {
-    pub public_key: [u8; 32],
+    pub sender_key_version: i64,
 }
 
 #[derive(Serialize)]
 pub struct SenderKeyEncryptedMessage {
     pub ciphertext: Vec<u8>,
     pub nonce: [u8; 12],
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SenderKeyStatePayload {
+    pub member_id: String,
+    pub is_own_key: bool,
+    pub sender_key_version: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PreparedSenderKeyDistributionPayload {
+    pub distribution_message: Vec<u8>,
+    pub sender_key_version: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ConsumeSenderKeyDistributionPayload {
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DecryptSenderKeyPayload {
+    pub status: String,
+    pub plaintext: Option<Vec<u8>>,
 }
 
 // ── Identity key commands ─────────────────────────────────────────
@@ -228,6 +255,25 @@ pub fn has_sender_key(
     has_sender_key_core(&conn, &account_id, &member_id)
 }
 
+#[tauri::command]
+pub fn get_sender_key_states(
+    app: tauri::AppHandle,
+    account_id: String,
+    member_ids: Vec<String>,
+) -> Result<Vec<SenderKeyStatePayload>, String> {
+    let conn = open_db(&app)?;
+    let states = get_sender_key_states_core(&conn, &account_id, &member_ids)?;
+    Ok(states
+        .into_iter()
+        .map(|state| SenderKeyStatePayload {
+            member_id: state.member_id,
+            is_own_key: state.is_own_key,
+            sender_key_version: state.sender_key_version,
+            updated_at: state.updated_at,
+        })
+        .collect())
+}
+
 /// Store a peer's sender key received after X3DH decryption.
 /// `key_bytes` must be exactly 32 bytes.  The key is stored as plaintext
 /// (it is a public sender key — no encryption needed).
@@ -240,6 +286,56 @@ pub async fn store_member_sender_key(
 ) -> Result<(), String> {
     let conn = open_db(&app)?;
     store_member_sender_key_core(&conn, &account_id, &member_id, key_bytes)
+}
+
+#[tauri::command]
+pub async fn prepare_sender_key_distribution(
+    app: tauri::AppHandle,
+    account_id: String,
+    own_member_id: String,
+    requester_bundle: PublicKeyBundle,
+) -> Result<PreparedSenderKeyDistributionPayload, String> {
+    let conn = open_db(&app)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
+    let prepared: PreparedSenderKeyDistribution = prepare_sender_key_distribution_core(
+        &conn,
+        &key,
+        &account_id,
+        &own_member_id,
+        &requester_bundle,
+    )?;
+    Ok(PreparedSenderKeyDistributionPayload {
+        distribution_message: prepared.distribution_message,
+        sender_key_version: prepared.sender_key_version,
+    })
+}
+
+#[tauri::command]
+pub async fn consume_sender_key_distribution(
+    app: tauri::AppHandle,
+    account_id: String,
+    sender_member_id: String,
+    distribution_message: Vec<u8>,
+    sender_key_version: i64,
+) -> Result<ConsumeSenderKeyDistributionPayload, String> {
+    let conn = open_db(&app)?;
+    let key = get_or_create_master_key(&app, &account_id)?;
+    let result = consume_sender_key_distribution_core(
+        &conn,
+        &key,
+        &account_id,
+        &sender_member_id,
+        &distribution_message,
+        sender_key_version,
+    )?;
+    let status = match result {
+        ConsumeSenderKeyDistributionResult::Consumed => "consumed",
+        ConsumeSenderKeyDistributionResult::Stale => "stale",
+        ConsumeSenderKeyDistributionResult::Failed => "failed",
+    };
+    Ok(ConsumeSenderKeyDistributionPayload {
+        status: status.to_string(),
+    })
 }
 
 /// Encrypt `plaintext` with the caller's own sender key for `member_id`.
@@ -264,10 +360,31 @@ pub async fn decrypt_with_sender_key(
     member_id: String,
     ciphertext: Vec<u8>,
     nonce: Vec<u8>,
-) -> Result<Vec<u8>, String> {
+) -> Result<DecryptSenderKeyPayload, String> {
     let conn = open_db(&app)?;
     let key = get_or_create_master_key(&app, &account_id)?;
-    decrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &ciphertext, &nonce)
+    let result = decrypt_with_sender_key_result_core(
+        &conn,
+        &key,
+        &account_id,
+        &member_id,
+        &ciphertext,
+        &nonce,
+    )?;
+    Ok(match result {
+        SenderKeyDecryptResult::Ok { plaintext } => DecryptSenderKeyPayload {
+            status: "ok".to_string(),
+            plaintext: Some(plaintext),
+        },
+        SenderKeyDecryptResult::MissingKey => DecryptSenderKeyPayload {
+            status: "missing_key".to_string(),
+            plaintext: None,
+        },
+        SenderKeyDecryptResult::StaleKey => DecryptSenderKeyPayload {
+            status: "stale_key".to_string(),
+            plaintext: None,
+        },
+    })
 }
 
 // ── Bootstrap (combined local key lifecycle) ──────────────────────

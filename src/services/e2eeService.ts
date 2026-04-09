@@ -10,10 +10,10 @@ import {
     performX3dhSend,
     performX3dhReceive,
     hasSenderKey,
-    generateSenderKey,
     encryptWithSenderKey,
     decryptWithSenderKey,
-    storeMemberSenderKey,
+    prepareSenderKeyDistribution,
+    consumeSenderKeyDistribution,
 } from '@/bridge/e2ee.ts';
 
 export const WAITING_FOR_SENDER_KEY = '__E2EE_WAITING_KEY__';
@@ -46,10 +46,14 @@ type KeyPolicy = Awaited<ReturnType<typeof e2eeApi.getKeyPolicy>>;
 // [日] E2eeService は Signal Protocol X3DH を用いてエンドツーエンド暗号化の鍵ライフサイクルを管理する。
 //      秘密鍵は OS keyring（Tauri）に保存し、公開鍵はバックエンドにアップロードする。
 //      メッセージの暗号化にはルームごとの AES-256-GCM sender key を使用する。
+// Debounce window for decrypt-triggered sender key requests (ms).
+const DECRYPT_REQUEST_DEBOUNCE_MS = 10_000;
+
 class E2eeService {
     private _initPromises = new Map<string, Promise<void>>();
     private _replenishPromises = new Map<string, Promise<void>>();
     private _sessionBootstrapPromises = new Map<string, Promise<boolean>>();
+    private _decryptRequestDebounce = new Map<string, number>();
 
     private getCurrentUserId(): number {
         const userId = useUserStore.getState().currentUser?.id;
@@ -78,6 +82,30 @@ class E2eeService {
         }
 
         return me.member_id;
+    }
+
+    private resolvePeerMemberId(roomId: number, targetUserId?: number, fallbackMemberId?: number): number {
+        if (fallbackMemberId !== undefined) return fallbackMemberId;
+
+        const myParticipantId = useUserStore.getState().participantId;
+        const myUserId = useUserStore.getState().currentUser?.id;
+        const roomDetail = useChatStore.getState().currentRoomDetail;
+        if (!roomDetail || roomDetail.room_id !== roomId) {
+            throw new Error(`No room detail loaded for room ${roomId}`);
+        }
+
+        const peer = roomDetail.members.find(member => {
+            if (targetUserId !== undefined && member.user_id === targetUserId) return true;
+            if (myParticipantId !== null && member.participant_id === myParticipantId) return false;
+            if (myUserId !== undefined && member.user_id === myUserId) return false;
+            return true;
+        });
+
+        if (!peer) {
+            throw new Error(`No peer member found for room ${roomId}`);
+        }
+
+        return peer.member_id;
     }
 
     private async ensureRemoteBootstrap(
@@ -305,6 +333,7 @@ class E2eeService {
     async performDirectKeyExchange(roomId: number, inviterUserId: number, memberId?: number): Promise<void> {
         const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
+        const receiverMemberId = this.resolvePeerMemberId(roomId, inviterUserId);
         const bundle = await e2eeApi.getKeyBundle(inviterUserId);
 
         const keyBundle: PublicKeyBundle = {
@@ -317,15 +346,13 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        const senderKey = await generateSenderKey(accountId, myMemberId);
-        const initialMsg = await performX3dhSend(accountId, keyBundle, senderKey.public_key);
-
-        const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
+        const prepared = await prepareSenderKeyDistribution(accountId, myMemberId, keyBundle);
 
         await e2eeApi.uploadSenderKey(
             roomId,
-            toBase64(senderKey.public_key),
-            toBase64(distMsgBytes),
+            receiverMemberId,
+            prepared.sender_key_version,
+            toBase64(prepared.distribution_message),
         );
 
         logger.info(`Direct key exchange completed for room ${roomId}`);
@@ -348,10 +375,11 @@ class E2eeService {
 
     // [EN] decryptMessage: decodes "e2ee:v1:{base64}" content back to plaintext using the sender's key.
     //      Returns content unchanged if it is not in the e2ee envelope format.
+    //      When decryption fails due to missing/stale key and roomId is provided,
+    //      automatically fires a sender key request (debounced per room+member).
     // [中] decryptMessage：將 "e2ee:v1:{base64}" 格式的訊息解密回明文；若非 e2ee 格式則原樣返回。
-    // [日] decryptMessage："e2ee:v1:{base64}" 形式のコンテンツを送信者の鍵で復号して平文に戻す。
-    //      e2ee エンベロープ形式でない場合はそのまま返す。
-    async decryptMessage(content: string, senderMemberId: number): Promise<string> {
+    //      當因缺少/過期 key 解密失敗且有提供 roomId 時，自動發出 sender key 請求（依 room+member 防抖）。
+    async decryptMessage(content: string, senderMemberId: number, roomId?: number): Promise<string> {
         const PREFIX = 'e2ee:v1:';
         if (!content.startsWith(PREFIX)) return content;
         const accountId = this.getCurrentAccountId();
@@ -359,21 +387,42 @@ class E2eeService {
             const combined = Uint8Array.from(atob(content.slice(PREFIX.length)), c => c.charCodeAt(0));
             const nonce = Array.from(combined.slice(0, 12));
             const ciphertext = Array.from(combined.slice(12));
-            const plaintext = await decryptWithSenderKey(accountId, senderMemberId, ciphertext, nonce);
-            return new TextDecoder().decode(new Uint8Array(plaintext));
+            const result = await decryptWithSenderKey(accountId, senderMemberId, ciphertext, nonce);
+            if (result.status === 'ok' && result.plaintext) {
+                return new TextDecoder().decode(new Uint8Array(result.plaintext));
+            }
+            if (result.status === 'missing_key' || result.status === 'stale_key') {
+                this.requestSenderKeyOnDecryptFail(roomId, senderMemberId);
+                return WAITING_FOR_SENDER_KEY;
+            }
+            return content;
         } catch (err) {
             logger.warn(`Failed to decrypt message from member ${senderMemberId}`, err);
             const keyExists = await hasSenderKey(accountId, senderMemberId).catch(() => false);
-            if (!keyExists) return WAITING_FOR_SENDER_KEY;
+            if (!keyExists) {
+                this.requestSenderKeyOnDecryptFail(roomId, senderMemberId);
+                return WAITING_FOR_SENDER_KEY;
+            }
             return content;
         }
     }
 
+    private requestSenderKeyOnDecryptFail(roomId: number | undefined, senderMemberId: number): void {
+        if (roomId === undefined) return;
+        const key = `${roomId}:${senderMemberId}`;
+        const now = Date.now();
+        const lastRequested = this._decryptRequestDebounce.get(key);
+        if (lastRequested !== undefined && now - lastRequested < DECRYPT_REQUEST_DEBOUNCE_MS) return;
+        this._decryptRequestDebounce.set(key, now);
+        e2eeApi.createSenderKeyRequest(roomId, senderMemberId).catch(() => {});
+    }
+
     // Called when the inviter receives e2ee.sender_key_needed.
     // Encrypts own sender key using the requester's (invitee's) X3DH public key bundle and uploads it.
-    async performInviterKeyExchange(roomId: number, requesterUserId: number, memberId?: number): Promise<void> {
+    async performInviterKeyExchange(roomId: number, requesterUserId: number, memberId?: number, requesterMemberId?: number): Promise<void> {
         const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
+        const receiverMemberId = this.resolvePeerMemberId(roomId, requesterUserId, requesterMemberId);
         const bundle = await e2eeApi.getKeyBundle(requesterUserId);
 
         const keyBundle: PublicKeyBundle = {
@@ -386,51 +435,69 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        const senderKey = await generateSenderKey(accountId, myMemberId);
-        const initialMsg = await performX3dhSend(accountId, keyBundle, senderKey.public_key);
-
-        const distMsgBytes = Array.from(new TextEncoder().encode(JSON.stringify(initialMsg)));
+        const prepared = await prepareSenderKeyDistribution(accountId, myMemberId, keyBundle);
 
         await e2eeApi.uploadSenderKey(
             roomId,
-            toBase64(senderKey.public_key),
-            toBase64(distMsgBytes),
+            receiverMemberId,
+            prepared.sender_key_version,
+            toBase64(prepared.distribution_message),
         );
 
         logger.info(`Inviter key exchange completed for room ${roomId}`);
     }
 
-    // [EN] resolveMemberSenderKeys: fetches all sender keys for a room, decrypts each distribution_message
-    //      via X3DH receive, and stores the resulting AES key bytes in the local keyring.
-    // [中] resolveMemberSenderKeys：取得房間內所有成員的 sender key，
-    //      用 X3DH receive 解密每個 distribution_message，並將 AES key bytes 存入本地 keyring。
+    // [EN] checkAndRequestReverseKey: after providing our key to a requester, check if we also need
+    //      their key. If missing locally, try consuming pending distributions first; if still missing,
+    //      create a sender key request.
+    // [中] checkAndRequestReverseKey：提供我方 key 給請求者後，反向確認是否也缺對方 key。
+    //      若本地沒有，先嘗試消化已有 distribution；若仍缺少則建立 sender key 請求。
+    async checkAndRequestReverseKey(roomId: number, targetMemberId: number): Promise<void> {
+        const accountId = this.getCurrentAccountId();
+        let hasKey = await hasSenderKey(accountId, targetMemberId).catch(() => false);
+        if (hasKey) return;
+
+        // Try consuming any pending distributions that may already be available.
+        await this.resolveMemberSenderKeys(roomId).catch(() => {});
+        hasKey = await hasSenderKey(accountId, targetMemberId).catch(() => false);
+        if (hasKey) return;
+
+        // Still missing — create a persistent request.
+        await e2eeApi.createSenderKeyRequest(roomId, targetMemberId).catch(() => {});
+    }
+
+    // [EN] resolveMemberSenderKeys: fetches pending distributions for the room, consumes each one in Rust,
+    //      and then reports the resulting consumed/failed status back to the backend.
+    // [中] resolveMemberSenderKeys：取得房間內待消化的 distribution，由 Rust 完成 consume，
+    //      再回報 consumed/failed 給後端。
     async resolveMemberSenderKeys(roomId: number): Promise<void> {
         const accountId = this.getCurrentAccountId();
-        const myMemberId = this.resolveCurrentMemberId(roomId);
-        const resp = await e2eeApi.getSenderKeys(roomId);
-        for (const item of resp.keys) {
-            if (item.chat_member_id === myMemberId) continue;
+        const pending = await e2eeApi.getPendingSenderKeyDistributions(roomId);
+        for (const item of pending.distributions) {
             try {
-                // distribution_message is base64(JSON.stringify(InitialMessage))
-                const distBytes = Uint8Array.from(atob(item.distribution_message), c => c.charCodeAt(0));
-                const initialMsg = JSON.parse(new TextDecoder().decode(distBytes)) as {
-                    identity_key_dh_pub: number[];
-                    identity_key_sign_pub: number[];
-                    ephemeral_key_pub: number[];
-                    spk_key_id: number;
-                    otpk_key_id?: number;
-                    ciphertext: number[];
-                    nonce: number[];
-                };
-                const keyBytes = await performX3dhReceive(accountId, initialMsg, initialMsg.spk_key_id, initialMsg.otpk_key_id);
-                await storeMemberSenderKey(accountId, item.chat_member_id, keyBytes);
+                const distBytes = Array.from(Uint8Array.from(atob(item.distribution_message), c => c.charCodeAt(0)));
+                const result = await consumeSenderKeyDistribution(
+                    accountId,
+                    item.sender_member_id,
+                    distBytes,
+                    item.sender_key_version,
+                );
+                if (result.status === 'stale') {
+                    logger.info(`Sender key distribution ${item.distribution_id} is stale (local key is newer), marking consumed`);
+                }
+                const status = result.status === 'failed' ? 'failed' : 'consumed';
+                await e2eeApi.consumeSenderKeyDistribution(item.distribution_id, status);
             } catch (err) {
-                logger.warn(`Failed to resolve sender key for member ${item.chat_member_id}`, err);
+                logger.warn(`Failed to resolve sender key distribution ${item.distribution_id}`, err);
+                await e2eeApi.consumeSenderKeyDistribution(item.distribution_id, 'failed').catch(() => {});
             }
         }
     }
 
     async resolveDirectKey(roomId: number): Promise<boolean> {
+        await this.resolveMemberSenderKeys(roomId).catch(err =>
+            logger.warn(`Failed to consume pending sender key distributions for room ${roomId}`, err)
+        );
         const status = await e2eeApi.getSenderKeyDistributionStatus(roomId);
         if (!status || !Array.isArray(status.pending_from_members)) {
             logger.warn(`Invalid sender key distribution status for room ${roomId}`, status);
@@ -449,7 +516,8 @@ class E2eeService {
         const localSenderKeyExists = await hasSenderKey(accountId, myMemberId).catch(() => false);
         return status.own_sender_key_exists
             && localSenderKeyExists
-            && status.pending_from_members.length === 0;
+            && (status.pending_from_members?.length ?? 0) === 0
+            && (status.available_from_member_ids?.length ?? 0) === 0;
     }
 }
 

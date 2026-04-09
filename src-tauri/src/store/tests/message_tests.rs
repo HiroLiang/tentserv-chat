@@ -182,7 +182,17 @@ fn scenario_decrypted_messages_user_isolation() {
     let (_dir, conn) = test_db();
 
     store_decrypted_message_inner(
-        &conn, &ZERO_KEY, "alice", "msg_a", "r1", "carol", b"for alice", "text", 100, None, false,
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "msg_a",
+        "r1",
+        "carol",
+        b"for alice",
+        "text",
+        100,
+        None,
+        false,
         false,
     )
     .unwrap();
