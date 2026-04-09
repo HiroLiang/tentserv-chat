@@ -21,16 +21,22 @@ vi.mock("@/config/env.ts", () => ({
 vi.mock("@/services/friendService.ts", () => ({
     friendService: {
         getFriendsTab: vi.fn(),
+        getBlockedUsers: vi.fn(),
         getFriendRequests: vi.fn(),
         refreshFriendsPage: vi.fn(),
         acceptFriend: vi.fn(),
         rejectFriend: vi.fn(),
+        cancelSentRequest: vi.fn(),
+        unfriend: vi.fn(),
+        blockUser: vi.fn(),
+        unblockUser: vi.fn(),
     },
 }));
 
 vi.mock("@/services/chatRoomService.ts", () => ({
     chatRoomService: {
         createRoom: vi.fn(),
+        initializeDirectRoomEncryption: vi.fn(),
     },
 }));
 
@@ -70,26 +76,37 @@ describe("FriendsPage", () => {
             requests: [
                 { friendship_id: 3, user_id: 603, name: "Requester", avatar: "request.png", created_at: "2026-01-03" },
             ],
+            blocked: [
+                { friendship_id: 4, user_id: 604, name: "Blocked", avatar: "blocked.png", status: "blocked", created_at: "2026-01-04" },
+            ],
         });
         vi.mocked(friendService.getFriendsTab).mockResolvedValue([
             { friendship_id: 1, user_id: 601, name: "Accepted", avatar: "accepted.png", status: "accepted", created_at: "2026-01-01" },
             { friendship_id: 2, user_id: 602, name: "Pending", avatar: "pending.png", status: "pending", created_at: "2026-01-02" },
+        ]);
+        vi.mocked(friendService.getBlockedUsers).mockResolvedValue([
+            { friendship_id: 4, user_id: 604, name: "Blocked", avatar: "blocked.png", status: "blocked", created_at: "2026-01-04" },
         ]);
         vi.mocked(friendService.getFriendRequests).mockResolvedValue([
             { friendship_id: 3, user_id: 603, name: "Requester", avatar: "request.png", created_at: "2026-01-03" },
         ]);
         vi.mocked(friendService.acceptFriend).mockResolvedValue(undefined);
         vi.mocked(friendService.rejectFriend).mockResolvedValue(undefined);
+        vi.mocked(friendService.cancelSentRequest).mockResolvedValue(undefined);
+        vi.mocked(friendService.unfriend).mockResolvedValue(undefined);
+        vi.mocked(friendService.blockUser).mockResolvedValue(undefined);
+        vi.mocked(friendService.unblockUser).mockResolvedValue(undefined);
     });
 
-    it("loads friends and requests on mount and shows message/applying buttons", async () => {
+    it("loads friends, requests, and blocked users on mount", async () => {
         renderPage();
 
         await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(1));
         expect(await screen.findByRole("button", { name: "Message" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Applying" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
         expect(screen.getByText("Friends (2)")).toBeInTheDocument();
         expect(screen.getByText("Requests (1)")).toBeInTheDocument();
+        expect(screen.getByText("Blocked (1)")).toBeInTheDocument();
     });
 
     it("refreshes the selected tab when switching tabs", async () => {
@@ -103,6 +120,10 @@ describe("FriendsPage", () => {
 
         await user.click(screen.getByRole("button", { name: "Friends (2)" }));
         expect(friendService.getFriendsTab).toHaveBeenCalledTimes(1);
+
+        await user.click(screen.getByRole("button", { name: "Blocked (1)" }));
+        expect(await screen.findByText("Blocked")).toBeInTheDocument();
+        expect(friendService.getBlockedUsers).toHaveBeenCalledTimes(1);
     });
 
     it("refreshes both lists when the add-friend dialog closes", async () => {
@@ -118,7 +139,7 @@ describe("FriendsPage", () => {
         await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(2));
     });
 
-    it("accepts and rejects incoming requests, then refreshes both lists", async () => {
+    it("accepts and rejects incoming requests, then refreshes all lists", async () => {
         const user = userEvent.setup();
         renderPage();
 
@@ -130,5 +151,26 @@ describe("FriendsPage", () => {
         expect(friendService.acceptFriend).toHaveBeenCalledWith(3);
         expect(friendService.rejectFriend).toHaveBeenCalledWith(3);
         await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(3));
+    });
+
+    it("handles cancel, unfriend, block, and unblock actions", async () => {
+        const user = userEvent.setup();
+        renderPage();
+
+        await screen.findByText("Accepted");
+        await user.click(screen.getByRole("button", { name: "Cancel" }));
+        await user.click(screen.getByRole("button", { name: "Unfriend" }));
+        await user.click(screen.getAllByRole("button", { name: "Block" })[0]);
+        await user.click(screen.getByRole("button", { name: "Requests (1)" }));
+        await user.click(screen.getByRole("button", { name: "Block" }));
+        await user.click(screen.getByRole("button", { name: "Blocked (1)" }));
+        await user.click(screen.getByRole("button", { name: "Unblock" }));
+
+        expect(friendService.cancelSentRequest).toHaveBeenCalledWith(2);
+        expect(friendService.unfriend).toHaveBeenCalledWith(1);
+        expect(friendService.blockUser).toHaveBeenCalledWith(601);
+        expect(friendService.blockUser).toHaveBeenCalledWith(603);
+        expect(friendService.unblockUser).toHaveBeenCalledWith(604);
+        await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(6));
     });
 });

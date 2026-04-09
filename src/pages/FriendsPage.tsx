@@ -9,7 +9,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { env } from '@/config/env';
 import { friendService } from '@/services/friendService.ts';
 
-type Tab = 'friends' | 'requests';
+type Tab = 'friends' | 'requests' | 'blocked';
 
 function getInitials(name: string) {
     return name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
@@ -20,6 +20,7 @@ export const FriendsPage = () => {
     const [activeTab, setActiveTab] = useState<Tab>('friends');
     const [friends, setFriends] = useState<FriendResponse[]>([]);
     const [requests, setRequests] = useState<FriendRequestResponse[]>([]);
+    const [blocked, setBlocked] = useState<FriendResponse[]>([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -37,10 +38,16 @@ export const FriendsPage = () => {
         setRequests(data);
     };
 
+    const fetchBlocked = async () => {
+        const data = await friendService.getBlockedUsers();
+        setBlocked(data);
+    };
+
     const refreshLists = async () => {
         const data = await friendService.refreshFriendsPage();
         setFriends(data.friends);
         setRequests(data.requests);
+        setBlocked(data.blocked);
     };
 
     useEffect(() => {
@@ -89,12 +96,36 @@ export const FriendsPage = () => {
         await refreshLists();
     };
 
+    const handleCancelSentRequest = async (friendshipId: number) => {
+        await friendService.cancelSentRequest(friendshipId);
+        await refreshLists();
+    };
+
+    const handleUnfriend = async (friendshipId: number) => {
+        await friendService.unfriend(friendshipId);
+        await refreshLists();
+    };
+
+    const handleBlock = async (userId: number) => {
+        await friendService.blockUser(userId);
+        await refreshLists();
+    };
+
+    const handleUnblock = async (userId: number) => {
+        await friendService.unblockUser(userId);
+        await refreshLists();
+    };
+
     const filteredFriends = friends.filter(f =>
         f.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
     const filteredRequests = requests.filter(r =>
         r.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    const filteredBlocked = blocked.filter(b =>
+        b.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
     return (
@@ -114,7 +145,7 @@ export const FriendsPage = () => {
 
                     {/* Tabs */}
                     <div className="flex gap-1 border-b border-border mb-4">
-                        {(['friends', 'requests'] as Tab[]).map((tab) => (
+                        {(['friends', 'requests', 'blocked'] as Tab[]).map((tab) => (
                             <button
                                 key={tab}
                                 onClick={() => {
@@ -122,7 +153,8 @@ export const FriendsPage = () => {
                                     setSearchQuery('');
                                     setMessageError(null);
                                     if (tab === 'friends') fetchFriends();
-                                    else fetchRequests();
+                                    else if (tab === 'requests') fetchRequests();
+                                    else fetchBlocked();
                                 }}
                                 className={cn(
                                     'px-4 py-2 text-sm font-medium capitalize transition-colors',
@@ -133,7 +165,9 @@ export const FriendsPage = () => {
                             >
                                 {tab === 'friends'
                                     ? `Friends (${friends.length})`
-                                    : `Requests (${requests.length})`}
+                                    : tab === 'requests'
+                                        ? `Requests (${requests.length})`
+                                        : `Blocked (${blocked.length})`}
                             </button>
                         ))}
                     </div>
@@ -183,20 +217,42 @@ export const FriendsPage = () => {
                                                 <p className="text-xs text-muted-foreground capitalize">{f.status}</p>
                                             </div>
                                             {f.status === 'accepted' ? (
-                                                <button
-                                                    onClick={() => handleOpenDirect(f)}
-                                                    disabled={loadingUserId === f.user_id}
-                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-                                                >
-                                                    {loadingUserId === f.user_id ? '...' : 'Message'}
-                                                </button>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => handleOpenDirect(f)}
+                                                        disabled={loadingUserId === f.user_id}
+                                                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        {loadingUserId === f.user_id ? '...' : 'Message'}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleUnfriend(f.friendship_id)}
+                                                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                    >
+                                                        Unfriend
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleBlock(f.user_id)}
+                                                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                    >
+                                                        Block
+                                                    </button>
+                                                </div>
                                             ) : (
-                                                <button
-                                                    disabled
-                                                    className="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground opacity-60 cursor-not-allowed"
-                                                >
-                                                    Applying
-                                                </button>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => handleCancelSentRequest(f.friendship_id)}
+                                                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleBlock(f.user_id)}
+                                                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                    >
+                                                        Block
+                                                    </button>
+                                                </div>
                                             )}
                                         </div>
                                     ))}
@@ -236,11 +292,48 @@ export const FriendsPage = () => {
                                                 >
                                                     Reject
                                                 </button>
+                                                <button
+                                                    onClick={() => handleBlock(r.user_id)}
+                                                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                                >
+                                                    Block
+                                                </button>
                                             </div>
                                         </div>
                                     ))}
                                     {filteredRequests.length === 0 && (
                                         <p className="text-center text-sm text-muted-foreground py-8">No pending requests</p>
+                                    )}
+                                </>
+                            )}
+
+                            {activeTab === 'blocked' && (
+                                <>
+                                    {filteredBlocked.map(b => (
+                                        <div
+                                            key={b.friendship_id}
+                                            className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-accent transition-colors"
+                                        >
+                                            <Avatar className="h-10 w-10 flex-shrink-0">
+                                                <AvatarImage src={`${env.API_BASE_URL}/static/${b.avatar}`} />
+                                                <AvatarFallback className="text-sm font-semibold bg-primary text-primary-foreground">
+                                                    {getInitials(b.name)}
+                                                </AvatarFallback>
+                                            </Avatar>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-medium text-sm truncate">{b.name}</p>
+                                                <p className="text-xs text-muted-foreground capitalize">{b.status}</p>
+                                            </div>
+                                            <button
+                                                onClick={() => handleUnblock(b.user_id)}
+                                                className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                            >
+                                                Unblock
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {filteredBlocked.length === 0 && (
+                                        <p className="text-center text-sm text-muted-foreground py-8">No blocked users</p>
                                     )}
                                 </>
                             )}

@@ -59,6 +59,13 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
         ));
     };
 
+    const handleBlock = async (userId: number) => {
+        await friendService.blockUser(userId);
+        setResults(prev => prev.map(u =>
+            u.user_id === userId ? { ...u, friendship_status: 'blocked' } : u
+        ));
+    };
+
     const handleClose = () => {
         setQuery('');
         setResults([]);
@@ -127,13 +134,28 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
                                 >
                                     Applying
                                 </button>
-                            ) : (
+                            ) : u.friendship_status === 'blocked' ? (
                                 <button
-                                    onClick={() => handleApply(u.user_id)}
-                                    className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                    disabled
+                                    className="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground opacity-60 cursor-not-allowed"
                                 >
-                                    Apply
+                                    Blocked
                                 </button>
+                            ) : (
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => handleApply(u.user_id)}
+                                        className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                    >
+                                        Apply
+                                    </button>
+                                    <button
+                                        onClick={() => handleBlock(u.user_id)}
+                                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
+                                    >
+                                        Block
+                                    </button>
+                                </div>
                             )}
                         </div>
                     ))}

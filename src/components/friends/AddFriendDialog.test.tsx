@@ -15,6 +15,7 @@ vi.mock("@/services/friendService.ts", () => ({
     friendService: {
         searchUsersByName: vi.fn(),
         applyFriend: vi.fn(),
+        blockUser: vi.fn(),
     },
 }));
 
@@ -24,6 +25,7 @@ describe("AddFriendDialog", () => {
         vi.useFakeTimers();
         vi.mocked(friendService.searchUsersByName).mockResolvedValue([]);
         vi.mocked(friendService.applyFriend).mockResolvedValue(undefined);
+        vi.mocked(friendService.blockUser).mockResolvedValue(undefined);
     });
 
     afterEach(() => {
@@ -57,6 +59,7 @@ describe("AddFriendDialog", () => {
             .mockResolvedValueOnce([
                 { user_id: 601, name: "Mina", avatar: "mina.png", account: "mina", public_id: "mina-public", friendship_status: "accepted" },
                 { user_id: 602, name: "Nina", avatar: "nina.png", account: "nina", public_id: "nina-public", friendship_status: "pending" },
+                { user_id: 603, name: "Rina", avatar: "rina.png", account: "rina", public_id: "rina-public", friendship_status: "blocked" },
             ]);
 
         render(<AddFriendDialog onClose={vi.fn()} />);
@@ -86,6 +89,7 @@ describe("AddFriendDialog", () => {
         expect(screen.queryByText("Old Result")).not.toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Friend" })).toBeDisabled();
         expect(screen.getByRole("button", { name: "Applying" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Blocked" })).toBeDisabled();
     });
 
     it("marks a user as applying after a successful apply", async () => {
@@ -109,6 +113,29 @@ describe("AddFriendDialog", () => {
 
         expect(friendService.applyFriend).toHaveBeenCalledWith(601);
         expect(screen.getByRole("button", { name: "Applying" })).toBeDisabled();
+    });
+
+    it("marks a user as blocked after a successful block", async () => {
+        vi.mocked(friendService.searchUsersByName).mockResolvedValue([
+            { user_id: 601, name: "Mina", avatar: "mina.png", account: "mina", public_id: "mina-public" },
+        ]);
+
+        render(<AddFriendDialog onClose={vi.fn()} />);
+
+        fireEvent.change(screen.getByPlaceholderText(/search by name/i), {
+            target: { value: "mina" },
+        });
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(600);
+            await Promise.resolve();
+        });
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Block" }));
+            await Promise.resolve();
+        });
+
+        expect(friendService.blockUser).toHaveBeenCalledWith(601);
+        expect(screen.getByRole("button", { name: "Blocked" })).toBeDisabled();
     });
 
     it("clears local state and calls onClose when closing the dialog", async () => {

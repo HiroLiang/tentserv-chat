@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authApi } from "@/api/index.ts";
 import { clearAuthToken, getAuthToken, saveAuthToken } from "@/bridge/auth.ts";
+import { useChatStore } from "@/stores/chatStore.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { userService } from "./userService.ts";
+import { wsService } from "./wsService.ts";
 
 vi.mock("@/api/index.ts", () => ({
     authApi: {
@@ -61,6 +63,17 @@ const resetStores = () => {
         createdAt: null,
         updatedAt: null,
     });
+    useChatStore.setState({
+        rooms: { direct: [], group: [], channel: [], bot: [] },
+        currentRoomId: null,
+        currentRoomDetail: null,
+        messages: {},
+        hasMore: {},
+        loadingRooms: false,
+        loadingMessages: false,
+        pendingInvitation: null,
+        directKeyStatus: {},
+    });
 };
 
 describe("userService login/session", () => {
@@ -70,6 +83,7 @@ describe("userService login/session", () => {
         vi.mocked(saveAuthToken).mockResolvedValue(undefined);
         vi.mocked(getAuthToken).mockResolvedValue(null);
         vi.mocked(clearAuthToken).mockResolvedValue(undefined);
+        vi.mocked(authApi.logout).mockResolvedValue({});
         vi.mocked(authApi.getProfile).mockResolvedValue(profileResponse);
     });
 
@@ -138,5 +152,47 @@ describe("userService login/session", () => {
             isLoggedIn: false,
         });
         expect(useUserStore.getState().currentUser?.token).toBeUndefined();
+    });
+
+    it("logs out by revoking the backend session, disconnecting websocket, and resetting stores", async () => {
+        useUserStore.setState({
+            currentUser: {
+                id: 501,
+                accountId: 42,
+                name: "Hiro",
+                email: "hiro@example.com",
+                token: "token-login",
+                isLoggedIn: true,
+            },
+            recordedUsers: new Map(),
+            participantId: 88,
+        });
+        useChatStore.setState({
+            rooms: { direct: [], group: [], channel: [], bot: [] },
+            currentRoomId: 99,
+            currentRoomDetail: null,
+            messages: { 99: [] },
+            hasMore: { 99: false },
+            pendingInvitation: null,
+            directKeyStatus: { 99: "unlocked" },
+        });
+
+        await userService.logout();
+
+        expect(authApi.logout).toHaveBeenCalledTimes(1);
+        expect(wsService.disconnect).toHaveBeenCalledTimes(1);
+        expect(clearAuthToken).toHaveBeenCalledWith(42);
+        expect(useChatStore.getState()).toMatchObject({
+            currentRoomId: null,
+            messages: {},
+            hasMore: {},
+            directKeyStatus: {},
+        });
+        expect(useUserStore.getState().currentUser).toMatchObject({
+            id: 0,
+            token: undefined,
+            email: undefined,
+            isLoggedIn: false,
+        });
     });
 });

@@ -6,7 +6,7 @@ import { chatRoomService } from "./chatRoomService.ts";
 import { e2eeService } from "./e2eeService.ts";
 import { e2eeApi } from "@/api/index.ts";
 import type { Message, MessageType } from "@/types/chat.ts";
-import type { SenderKeyNeededPayload, DirectKeyReadyPayload } from "@/api/types.ts";
+import type { DirectKeyReadyPayload } from "@/api/types.ts";
 
 type WsMessagePayload = {
     message_id: number;
@@ -62,25 +62,9 @@ class ChatService {
             logger.info('Typing indicator received:', payload);
         });
 
-        wsService.on('e2ee.sender_key_needed', this.handleSenderKeyNeeded.bind(this));
         wsService.on('e2ee.direct_key_ready', this.handleDirectKeyReady.bind(this));
 
         this.fulfillPendingE2EEState().catch(() => {});
-    }
-
-    // [EN] handleSenderKeyNeeded: called when the backend notifies this device that a room member
-    //      is waiting for our sender key. Performs X3DH key exchange and uploads the sender key.
-    // [中] handleSenderKeyNeeded：後端通知本裝置有成員在等候我們的 sender key 時呼叫。
-    //      執行 X3DH 金鑰交換並上傳 sender key。
-    private async handleSenderKeyNeeded(payload: unknown): Promise<void> {
-        const raw = payload as SenderKeyNeededPayload;
-        if (!raw?.room_id || !raw?.requester_user_id) return;
-        try {
-            await e2eeService.performDirectKeyExchange(raw.room_id, raw.requester_user_id, raw.provider_member_id);
-            logger.info(`Sender key uploaded for room ${raw.room_id} to user ${raw.requester_user_id}`);
-        } catch (err) {
-            logger.error(`Failed to handle e2ee.sender_key_needed for room ${raw.room_id}`, err);
-        }
     }
 
     // [EN] handleDirectKeyReady: called when the backend notifies that the provider has uploaded

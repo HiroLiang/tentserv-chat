@@ -3,6 +3,7 @@ import type { FriendResponse, FriendRequestResponse, SentFriendRequestResponse, 
 
 export const friendApi = {
     getFriends: () => get<FriendResponse[]>('/api/user/friends'),
+    getBlockedUsers: () => get<FriendResponse[]>('/api/user/block'),
     getFriendRequests: () => get<FriendRequestResponse[]>('/api/user/friends/requests'),
     getSentRequests: () => get<SentFriendRequestResponse[]>('/api/user/friends/sent'),
     applyFriend: (friendId: number) => post('/api/user/friends/apply', { friend_id: friendId }),
