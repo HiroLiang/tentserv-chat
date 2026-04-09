@@ -4,6 +4,7 @@ import { useRoutes } from "react-router-dom";
 import { HomePage } from "../pages/HomePage.tsx";
 import { LoginPage } from "@/pages/LoginPage.tsx";
 import { RegisterPage } from "@/pages/RegisterPage.tsx";
+import { ChatAvailabilityRoute } from "@/routes/ChatAvailabilityRoute.tsx";
 import { ProtectedRoute } from "@/routes/ProtectedRoute.tsx";
 import { AdminRoute } from "@/routes/AdminRoute.tsx";
 import { ChatPage } from "@/pages/ChatPage.tsx";
@@ -41,7 +42,14 @@ const Routes = () => {
         {
             element: <ProtectedRoute/>,
             children: [
-                { path: "/chat", element: <ChatPage/> },
+                {
+                    path: "/chat",
+                    element: (
+                        <ChatAvailabilityRoute>
+                            <ChatPage/>
+                        </ChatAvailabilityRoute>
+                    ),
+                },
                 { path: "/profile", element: <ProfilePage/> },
                 { path: "/settings", element: <SettingsPage/> },
                 { path: "/friends", element: <FriendsPage/> },

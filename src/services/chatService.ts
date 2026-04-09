@@ -1,6 +1,7 @@
 import { wsService } from "./wsService.ts";
 import { logger } from "@/utils/logger.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
+import { useE2eeStore } from "@/stores/e2eeStore.ts";
 import { chatParticipantService } from "./chatParticipantService.ts";
 import { chatRoomService } from "./chatRoomService.ts";
 import { e2eeService } from "./e2eeService.ts";
@@ -36,6 +37,13 @@ class ChatService {
     // [日] initialize：participant レコードが未存在なら作成し、WS イベントハンドラを接続する。
     //      ハンドラは一度だけ登録される（何度 initialize() を呼んでも重複しない）。
     async initialize(): Promise<void> {
+        if (useE2eeStore.getState().bootstrapStatus !== 'ready') {
+            logger.warn('Skipping chat initialization until E2EE bootstrap is ready', {
+                bootstrapStatus: useE2eeStore.getState().bootstrapStatus,
+            });
+            return;
+        }
+
         await chatParticipantService.ensureParticipant();
 
         if (this.handlersRegistered) return;

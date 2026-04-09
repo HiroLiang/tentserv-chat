@@ -27,36 +27,23 @@ export const LoginPage = () => {
         setError('');
 
         try {
-
             // Try to sign in
             const response = await userService.login(identifier, password);
             toast.success(response.message ?? "Login successfully");
 
-            // connect to websocket
             const token = useUserStore.getState().currentUser?.token;
             const deviceId = useDeviceStore.getState().deviceId ?? undefined;
-            await chatService.initialize().catch(err => {
-                logger.warn('Participant initialization failed on login', err);
-            });
-            wsService.connect(env.WS_BASE_URL, token ?? '', deviceId);
-            if (deviceId) {
-                const initE2EE = async () => {
-                    const MAX_ATTEMPTS = 2;
-                    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                        try {
-                            await e2eeService.ensureInitialized(deviceId);
-                            return;
-                        } catch (err) {
-                            logger.error(`E2EE initialization attempt ${attempt}/${MAX_ATTEMPTS} failed`, err);
-                            if (attempt === MAX_ATTEMPTS) {
-                                toast.warning(
-                                    'E2EE key initialization failed. Messages may not be encrypted. Please restart the app.',
-                                );
-                            }
-                        }
-                    }
-                };
-                initE2EE();
+            const bootstrapReady = deviceId
+                ? await e2eeService.ensureSessionBootstrap(deviceId)
+                : false;
+
+            if (bootstrapReady) {
+                await chatService.initialize().catch(err => {
+                    logger.warn('Participant initialization failed on login', err);
+                });
+                if (token && deviceId) {
+                    wsService.connect(env.WS_BASE_URL, token, deviceId);
+                }
             }
             navigate("/");
         } catch (err) {

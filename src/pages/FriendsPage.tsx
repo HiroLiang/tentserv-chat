@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { chatRoomService } from '@/services/chatRoomService.ts';
 import type { FriendResponse, FriendRequestResponse } from '@/api/types.ts';
 import { AddFriendDialog } from '@/components/friends/AddFriendDialog.tsx';
+import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { env } from '@/config/env';
 import { friendService } from '@/services/friendService.ts';
@@ -17,6 +18,7 @@ function getInitials(name: string) {
 
 export const FriendsPage = () => {
     const navigate = useNavigate();
+    const chatAvailable = useE2eeStore((state) => state.bootstrapStatus === 'ready');
     const [activeTab, setActiveTab] = useState<Tab>('friends');
     const [friends, setFriends] = useState<FriendResponse[]>([]);
     const [requests, setRequests] = useState<FriendRequestResponse[]>([]);
@@ -56,6 +58,11 @@ export const FriendsPage = () => {
     }, []);
 
     const handleOpenDirect = async (friend: FriendResponse) => {
+        if (!chatAvailable) {
+            setMessageError('Chat is unavailable until end-to-end encryption is ready.');
+            return;
+        }
+
         setLoadingUserId(friend.user_id);
         setMessageError(null);
         try {
@@ -79,6 +86,8 @@ export const FriendsPage = () => {
     const handleAccept = async (friendshipId: number, friendUserId: number, friendName: string) => {
         await friendService.acceptFriend(friendshipId);
         await refreshLists();
+        if (!chatAvailable) return;
+
         try {
             const room = await chatRoomService.createRoom({
                 type: 'direct',
@@ -220,7 +229,10 @@ export const FriendsPage = () => {
                                                 <div className="flex items-center gap-2">
                                                     <button
                                                         onClick={() => handleOpenDirect(f)}
-                                                        disabled={loadingUserId === f.user_id}
+                                                        disabled={loadingUserId === f.user_id || !chatAvailable}
+                                                        title={!chatAvailable
+                                                            ? 'Chat is unavailable until end-to-end encryption is ready.'
+                                                            : undefined}
                                                         className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                                                     >
                                                         {loadingUserId === f.user_id ? '...' : 'Message'}

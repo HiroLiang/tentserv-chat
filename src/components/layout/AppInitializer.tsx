@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { isTauri } from '@tauri-apps/api/core';
 import { logger } from "@/utils/logger.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
+import { useE2eeStore } from "@/stores/e2eeStore.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { Overlay } from "@/components/ui/overlay.tsx";
 import { deviceService } from "@/services/deviceService.ts";
@@ -13,7 +14,6 @@ import { wsService } from "@/services/wsService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { chatRoomService } from "@/services/chatRoomService.ts";
 import { env } from "@/config/env.ts";
-import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 type InitStatus = 'loading' | 'ready' | 'error';
@@ -30,8 +30,6 @@ interface Props {
 // [中] AppInitializer 負責 7 步驟啟動流程，掛載後只執行一次，未完成前以遮罩阻擋畫面。
 // [日] AppInitializer は 7 ステップの起動シーケンスを調整し、マウント後に一度だけ実行、完了までオーバーレイで画面をブロックする。
 export const AppInitializer = ({ children }: Props) => {
-    const navigate = useNavigate();
-
     const initialized = useRef(false);
     const [status, setStatus] = useState<InitStatus>('loading');
     const [initError, setInitError] = useState<InitError | null>(null);
@@ -64,6 +62,7 @@ export const AppInitializer = ({ children }: Props) => {
         }
 
         // 3. Restore auth session from the keyring
+        useE2eeStore.getState().resetBootstrapState();
         const restored = await userService.tryRestoreSession().catch(err => {
             logger.warn('Session restore failed', err);
             return false;
@@ -71,32 +70,33 @@ export const AppInitializer = ({ children }: Props) => {
 
         const isLoggedIn = restored || useUserStore.getState().currentUser?.isLoggedIn === true;
 
-        // 4. If no cached session can be restored, navigate to /login
+        // 4. If no cached session can be restored, stop on the public home route
         if (!isLoggedIn) {
-            navigate('/login');
             setStatus('ready');
             return;
         }
 
-        // 5. Ensure the participant record exists, then connect WebSocket
+        // 5. Complete login-time E2EE bootstrap before chat becomes available
+        const token = useUserStore.getState().currentUser?.token;
+        const deviceId = useDeviceStore.getState().deviceId;
+        const bootstrapReady = deviceId
+            ? await e2eeService.ensureSessionBootstrap(deviceId)
+            : false;
+        if (!bootstrapReady) {
+            setStatus('ready');
+            return;
+        }
+
+        // 6. Chat bootstrap runs only after E2EE succeeds
         await chatService.initialize().catch(err => {
             logger.warn('Participant initialization failed', err);
         });
-        const token = useUserStore.getState().currentUser?.token;
-        const deviceId = useDeviceStore.getState().deviceId;
         if (token && deviceId) {
             wsService.connect(env.WS_BASE_URL, token, deviceId);
         } else {
             logger.warn('Skipping websocket connection due to missing session token or device ID', {
                 hasToken: Boolean(token),
                 deviceId,
-            });
-        }
-
-        // 6. E2EE: ensure keys are generated & uploaded, then replenish if needed
-        if (deviceId) {
-            await e2eeService.ensureInitialized(deviceId).catch(err => {
-                logger.error('E2EE initialization failed', err);
             });
         }
 
@@ -164,7 +164,7 @@ export const AppInitializer = ({ children }: Props) => {
 
     return (
         <>
-            {children}
+            {status === 'ready' ? children : null}
             {status !== 'ready' && (
                 <Overlay
                     status={status}

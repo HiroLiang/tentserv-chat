@@ -10,6 +10,7 @@ import {
 } from "@/types/user.ts";
 import { toast } from "sonner";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
+import { useE2eeStore } from "@/stores/e2eeStore.ts";
 
 // [EN] UserService handles authentication lifecycle: login, register, session restore, logout, and profile updates.
 //      Token is persisted in the OS keyring via the Tauri bridge.
@@ -21,6 +22,7 @@ class UserService {
     // [中] 登入：攜帶 device_id 呼叫 API，取得目前使用者資料，將 token 存入 keyring。
     // [日] ログイン：device_id を含めて API を呼び出し、現在のユーザー情報を取得し、トークンを keyring に保存する。
     async login(identifier: string, password: string): Promise<AuthMessageResponse> {
+        useE2eeStore.getState().resetBootstrapState();
         const deviceState = useDeviceStore.getState();
         const response = await authApi.login({
             identifier,
@@ -44,7 +46,10 @@ class UserService {
     //      失敗時はトークンをクリアして false を返し、AppInitializer が /login にリダイレクトできるようにする。
     async tryRestoreSession(): Promise<boolean> {
         const token = await getAuthToken();
-        if (!token) return false;
+        if (!token) {
+            useE2eeStore.getState().resetBootstrapState();
+            return false;
+        }
 
         // Set a token in store so the HTTP interceptor can attach it to getProfile()
         useUserStore.getState().setCurrentUser({ id: 0, token });
@@ -64,6 +69,7 @@ class UserService {
             return true;
         } catch {
             await clearAuthToken();
+            useE2eeStore.getState().resetBootstrapState();
             useUserStore.getState().setCurrentUser({ id: 0, token: undefined, isLoggedIn: false });
             return false;
         }
@@ -89,6 +95,7 @@ class UserService {
         if (accountId) await clearAuthToken(accountId);
 
         useChatStore.getState().resetChat();
+        useE2eeStore.getState().resetBootstrapState();
 
         const state = useUserStore.getState();
         state.setCurrentUser({

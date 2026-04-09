@@ -3,6 +3,7 @@ import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { useChatStore } from '@/stores/chatStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
 import { logger } from '@/utils/logger.ts';
+import { toast } from 'sonner';
 import {
     bootstrapLocalE2eeKeys,
     replenishOtpKeys,
@@ -24,6 +25,8 @@ import type {
 const INITIAL_SPK_KEY_ID = 1;
 const DEFAULT_OTP_PREKEY_TARGET_COUNT = 20;
 const DEFAULT_OTP_PREKEY_REPLENISH_THRESHOLD = 5;
+const MAX_BOOTSTRAP_ATTEMPTS = 2;
+const E2EE_BOOTSTRAP_FAILURE_MESSAGE = 'End-to-end encryption could not be initialized. Chat is unavailable until encryption is ready.';
 
 // Rust returns [u8;32] / [u8;64] as number[] in JSON.
 // Server expects base64.StdEncoding (standard, not URL-safe, with padding).
@@ -46,6 +49,7 @@ type KeyPolicy = Awaited<ReturnType<typeof e2eeApi.getKeyPolicy>>;
 class E2eeService {
     private _initPromises = new Map<string, Promise<void>>();
     private _replenishPromises = new Map<string, Promise<void>>();
+    private _sessionBootstrapPromises = new Map<string, Promise<boolean>>();
 
     private getCurrentUserId(): number {
         const userId = useUserStore.getState().currentUser?.id;
@@ -142,6 +146,25 @@ class E2eeService {
         return promise;
     }
 
+    // [EN] ensureSessionBootstrap: retries startup/login bootstrap and records the global chat gate state.
+    // [中] ensureSessionBootstrap：重試啟動/登入 bootstrap，並記錄全域 chat gate 狀態。
+    // [日] ensureSessionBootstrap：起動/ログイン bootstrap を再試行し、グローバルな chat gate 状態を記録する。
+    async ensureSessionBootstrap(deviceId: string): Promise<boolean> {
+        const accountId = this.getCurrentAccountId();
+        const key = `${accountId}:${deviceId}`;
+        const store = useE2eeStore.getState();
+        if (store.bootstrapStatus === 'ready' && store.keysUploaded) return true;
+
+        const existing = this._sessionBootstrapPromises.get(key);
+        if (existing) return existing;
+
+        const promise = this._doEnsureSessionBootstrap(deviceId).finally(() => {
+            this._sessionBootstrapPromises.delete(key);
+        });
+        this._sessionBootstrapPromises.set(key, promise);
+        return promise;
+    }
+
     private async _doInitialize(accountId: number, userId: number, deviceId: string): Promise<void> {
         const policy = normalizeKeyPolicy(await e2eeApi.getKeyPolicy());
         const store = useE2eeStore.getState();
@@ -167,6 +190,32 @@ class E2eeService {
         store.setOtpKeyCount(otpCount);
         store.setKeysUploaded(true);
         logger.info('E2EE keys initialized and reconciled');
+    }
+
+    private async _doEnsureSessionBootstrap(deviceId: string): Promise<boolean> {
+        const store = useE2eeStore.getState();
+        store.resetBootstrapState();
+        store.setBootstrapStatus('loading');
+
+        for (let attempt = 1; attempt <= MAX_BOOTSTRAP_ATTEMPTS; attempt++) {
+            try {
+                await this.ensureInitialized(deviceId);
+                useE2eeStore.getState().setBootstrapStatus('ready');
+                return true;
+            } catch (err) {
+                logger.error(`E2EE initialization attempt ${attempt}/${MAX_BOOTSTRAP_ATTEMPTS} failed`, err);
+                if (attempt === MAX_BOOTSTRAP_ATTEMPTS) {
+                    const message = err instanceof Error ? err.message : 'Failed to initialize end-to-end encryption';
+                    useE2eeStore.getState().setBootstrapStatus('failed', message);
+                    toast.warning(E2EE_BOOTSTRAP_FAILURE_MESSAGE, {
+                        id: 'e2ee-bootstrap-failed',
+                    });
+                    return false;
+                }
+            }
+        }
+
+        return false;
     }
 
     async replenishOTPKeys(deviceId: string, threshold?: number): Promise<void> {

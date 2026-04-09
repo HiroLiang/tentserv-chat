@@ -2,6 +2,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import * as React from "react";
 import { useUserStore } from "@/stores/userStore.ts";
+import { useE2eeStore } from "@/stores/e2eeStore.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "sonner";
 import { userService } from "@/services/userService.ts";
@@ -20,11 +21,12 @@ interface NavItem {
     name: string;
     path: string;
     icon?: React.ReactNode;
+    requiresBootstrapReady?: boolean;
 }
 
 const navItems: NavItem[] = [
     { name: 'Friends', path: '/friends' },
-    { name: 'Chat Room', path: '/chat' },
+    { name: 'Chat Room', path: '/chat', requiresBootstrapReady: true },
 ];
 
 interface NavbarProps {
@@ -33,9 +35,11 @@ interface NavbarProps {
 
 export const Navbar = ({ className }: NavbarProps) => {
     const user = useUserStore((state) => state.currentUser);
+    const bootstrapStatus = useE2eeStore((state) => state.bootstrapStatus);
     const navigate = useNavigate();
 
     const userDisplayName = user?.name ?? "User";
+    const chatDisabled = user?.isLoggedIn === true && bootstrapStatus !== 'ready';
 
     const logout = async () => {
         try {
@@ -73,16 +77,35 @@ export const Navbar = ({ className }: NavbarProps) => {
                 {/* nav options */}
                 <div className="flex items-center gap-1 h-full">
                     {navItems.map((item) => {
+                        const disabled = item.requiresBootstrapReady && chatDisabled;
+                        const itemClassName = cn(
+                            "flex items-center gap-2 px-4 h-full",
+                            "transition-colors",
+                            "bg-navbar-bg text-navbar-text",
+                            disabled
+                                ? "cursor-not-allowed opacity-50"
+                                : "hover:bg-navbar-hover hover:opacity-80",
+                        );
+
+                        if (disabled) {
+                            return (
+                                <button
+                                    key={item.path}
+                                    type="button"
+                                    disabled
+                                    title="Chat is unavailable until end-to-end encryption is ready."
+                                    className={itemClassName}
+                                >
+                                    <span className="font-medium">{item.name}</span>
+                                </button>
+                            );
+                        }
+
                         return (
                             <Link
                                 key={item.path}
                                 to={item.path}
-                                className={cn(
-                                    "flex items-center gap-2 px-4 h-full",
-                                    "transition-colors",
-                                    "bg-navbar-bg text-navbar-text",
-                                    "hover:bg-navbar-hover hover:opacity-80",
-                                )}
+                                className={itemClassName}
                             >
                                 <span className="font-medium">{item.name}</span>
                             </Link>
@@ -90,7 +113,7 @@ export const Navbar = ({ className }: NavbarProps) => {
                     })}
                 </div>
 
-            </ div>
+            </div>
 
 
             {/* user info */}

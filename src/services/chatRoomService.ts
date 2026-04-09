@@ -161,6 +161,13 @@ class ChatRoomService {
     // [中] initializeDirectRoomEncryption：確認本地與後端 sender key 狀態都存在，
     //      並為本地仍缺少 sender key 的成員建立請求。
     async initializeDirectRoomEncryption(roomId: number): Promise<void> {
+        if (useE2eeStore.getState().bootstrapStatus !== 'ready') {
+            logger.warn(`Skipping direct room E2EE initialization for room ${roomId}: bootstrap not ready`, {
+                bootstrapStatus: useE2eeStore.getState().bootstrapStatus,
+            });
+            return;
+        }
+
         const accountId = useUserStore.getState().currentUser?.accountId;
         if (!accountId) return;
 
@@ -220,6 +227,13 @@ class ChatRoomService {
     // [中] initializeGroupRoomEncryption：檢查房間內缺少的 sender key，
     //      對待處理成員建立請求，並將已有的 sender key 存入本地。
     async initializeGroupRoomEncryption(roomId: number): Promise<void> {
+        if (useE2eeStore.getState().bootstrapStatus !== 'ready') {
+            logger.warn(`Skipping group room E2EE initialization for room ${roomId}: bootstrap not ready`, {
+                bootstrapStatus: useE2eeStore.getState().bootstrapStatus,
+            });
+            return;
+        }
+
         const status = await e2eeApi.getSenderKeyDistributionStatus(roomId);
         const e2eeStore = useE2eeStore.getState();
         for (const memberID of (status?.pending_from_members ?? [])) {
