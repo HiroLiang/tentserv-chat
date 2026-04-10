@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { friendService } from "@/services/friendService.ts";
 import { AddFriendDialog } from "./AddFriendDialog.tsx";
@@ -129,13 +129,40 @@ describe("AddFriendDialog", () => {
             await vi.advanceTimersByTimeAsync(600);
             await Promise.resolve();
         });
+        fireEvent.click(screen.getByRole("button", { name: "Block" }));
+
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("Block Mina?");
+        expect(friendService.blockUser).not.toHaveBeenCalled();
+
         await act(async () => {
-            fireEvent.click(screen.getByRole("button", { name: "Block" }));
+            fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Block" }));
             await Promise.resolve();
         });
 
         expect(friendService.blockUser).toHaveBeenCalledWith(601);
         expect(screen.getByRole("button", { name: "Blocked" })).toBeDisabled();
+    });
+
+    it("does not block a search result when the confirmation dialog is cancelled", async () => {
+        vi.mocked(friendService.searchUsersByName).mockResolvedValue([
+            { user_id: 601, name: "Mina", avatar: "mina.png", account: "mina", public_id: "mina-public" },
+        ]);
+
+        render(<AddFriendDialog onClose={vi.fn()} />);
+
+        fireEvent.change(screen.getByPlaceholderText(/search by name/i), {
+            target: { value: "mina" },
+        });
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(600);
+            await Promise.resolve();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Block" }));
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("They will not be able to find you or send you messages.");
+        fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+
+        expect(friendService.blockUser).not.toHaveBeenCalled();
     });
 
     it("clears local state and calls onClose when closing the dialog", async () => {

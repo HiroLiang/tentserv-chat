@@ -14,6 +14,7 @@ import { e2eeService } from '@/services/e2eeService.ts';
 import { logger } from '@/utils/logger.ts';
 
 type Tab = 'friends' | 'requests' | 'blocked';
+type UserActionTarget = Pick<FriendResponse, 'user_id' | 'name'>;
 
 function getInitials(name: string) {
     return name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
@@ -31,7 +32,11 @@ export const FriendsPage = () => {
 
     const [showAddDialog, setShowAddDialog] = useState(false);
     const [unfriendTarget, setUnfriendTarget] = useState<FriendResponse | null>(null);
+    const [blockTarget, setBlockTarget] = useState<UserActionTarget | null>(null);
+    const [unblockTarget, setUnblockTarget] = useState<UserActionTarget | null>(null);
     const [unfriendLoading, setUnfriendLoading] = useState(false);
+    const [blockLoading, setBlockLoading] = useState(false);
+    const [unblockLoading, setUnblockLoading] = useState(false);
     const [loadingUserId, setLoadingUserId] = useState<number | null>(null);
     const [messageError, setMessageError] = useState<string | null>(null);
 
@@ -141,14 +146,38 @@ export const FriendsPage = () => {
         }
     };
 
-    const handleBlock = async (userId: number) => {
-        await friendService.blockUser(userId);
-        await refreshLists();
+    const handleBlock = (target: UserActionTarget) => {
+        setBlockTarget(target);
     };
 
-    const handleUnblock = async (userId: number) => {
-        await friendService.unblockUser(userId);
-        await refreshLists();
+    const handleConfirmBlock = async () => {
+        if (!blockTarget) return;
+
+        setBlockLoading(true);
+        try {
+            await friendService.blockUser(blockTarget.user_id);
+            await refreshLists();
+            setBlockTarget(null);
+        } finally {
+            setBlockLoading(false);
+        }
+    };
+
+    const handleUnblock = (target: UserActionTarget) => {
+        setUnblockTarget(target);
+    };
+
+    const handleConfirmUnblock = async () => {
+        if (!unblockTarget) return;
+
+        setUnblockLoading(true);
+        try {
+            await friendService.unblockUser(unblockTarget.user_id);
+            await refreshLists();
+            setUnblockTarget(null);
+        } finally {
+            setUnblockLoading(false);
+        }
     };
 
     const filteredFriends = friends.filter(f =>
@@ -277,7 +306,7 @@ export const FriendsPage = () => {
                                                         Unfriend
                                                     </button>
                                                     <button
-                                                        onClick={() => handleBlock(f.user_id)}
+                                                        onClick={() => handleBlock(f)}
                                                         className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
                                                     >
                                                         Block
@@ -292,7 +321,7 @@ export const FriendsPage = () => {
                                                         Cancel
                                                     </button>
                                                     <button
-                                                        onClick={() => handleBlock(f.user_id)}
+                                                        onClick={() => handleBlock(f)}
                                                         className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
                                                     >
                                                         Block
@@ -338,7 +367,7 @@ export const FriendsPage = () => {
                                                     Reject
                                                 </button>
                                                 <button
-                                                    onClick={() => handleBlock(r.user_id)}
+                                                    onClick={() => handleBlock(r)}
                                                     className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
                                                 >
                                                     Block
@@ -370,7 +399,7 @@ export const FriendsPage = () => {
                                                 <p className="text-xs text-muted-foreground capitalize">{b.status}</p>
                                             </div>
                                             <button
-                                                onClick={() => handleUnblock(b.user_id)}
+                                                onClick={() => handleUnblock(b)}
                                                 className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
                                             >
                                                 Unblock
@@ -414,6 +443,47 @@ export const FriendsPage = () => {
                         variant: 'destructive',
                         onClick: () => void handleConfirmUnfriend(),
                         disabled: unfriendLoading,
+                    },
+                ]}
+            />
+            <ConfirmDialog
+                open={blockTarget !== null}
+                onOpenChange={(open) => {
+                    if (!open && !blockLoading) setBlockTarget(null);
+                }}
+                title="Block User"
+                description={`Block ${blockTarget?.name ?? 'this user'}? They will not be able to find you or send you messages. Existing messages from them will be hidden.`}
+                actions={[
+                    {
+                        label: 'Cancel',
+                        cancel: true,
+                        disabled: blockLoading,
+                    },
+                    {
+                        label: blockLoading ? 'Blocking...' : 'Block',
+                        variant: 'destructive',
+                        onClick: () => void handleConfirmBlock(),
+                        disabled: blockLoading,
+                    },
+                ]}
+            />
+            <ConfirmDialog
+                open={unblockTarget !== null}
+                onOpenChange={(open) => {
+                    if (!open && !unblockLoading) setUnblockTarget(null);
+                }}
+                title="Unblock User"
+                description={`Unblock ${unblockTarget?.name ?? 'this user'}? They may be able to find you and send you a friend request again.`}
+                actions={[
+                    {
+                        label: 'Cancel',
+                        cancel: true,
+                        disabled: unblockLoading,
+                    },
+                    {
+                        label: unblockLoading ? 'Unblocking...' : 'Unblock',
+                        onClick: () => void handleConfirmUnblock(),
+                        disabled: unblockLoading,
                     },
                 ]}
             />

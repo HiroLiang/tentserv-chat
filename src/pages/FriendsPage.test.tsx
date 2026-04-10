@@ -200,18 +200,29 @@ describe("FriendsPage", () => {
         expect(screen.getByRole("alertdialog")).toHaveTextContent("Remove Friend");
         await user.click(screen.getByRole("button", { name: "Remove" }));
         await waitFor(() => expect(friendService.unfriend).toHaveBeenCalledWith(1));
+
         await user.click(screen.getAllByRole("button", { name: "Block" })[0]);
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("Block User");
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("Block Accepted?");
+        await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Block" }));
+        await waitFor(() => expect(friendService.blockUser).toHaveBeenCalledWith(601));
+
         await user.click(screen.getByRole("button", { name: "Requests (1)" }));
         await user.click(screen.getByRole("button", { name: "Block" }));
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("Block Requester?");
+        await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Block" }));
+        await waitFor(() => expect(friendService.blockUser).toHaveBeenCalledWith(603));
+
         await user.click(screen.getByRole("button", { name: "Blocked (1)" }));
         await user.click(screen.getByRole("button", { name: "Unblock" }));
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("Unblock User");
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("Unblock Blocked?");
+        await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Unblock" }));
+        await waitFor(() => expect(friendService.unblockUser).toHaveBeenCalledWith(604));
 
         expect(friendService.cancelSentRequest).toHaveBeenCalledWith(2);
         expect(chatRoomService.markRoomDeleted).toHaveBeenCalledWith(77);
         expect(e2eeService.deleteLocalSenderKeys).toHaveBeenCalledWith([10, 11]);
-        expect(friendService.blockUser).toHaveBeenCalledWith(601);
-        expect(friendService.blockUser).toHaveBeenCalledWith(603);
-        expect(friendService.unblockUser).toHaveBeenCalledWith(604);
         await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(6));
     });
 
@@ -226,5 +237,23 @@ describe("FriendsPage", () => {
         expect(friendService.unfriend).not.toHaveBeenCalled();
         expect(chatRoomService.markRoomDeleted).not.toHaveBeenCalled();
         expect(e2eeService.deleteLocalSenderKeys).not.toHaveBeenCalled();
+    });
+
+    it("does not block or unblock when the confirmation dialog is cancelled", async () => {
+        const user = userEvent.setup();
+        renderPage();
+
+        await screen.findByText("Accepted");
+        await user.click(screen.getAllByRole("button", { name: "Block" })[0]);
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("They will not be able to find you or send you messages.");
+        await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+
+        await user.click(screen.getByRole("button", { name: "Blocked (1)" }));
+        await user.click(screen.getByRole("button", { name: "Unblock" }));
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("They may be able to find you and send you a friend request again.");
+        await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+
+        expect(friendService.blockUser).not.toHaveBeenCalled();
+        expect(friendService.unblockUser).not.toHaveBeenCalled();
     });
 });

@@ -3,6 +3,7 @@ import type { UserSearchResponse } from '@/api/types.ts';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { env } from '@/config/env';
 import { friendService } from '@/services/friendService.ts';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog.tsx';
 
 function getInitials(name: string) {
     return name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
@@ -16,6 +17,8 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<UserSearchResponse[]>([]);
     const [loading, setLoading] = useState(false);
+    const [blockTarget, setBlockTarget] = useState<UserSearchResponse | null>(null);
+    const [blockLoading, setBlockLoading] = useState(false);
     const requestSequence = useRef(0);
 
     const search = async (q: string) => {
@@ -59,11 +62,24 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
         ));
     };
 
-    const handleBlock = async (userId: number) => {
-        await friendService.blockUser(userId);
-        setResults(prev => prev.map(u =>
-            u.user_id === userId ? { ...u, friendship_status: 'blocked' } : u
-        ));
+    const handleBlock = (user: UserSearchResponse) => {
+        setBlockTarget(user);
+    };
+
+    const handleConfirmBlock = async () => {
+        if (!blockTarget) return;
+
+        setBlockLoading(true);
+        const userId = blockTarget.user_id;
+        try {
+            await friendService.blockUser(userId);
+            setResults(prev => prev.map(u =>
+                u.user_id === userId ? { ...u, friendship_status: 'blocked' } : u
+            ));
+            setBlockTarget(null);
+        } finally {
+            setBlockLoading(false);
+        }
     };
 
     const handleClose = () => {
@@ -150,7 +166,7 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
                                         Apply
                                     </button>
                                     <button
-                                        onClick={() => handleBlock(u.user_id)}
+                                        onClick={() => handleBlock(u)}
                                         className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
                                     >
                                         Block
@@ -173,6 +189,27 @@ export const AddFriendDialog = ({ onClose }: AddFriendDialogProps) => {
                     </button>
                 </div>
             </div>
+            <ConfirmDialog
+                open={blockTarget !== null}
+                onOpenChange={(open) => {
+                    if (!open && !blockLoading) setBlockTarget(null);
+                }}
+                title="Block User"
+                description={`Block ${blockTarget?.name ?? 'this user'}? They will not be able to find you or send you messages. Existing messages from them will be hidden.`}
+                actions={[
+                    {
+                        label: 'Cancel',
+                        cancel: true,
+                        disabled: blockLoading,
+                    },
+                    {
+                        label: blockLoading ? 'Blocking...' : 'Block',
+                        variant: 'destructive',
+                        onClick: () => void handleConfirmBlock(),
+                        disabled: blockLoading,
+                    },
+                ]}
+            />
         </div>
     );
 };
