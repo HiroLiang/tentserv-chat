@@ -4,8 +4,10 @@ import { useUserStore } from '@/stores/userStore.ts';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { logger } from '@/utils/logger.ts';
 import type { CreateRoomRequest, CreateRoomResponse, GetMyRoomInvitationResponse, SendMessageRequest } from '@/api/types.ts';
-import { e2eeService } from '@/services/e2eeService.ts';
-import type { RoomDetail } from '@/types/chat.ts';
+import { e2eeService, WAITING_FOR_SENDER_KEY } from '@/services/e2eeService.ts';
+import type { GetUserRoomsResponse, RoomDetail, RoomSummary } from '@/types/chat.ts';
+
+export const LATEST_MESSAGE_FALLBACK = 'New message';
 
 // [EN] ChatRoomService manages chat room CRUD, message loading/sending (with E2EE encryption),
 //      invitation handling, and direct-room E2EE key initialization.
@@ -57,13 +59,51 @@ class ChatRoomService {
         store.setLoadingRooms(true);
         try {
             const rooms = await chatApi.getRooms();
-            store.setRooms(rooms);
+            store.setRooms(await this.decryptRoomSummaries(rooms));
         } catch (err) {
             logger.error('Failed to load rooms', err);
             throw err;
         } finally {
             store.setLoadingRooms(false);
         }
+    }
+
+    private async decryptRoomSummaries(rooms: GetUserRoomsResponse): Promise<GetUserRoomsResponse> {
+        return {
+            direct: await this.decryptRoomSummaryList(rooms.direct),
+            group: await this.decryptRoomSummaryList(rooms.group),
+            channel: await this.decryptRoomSummaryList(rooms.channel),
+            bot: await this.decryptRoomSummaryList(rooms.bot),
+        };
+    }
+
+    private async decryptRoomSummaryList(rooms: RoomSummary[]): Promise<RoomSummary[]> {
+        return Promise.all(rooms.map(async (room) => {
+            if (!room.latest_message) {
+                return room;
+            }
+
+            if (room.latest_message_sender_id === undefined || room.latest_message_sender_id === null) {
+                return { ...room, latest_message: LATEST_MESSAGE_FALLBACK };
+            }
+
+            try {
+                const decrypted = await e2eeService.decryptMessage(
+                    room.latest_message,
+                    room.latest_message_sender_id,
+                    room.room_id,
+                );
+                return {
+                    ...room,
+                    latest_message: decrypted === WAITING_FOR_SENDER_KEY
+                        ? LATEST_MESSAGE_FALLBACK
+                        : decrypted,
+                };
+            } catch (err) {
+                logger.warn(`Failed to decrypt latest message for room ${room.room_id}`, err);
+                return { ...room, latest_message: LATEST_MESSAGE_FALLBACK };
+            }
+        }));
     }
 
     async loadRoomDetail(roomId: number, options?: { persist?: boolean }): Promise<RoomDetail> {

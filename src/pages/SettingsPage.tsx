@@ -17,43 +17,43 @@ import { ChatIdentitySection } from '@/components/settings/sections/ChatIdentity
  */
 const SETTINGS_GROUPS: SettingsGroup[] = [
     {
-        title: '一般',
+        title: 'General',
         sections: [
             {
                 id: 'account',
-                label: '帳號',
+                label: 'Account',
                 icon: User,
                 component: AccountSection,
             },
             {
                 id: 'notifications',
-                label: '通知',
+                label: 'Notifications',
                 icon: Bell,
                 component: NotificationsSection,
             },
             {
                 id: 'appearance',
-                label: '外觀',
+                label: 'Appearance',
                 icon: Palette,
                 component: AppearanceSection,
             },
             {
                 id: 'privacy',
-                label: '隱私與安全',
+                label: 'Privacy & Security',
                 icon: ShieldCheck,
                 component: PrivacySection,
             },
         ],
     },
     {
-        title: '聊天',
+        title: 'Chat',
         sections: [
             {
                 id: 'chat-identity',
-                label: '聊天身份',
+                label: 'Chat Identity',
                 icon: MessageCircleMore,
                 component: ChatIdentitySection,
-                // 當用戶具備聊天身份功能時才顯示
+                // Show this only when the user has a chat identity feature.
                 // condition: (ctx) => ctx.user?.hasChatIdentity === true,
             },
         ],

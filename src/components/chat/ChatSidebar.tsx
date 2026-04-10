@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { ChatGroup } from '@/types/ui';
 import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, MessageSquare, Users } from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
+import { env } from '@/config/env.ts';
 
 export interface ChatGroups {
     direct: ChatGroup[];
@@ -38,16 +40,31 @@ const getInitials = (name: string) =>
     name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
 
 function ChatAvatar({ chat }: { chat: ChatGroup }) {
+    const directAvatarUrl = chat.type === 'direct' && chat.avatarUrl
+        ? `${env.API_BASE_URL}/static/${chat.avatarUrl}`
+        : undefined;
+
     return (
-        <div className={cn(
-            'h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-sm relative',
-            avatarBgClass[chat.type],
-        )}>
-            {chat.type === 'group'
-                ? <Users className="h-5 w-5"/>
-                : chat.type === 'bot'
-                    ? <Bot className="h-5 w-5"/>
-                    : getInitials(chat.name)}
+        <div className="relative h-10 w-10 flex-shrink-0">
+            <Avatar className="h-10 w-10">
+                {directAvatarUrl && (
+                    <AvatarImage
+                        src={directAvatarUrl}
+                        alt={`${chat.name} avatar`}
+                        className="object-cover"
+                    />
+                )}
+                <AvatarFallback className={cn(
+                    'font-semibold text-sm',
+                    avatarBgClass[chat.type],
+                )}>
+                    {chat.type === 'group'
+                        ? <Users className="h-5 w-5"/>
+                        : chat.type === 'bot'
+                            ? <Bot className="h-5 w-5"/>
+                            : getInitials(chat.name)}
+                </AvatarFallback>
+            </Avatar>
 
             {chat.type !== 'group' && (
                 <span className={cn(

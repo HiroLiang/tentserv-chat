@@ -9,6 +9,8 @@ import { wsService } from '@/services/wsService';
 import { logger } from '@/utils/logger';
 import { toast } from 'sonner';
 import { InvitationBanner } from './InvitationBanner';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
+import { env } from '@/config/env.ts';
 
 interface ChatRoomProps {
     chat: ChatGroup;
@@ -95,7 +97,7 @@ function MessageBubble({ message, chat }: { message: ChatMessage; chat: ChatGrou
                 )}>
                     {message.content === WAITING_FOR_SENDER_KEY
                         ? <span className="italic text-muted-foreground flex items-center gap-1">
-                            <Lock className="h-3 w-3"/> 等待用戶密鑰
+                            <Lock className="h-3 w-3"/> Waiting for sender key
                           </span>
                         : message.content
                     }
@@ -117,6 +119,9 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
     const directKeyStatus = useChatStore((s) => s.directKeyStatus[Number(chat.id)]);
     const isDirectLocked = chat.type === 'direct' && directKeyStatus !== 'unlocked';
     const inputDisabled = (chat.type === 'group' && pendingInvitation?.found === true) || isDirectLocked;
+    const directAvatarUrl = chat.type === 'direct' && chat.avatarUrl
+        ? `${env.API_BASE_URL}/static/${chat.avatarUrl}`
+        : undefined;
 
     // Load pending invitation for GROUP; resolve direct key for DIRECT
     useEffect(() => {
@@ -220,7 +225,9 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean };
+        const isComposing = nativeEvent.isComposing || nativeEvent.keyCode === 229;
+        if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
             e.preventDefault();
             send();
         }
@@ -237,16 +244,25 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
         <div className="flex flex-col flex-1 min-w-0 h-full">
             {/* Header */}
             <div className="h-14 px-4 flex items-center gap-3 border-b border-border flex-shrink-0 bg-background">
-                <div className={cn(
-                    'h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold',
-                    avatarBgClass[chat.type],
-                )}>
-                    {chat.type === 'bot'
-                        ? <Bot className="h-5 w-5"/>
-                        : chat.type === 'group'
-                            ? <Users className="h-5 w-5"/>
-                            : getInitials(chat.name)}
-                </div>
+                <Avatar className="h-9 w-9 flex-shrink-0">
+                    {directAvatarUrl && (
+                        <AvatarImage
+                            src={directAvatarUrl}
+                            alt={`${chat.name} avatar`}
+                            className="object-cover"
+                        />
+                    )}
+                    <AvatarFallback className={cn(
+                        'text-sm font-semibold',
+                        avatarBgClass[chat.type],
+                    )}>
+                        {chat.type === 'bot'
+                            ? <Bot className="h-5 w-5"/>
+                            : chat.type === 'group'
+                                ? <Users className="h-5 w-5"/>
+                                : getInitials(chat.name)}
+                    </AvatarFallback>
+                </Avatar>
 
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -307,7 +323,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                         <Lock className="h-6 w-6 text-muted-foreground"/>
                     </div>
-                    <p className="text-sm text-muted-foreground">聊天室尚未解鎖</p>
+                    <p className="text-sm text-muted-foreground">Chat is locked</p>
                 </div>
             )}
 
@@ -333,7 +349,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                         onKeyDown={handleKeyDown}
                         placeholder={
                             isDirectLocked
-                                ? '等待對方上線解鎖...'
+                                ? 'Waiting for the other device to unlock...'
                                 : inputDisabled
                                     ? 'Accept the invitation to start chatting...'
                                     : `Message ${chat.name}...`
@@ -357,7 +373,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                 </div>
                 <p className="text-[11px] text-muted-foreground text-center mt-2">
                     {isDirectLocked
-                        ? '尚未取得對話金鑰，請確認邀請與雙方裝置狀態'
+                        ? 'Chat keys are not ready yet. Check the invitation and device status.'
                         : inputDisabled
                             ? 'You cannot send messages until the invitation is accepted'
                             : 'Enter to send · Shift+Enter for newline'}

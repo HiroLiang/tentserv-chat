@@ -3,7 +3,7 @@ import type { User } from '@/types/user.ts';
 
 export interface SettingsContext {
     user: User | null;
-    // 未來可擴充：hasChatIdentity?: boolean; isVerified?: boolean; etc.
+    // Extend later with feature flags such as hasChatIdentity or isVerified.
 }
 
 export interface SettingsSection {
@@ -11,7 +11,7 @@ export interface SettingsSection {
     label: string;
     icon: LucideIcon;
     component: React.ComponentType;
-    /** 若 undefined，永遠顯示；回傳 false 則隱藏此 section */
+    /** Show by default; return false to hide this section. */
     condition?: (ctx: SettingsContext) => boolean;
 }
 

@@ -2,6 +2,7 @@ export interface ChatGroup {
     id: string;
     type: 'direct' | 'group' | 'channel' | 'bot';
     name: string;
+    avatarUrl?: string;
     lastMessage?: string;
     lastMessageTime?: string;
     unreadCount?: number;

@@ -45,6 +45,7 @@ export const Navbar = ({ className }: NavbarProps) => {
         try {
             await userService.logout();
             toast.success("Logout successfully.");
+            navigate('/login', { replace: true });
         } catch (err) {
             const message = err instanceof Error ? err.message : "Logout failed";
             toast.error(message);
@@ -150,8 +151,8 @@ export const Navbar = ({ className }: NavbarProps) => {
                                 <DropdownMenuItem onClick={() => navigate('/profile')}>
                                     Profile
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => navigate('/settings')}>
-                                    Setting
+                                <DropdownMenuItem disabled>
+                                    Settings
                                 </DropdownMenuItem>
                                 {(user?.roles ?? []).includes('admin') && (
                                     <>

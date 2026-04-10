@@ -5,38 +5,38 @@ export const PrivacySection = () => {
     return (
         <div className="space-y-6">
             <div>
-                <h2 className="text-2xl font-bold">隱私與安全</h2>
-                <p className="text-muted-foreground text-sm mt-1">管理誰能看到您的資訊及登入裝置</p>
+                <h2 className="text-2xl font-bold">Privacy & Security</h2>
+                <p className="text-muted-foreground text-sm mt-1">Manage who can see your information and signed-in devices</p>
             </div>
             <Separator />
 
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base">個人資料可見性</CardTitle>
-                    <CardDescription>控制誰可以查看您的個人資料</CardDescription>
+                    <CardTitle className="text-base">Profile Visibility</CardTitle>
+                    <CardDescription>Control who can view your profile</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-sm text-muted-foreground">即將推出</p>
+                    <p className="text-sm text-muted-foreground">Coming soon</p>
                 </CardContent>
             </Card>
 
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base">已登入裝置</CardTitle>
-                    <CardDescription>管理目前已登入您帳號的裝置</CardDescription>
+                    <CardTitle className="text-base">Signed-in Devices</CardTitle>
+                    <CardDescription>Manage devices currently signed in to your account</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-sm text-muted-foreground">即將推出</p>
+                    <p className="text-sm text-muted-foreground">Coming soon</p>
                 </CardContent>
             </Card>
 
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base">封鎖名單</CardTitle>
-                    <CardDescription>管理您已封鎖的用戶</CardDescription>
+                    <CardTitle className="text-base">Blocked Users</CardTitle>
+                    <CardDescription>Manage users you have blocked</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-sm text-muted-foreground">即將推出</p>
+                    <p className="text-sm text-muted-foreground">Coming soon</p>
                 </CardContent>
             </Card>
         </div>

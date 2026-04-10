@@ -5,28 +5,28 @@ export const ChatIdentitySection = () => {
     return (
         <div className="space-y-6">
             <div>
-                <h2 className="text-2xl font-bold">聊天身份</h2>
-                <p className="text-muted-foreground text-sm mt-1">管理您在聊天室中使用的身份與暱稱</p>
+                <h2 className="text-2xl font-bold">Chat Identity</h2>
+                <p className="text-muted-foreground text-sm mt-1">Manage the identity and nickname you use in chat</p>
             </div>
             <Separator />
 
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base">聊天暱稱</CardTitle>
-                    <CardDescription>設定您在聊天室中顯示的名稱（與帳號名稱不同）</CardDescription>
+                    <CardTitle className="text-base">Chat Nickname</CardTitle>
+                    <CardDescription>Set the name shown in chat</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-sm text-muted-foreground">即將推出</p>
+                    <p className="text-sm text-muted-foreground">Coming soon</p>
                 </CardContent>
             </Card>
 
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base">聊天頭像</CardTitle>
-                    <CardDescription>設定聊天室專用的頭像</CardDescription>
+                    <CardTitle className="text-base">Chat Avatar</CardTitle>
+                    <CardDescription>Set a chat-specific avatar</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-sm text-muted-foreground">即將推出</p>
+                    <p className="text-sm text-muted-foreground">Coming soon</p>
                 </CardContent>
             </Card>
         </div>

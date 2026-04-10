@@ -45,9 +45,9 @@ class ChatPageErrorBoundary extends Component<ChatPageErrorBoundaryProps, ChatPa
                     <Navbar/>
                     <div className="flex flex-1 items-center justify-center px-6">
                         <div className="max-w-md text-center space-y-3">
-                            <h2 className="text-lg font-semibold text-foreground">Chat room 載入失敗</h2>
+                            <h2 className="text-lg font-semibold text-foreground">Chat room failed to load</h2>
                             <p className="text-sm text-muted-foreground">
-                                頁面遇到未預期錯誤，請重新整理後再試一次。
+                                Something went wrong. Reload the page and try again.
                             </p>
                             <div className="flex items-center justify-center gap-3">
                                 <Button onClick={() => window.location.reload()}>
@@ -84,6 +84,7 @@ function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
         id: String(room.room_id),
         type: room.room_type,
         name: room.display_name,
+        avatarUrl: room.avatar_url,
         unreadCount: room.unread_count,
         lastMessage: lastMsg?.content ?? room.latest_message,
         lastMessageTime: lastMsg ? formatTime(lastMsg.created_at) : undefined,

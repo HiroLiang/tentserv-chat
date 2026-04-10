@@ -5,28 +5,28 @@ export const NotificationsSection = () => {
     return (
         <div className="space-y-6">
             <div>
-                <h2 className="text-2xl font-bold">通知</h2>
-                <p className="text-muted-foreground text-sm mt-1">控制您接收通知的方式與頻率</p>
+                <h2 className="text-2xl font-bold">Notifications</h2>
+                <p className="text-muted-foreground text-sm mt-1">Control how often you receive notifications</p>
             </div>
             <Separator />
 
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base">訊息通知</CardTitle>
-                    <CardDescription>新訊息、提及與回覆的通知設定</CardDescription>
+                    <CardTitle className="text-base">Message Notifications</CardTitle>
+                    <CardDescription>New messages, mentions, and replies</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-sm text-muted-foreground">即將推出</p>
+                    <p className="text-sm text-muted-foreground">Coming soon</p>
                 </CardContent>
             </Card>
 
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-base">系統通知</CardTitle>
-                    <CardDescription>帳號活動與安全警示</CardDescription>
+                    <CardTitle className="text-base">System Notifications</CardTitle>
+                    <CardDescription>Account activity and security alerts</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <p className="text-sm text-muted-foreground">即將推出</p>
+                    <p className="text-sm text-muted-foreground">Coming soon</p>
                 </CardContent>
             </Card>
         </div>

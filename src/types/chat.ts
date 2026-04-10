@@ -7,6 +7,7 @@ export interface RoomSummary {
     display_name: string;
     avatar_url?: string;
     latest_message?: string;
+    latest_message_sender_id?: number;
     unread_count: number;
 }
 
