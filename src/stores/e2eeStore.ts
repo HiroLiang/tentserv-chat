@@ -19,6 +19,7 @@ interface E2eeState {
     resetBootstrapState: () => void;
     hasSenderKeyRequest: (roomId: number, providerMemberId: number) => boolean;
     addSenderKeyRequest: (roomId: number, providerMemberId: number) => void;
+    removeSenderKeyRequest: (roomId: number, providerMemberId: number) => void;
 }
 
 export const useE2eeStore = create<E2eeState>((set, get) => ({
@@ -55,4 +56,10 @@ export const useE2eeStore = create<E2eeState>((set, get) => ({
         set((s) => ({
             senderKeyRequests: new Set(s.senderKeyRequests).add(`${roomId}:${providerMemberId}`),
         })),
+    removeSenderKeyRequest: (roomId, providerMemberId) =>
+        set((s) => {
+            const next = new Set(s.senderKeyRequests);
+            next.delete(`${roomId}:${providerMemberId}`);
+            return { senderKeyRequests: next };
+        }),
 }));

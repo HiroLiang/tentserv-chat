@@ -320,7 +320,8 @@ export interface GetSenderKeyDistributionStatusResponse {
     own_sender_key_exists: boolean; // whether my latest sender key exists on the server
     requestable_member_ids: number[];
     available_from_member_ids: number[];
-    pending_receivers: number[];    // member IDs who haven't fetched my latest key
+    available_to_member_ids: number[];
+    pending_receivers: number[];    // member IDs who need a fresh upload of my latest key
     pending_from_members: number[]; // member IDs whose key I haven't fetched yet
 }
 

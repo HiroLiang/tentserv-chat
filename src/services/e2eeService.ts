@@ -10,6 +10,7 @@ import {
     performX3dhSend,
     performX3dhReceive,
     hasSenderKey,
+    getSenderKeyStates,
     encryptWithSenderKey,
     decryptWithSenderKey,
     prepareSenderKeyDistribution,
@@ -20,7 +21,13 @@ export const WAITING_FOR_SENDER_KEY = '__E2EE_WAITING_KEY__';
 import type {
     PublicKeyBundle,
     InitialMessage,
+    SenderKeyState,
 } from '@/types/e2ee.ts';
+import type {
+    GetPendingSenderKeyDistributionsResponse,
+    GetSenderKeyDistributionStatusResponse,
+} from '@/api/types.ts';
+import type { RoomMember } from '@/types/chat.ts';
 
 const INITIAL_SPK_KEY_ID = 1;
 const DEFAULT_OTP_PREKEY_TARGET_COUNT = 20;
@@ -37,6 +44,19 @@ type IdentityKeys = Awaited<ReturnType<typeof bootstrapLocalE2eeKeys>>['identity
 type SignedPreKey = Awaited<ReturnType<typeof bootstrapLocalE2eeKeys>>['spk'];
 type KeyStatus = Awaited<ReturnType<typeof e2eeApi.checkKeyStatus>>;
 type KeyPolicy = Awaited<ReturnType<typeof e2eeApi.getKeyPolicy>>;
+type SenderKeyStateMap = Map<number, SenderKeyState>;
+
+interface RoomSenderKeyReconciliationInput {
+    roomId: number;
+    roomMembers: RoomMember[];
+    currentMemberId?: number;
+}
+
+interface RoomSenderKeyReconciliationResult {
+    currentMemberId: number;
+    status: GetSenderKeyDistributionStatusResponse;
+    localStates: SenderKeyStateMap;
+}
 
 // [EN] E2eeService manages end-to-end encryption key lifecycle using Signal Protocol X3DH.
 //      Private keys live in the OS keyring (Tauri). Public keys are uploaded to the backend.
@@ -77,6 +97,22 @@ class E2eeService {
         }
 
         const me = roomDetail.members.find((m) => m.participant_id === myParticipantId);
+        if (!me) {
+            throw new Error(`No member mapping found for room ${roomId}`);
+        }
+
+        return me.member_id;
+    }
+
+    private resolveCurrentMemberIdFromMembers(roomId: number, roomMembers: RoomMember[], memberId?: number): number {
+        if (memberId !== undefined) return memberId;
+
+        const myParticipantId = useUserStore.getState().participantId;
+        if (myParticipantId === null) {
+            throw new Error(`No participant context for room ${roomId}`);
+        }
+
+        const me = roomMembers.find((member) => member.participant_id === myParticipantId);
         if (!me) {
             throw new Error(`No member mapping found for room ${roomId}`);
         }
@@ -291,6 +327,154 @@ class E2eeService {
         logger.info(`Replenished ${otpKeys.length} OTP keys`);
     }
 
+    private async getSenderKeyStateMap(accountId: number, memberIds: number[]): Promise<SenderKeyStateMap> {
+        const states = await getSenderKeyStates(accountId, memberIds);
+        return new Map(
+            states.map((state) => [Number(state.member_id), state]),
+        );
+    }
+
+    private async createSenderKeyRequestOnce(roomId: number, providerMemberId: number): Promise<boolean> {
+        const store = useE2eeStore.getState();
+        if (store.hasSenderKeyRequest(roomId, providerMemberId)) {
+            return false;
+        }
+
+        await e2eeApi.createSenderKeyRequest(roomId, providerMemberId);
+        useE2eeStore.getState().addSenderKeyRequest(roomId, providerMemberId);
+        return true;
+    }
+
+    private clearSenderKeyRequest(roomId: number, providerMemberId: number): void {
+        useE2eeStore.getState().removeSenderKeyRequest(roomId, providerMemberId);
+    }
+
+    private async uploadOwnSenderKey(
+        roomId: number,
+        targetUserId: number,
+        ownMemberId: number,
+        receiverMemberId: number,
+    ): Promise<void> {
+        const accountId = this.getCurrentAccountId();
+        const bundle = await e2eeApi.getKeyBundle(targetUserId);
+
+        const keyBundle: PublicKeyBundle = {
+            identity_key_dh: fromBase64(bundle.identity_key),
+            identity_key_sign: fromBase64(bundle.identity_key_sign),
+            signed_pre_key: fromBase64(bundle.signed_pre_key),
+            spk_signature: fromBase64(bundle.spk_signature),
+            spk_key_id: bundle.spk_key_id,
+            one_time_pre_key: bundle.otp_pre_key ? fromBase64(bundle.otp_pre_key) : undefined,
+            otpk_key_id: bundle.otp_pre_key_id,
+        };
+
+        const prepared = await prepareSenderKeyDistribution(accountId, ownMemberId, keyBundle);
+
+        await e2eeApi.uploadSenderKey(
+            roomId,
+            receiverMemberId,
+            prepared.sender_key_version,
+            toBase64(prepared.distribution_message),
+        );
+    }
+
+    private async provideOwnSenderKeyIfNeeded(
+        roomId: number,
+        ownMemberId: number,
+        roomMembers: RoomMember[],
+        localStates: SenderKeyStateMap,
+        status: GetSenderKeyDistributionStatusResponse,
+    ): Promise<void> {
+        const ownState = localStates.get(ownMemberId);
+        const refreshAllReceivers = !ownState?.is_own_key || !status.own_sender_key_exists;
+        const pendingReceivers = new Set(status.pending_receivers ?? []);
+
+        for (const member of roomMembers) {
+            if (member.member_id === ownMemberId || member.user_id === undefined) continue;
+            if (!refreshAllReceivers && !pendingReceivers.has(member.member_id)) continue;
+
+            try {
+                await this.uploadOwnSenderKey(roomId, member.user_id, ownMemberId, member.member_id);
+                logger.info(`Sender key uploaded for room ${roomId} to member ${member.member_id}`);
+            } catch (err) {
+                logger.warn(`Failed to upload sender key for room ${roomId} to member ${member.member_id}`, err);
+            }
+        }
+    }
+
+    private async requestMissingPeerSenderKeys(
+        roomId: number,
+        ownMemberId: number,
+        roomMembers: RoomMember[],
+        localStates: SenderKeyStateMap,
+        status: GetSenderKeyDistributionStatusResponse,
+    ): Promise<void> {
+        const pendingFromMembers = new Set(status.pending_from_members ?? []);
+        const availableFromMembers = new Set(status.available_from_member_ids ?? []);
+
+        for (const member of roomMembers) {
+            if (member.member_id === ownMemberId) continue;
+
+            const localState = localStates.get(member.member_id);
+            const hasLocalPeerKey = localState !== undefined && !localState.is_own_key;
+            if (hasLocalPeerKey && !pendingFromMembers.has(member.member_id)) {
+                this.clearSenderKeyRequest(roomId, member.member_id);
+                continue;
+            }
+
+            if (availableFromMembers.has(member.member_id) || !pendingFromMembers.has(member.member_id)) {
+                continue;
+            }
+
+            try {
+                await this.createSenderKeyRequestOnce(roomId, member.member_id);
+            } catch (err) {
+                logger.warn(`Failed to create sender key request for room ${roomId} and member ${member.member_id}`, err);
+            }
+        }
+    }
+
+    async reconcileRoomSenderKeys(
+        input: RoomSenderKeyReconciliationInput,
+    ): Promise<RoomSenderKeyReconciliationResult> {
+        const accountId = this.getCurrentAccountId();
+        const currentMemberId = this.resolveCurrentMemberIdFromMembers(
+            input.roomId,
+            input.roomMembers,
+            input.currentMemberId,
+        );
+        const memberIds = input.roomMembers.map((member) => member.member_id);
+
+        const localStatesBefore = await this.getSenderKeyStateMap(accountId, memberIds);
+        const initialStatus = await e2eeApi.getSenderKeyDistributionStatus(input.roomId);
+        await this.provideOwnSenderKeyIfNeeded(
+            input.roomId,
+            currentMemberId,
+            input.roomMembers,
+            localStatesBefore,
+            initialStatus,
+        );
+
+        const pending = await e2eeApi.getPendingSenderKeyDistributions(input.roomId);
+        await this.resolveMemberSenderKeys(input.roomId, pending);
+
+        const status = await e2eeApi.getSenderKeyDistributionStatus(input.roomId);
+        const localStates = await this.getSenderKeyStateMap(accountId, memberIds);
+        await this.requestMissingPeerSenderKeys(
+            input.roomId,
+            currentMemberId,
+            input.roomMembers,
+            localStates,
+            status,
+        );
+
+        return {
+            currentMemberId,
+            status,
+            localStates,
+        };
+    }
+
     async performSend(
         targetUserId: number,
         targetDeviceId: string,
@@ -330,30 +514,16 @@ class E2eeService {
     //      邀請者與被邀請者各自呼叫以上傳各自的 sender key。
     // [日] performDirectKeyExchange：相手の X3DH 公開鍵バンドルを取得し、sender key を生成して
     //      X3DH send で暗号化してバックエンドにアップロードする。招待者・被招待者の両方がそれぞれ呼び出す。
-    async performDirectKeyExchange(roomId: number, inviterUserId: number, memberId?: number): Promise<void> {
-        const accountId = this.getCurrentAccountId();
+    async performDirectKeyExchange(
+        roomId: number,
+        inviterUserId: number,
+        memberId?: number,
+        receiverMemberId?: number,
+    ): Promise<void> {
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
-        const receiverMemberId = this.resolvePeerMemberId(roomId, inviterUserId);
-        const bundle = await e2eeApi.getKeyBundle(inviterUserId);
+        const resolvedReceiverMemberId = this.resolvePeerMemberId(roomId, inviterUserId, receiverMemberId);
 
-        const keyBundle: PublicKeyBundle = {
-            identity_key_dh: fromBase64(bundle.identity_key),
-            identity_key_sign: fromBase64(bundle.identity_key_sign),
-            signed_pre_key: fromBase64(bundle.signed_pre_key),
-            spk_signature: fromBase64(bundle.spk_signature),
-            spk_key_id: bundle.spk_key_id,
-            one_time_pre_key: bundle.otp_pre_key ? fromBase64(bundle.otp_pre_key) : undefined,
-            otpk_key_id: bundle.otp_pre_key_id,
-        };
-
-        const prepared = await prepareSenderKeyDistribution(accountId, myMemberId, keyBundle);
-
-        await e2eeApi.uploadSenderKey(
-            roomId,
-            receiverMemberId,
-            prepared.sender_key_version,
-            toBase64(prepared.distribution_message),
-        );
+        await this.uploadOwnSenderKey(roomId, inviterUserId, myMemberId, resolvedReceiverMemberId);
 
         logger.info(`Direct key exchange completed for room ${roomId}`);
     }
@@ -414,37 +584,38 @@ class E2eeService {
         const lastRequested = this._decryptRequestDebounce.get(key);
         if (lastRequested !== undefined && now - lastRequested < DECRYPT_REQUEST_DEBOUNCE_MS) return;
         this._decryptRequestDebounce.set(key, now);
-        e2eeApi.createSenderKeyRequest(roomId, senderMemberId).catch(() => {});
+        this.createSenderKeyRequestOnce(roomId, senderMemberId).catch(() => {});
     }
 
     // Called when the inviter receives e2ee.sender_key_needed.
     // Encrypts own sender key using the requester's (invitee's) X3DH public key bundle and uploads it.
-    async performInviterKeyExchange(roomId: number, requesterUserId: number, memberId?: number, requesterMemberId?: number): Promise<void> {
+    async performInviterKeyExchange(
+        roomId: number,
+        requesterUserId: number,
+        memberId?: number,
+        requesterMemberId?: number,
+    ): Promise<boolean> {
         const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
         const receiverMemberId = this.resolvePeerMemberId(roomId, requesterUserId, requesterMemberId);
-        const bundle = await e2eeApi.getKeyBundle(requesterUserId);
+        const [status, localStates] = await Promise.all([
+            e2eeApi.getSenderKeyDistributionStatus(roomId).catch(() => null),
+            this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>()),
+        ]);
+        const ownState = localStates.get(myMemberId);
+        const shouldUpload = !ownState?.is_own_key
+            || !status?.own_sender_key_exists
+            || (status.pending_receivers ?? []).includes(receiverMemberId);
 
-        const keyBundle: PublicKeyBundle = {
-            identity_key_dh: fromBase64(bundle.identity_key),
-            identity_key_sign: fromBase64(bundle.identity_key_sign),
-            signed_pre_key: fromBase64(bundle.signed_pre_key),
-            spk_signature: fromBase64(bundle.spk_signature),
-            spk_key_id: bundle.spk_key_id,
-            one_time_pre_key: bundle.otp_pre_key ? fromBase64(bundle.otp_pre_key) : undefined,
-            otpk_key_id: bundle.otp_pre_key_id,
-        };
+        if (!shouldUpload) {
+            logger.info(`Sender key upload skipped for room ${roomId}: receiver ${receiverMemberId} already has the latest distribution`);
+            return false;
+        }
 
-        const prepared = await prepareSenderKeyDistribution(accountId, myMemberId, keyBundle);
-
-        await e2eeApi.uploadSenderKey(
-            roomId,
-            receiverMemberId,
-            prepared.sender_key_version,
-            toBase64(prepared.distribution_message),
-        );
+        await this.uploadOwnSenderKey(roomId, requesterUserId, myMemberId, receiverMemberId);
 
         logger.info(`Inviter key exchange completed for room ${roomId}`);
+        return true;
     }
 
     // [EN] checkAndRequestReverseKey: after providing our key to a requester, check if we also need
@@ -454,25 +625,40 @@ class E2eeService {
     //      若本地沒有，先嘗試消化已有 distribution；若仍缺少則建立 sender key 請求。
     async checkAndRequestReverseKey(roomId: number, targetMemberId: number): Promise<void> {
         const accountId = this.getCurrentAccountId();
-        let hasKey = await hasSenderKey(accountId, targetMemberId).catch(() => false);
-        if (hasKey) return;
+        let localStates = await this.getSenderKeyStateMap(accountId, [targetMemberId]).catch(() => new Map<number, SenderKeyState>());
+        if (localStates.get(targetMemberId)?.is_own_key === false) {
+            this.clearSenderKeyRequest(roomId, targetMemberId);
+            return;
+        }
 
         // Try consuming any pending distributions that may already be available.
         await this.resolveMemberSenderKeys(roomId).catch(() => {});
-        hasKey = await hasSenderKey(accountId, targetMemberId).catch(() => false);
-        if (hasKey) return;
+        localStates = await this.getSenderKeyStateMap(accountId, [targetMemberId]).catch(() => new Map<number, SenderKeyState>());
+        if (localStates.get(targetMemberId)?.is_own_key === false) {
+            this.clearSenderKeyRequest(roomId, targetMemberId);
+            return;
+        }
 
-        // Still missing — create a persistent request.
-        await e2eeApi.createSenderKeyRequest(roomId, targetMemberId).catch(() => {});
+        const status = await e2eeApi.getSenderKeyDistributionStatus(roomId).catch(() => null);
+        if (status && (status.available_from_member_ids ?? []).includes(targetMemberId)) {
+            return;
+        }
+
+        if (!status || (status.pending_from_members ?? []).includes(targetMemberId)) {
+            await this.createSenderKeyRequestOnce(roomId, targetMemberId).catch(() => {});
+        }
     }
 
     // [EN] resolveMemberSenderKeys: fetches pending distributions for the room, consumes each one in Rust,
     //      and then reports the resulting consumed/failed status back to the backend.
     // [中] resolveMemberSenderKeys：取得房間內待消化的 distribution，由 Rust 完成 consume，
     //      再回報 consumed/failed 給後端。
-    async resolveMemberSenderKeys(roomId: number): Promise<void> {
+    async resolveMemberSenderKeys(
+        roomId: number,
+        pendingResponse?: GetPendingSenderKeyDistributionsResponse,
+    ): Promise<void> {
         const accountId = this.getCurrentAccountId();
-        const pending = await e2eeApi.getPendingSenderKeyDistributions(roomId);
+        const pending = pendingResponse ?? await e2eeApi.getPendingSenderKeyDistributions(roomId);
         for (const item of pending.distributions) {
             try {
                 const distBytes = Array.from(Uint8Array.from(atob(item.distribution_message), c => c.charCodeAt(0)));
@@ -487,6 +673,9 @@ class E2eeService {
                 }
                 const status = result.status === 'failed' ? 'failed' : 'consumed';
                 await e2eeApi.consumeSenderKeyDistribution(item.distribution_id, status);
+                if (status === 'consumed') {
+                    this.clearSenderKeyRequest(roomId, item.sender_member_id);
+                }
             } catch (err) {
                 logger.warn(`Failed to resolve sender key distribution ${item.distribution_id}`, err);
                 await e2eeApi.consumeSenderKeyDistribution(item.distribution_id, 'failed').catch(() => {});
@@ -494,7 +683,10 @@ class E2eeService {
         }
     }
 
-    async resolveDirectKey(roomId: number): Promise<boolean> {
+    async resolveDirectKey(
+        roomId: number,
+        options?: { roomMembers?: RoomMember[]; currentMemberId?: number },
+    ): Promise<boolean> {
         await this.resolveMemberSenderKeys(roomId).catch(err =>
             logger.warn(`Failed to consume pending sender key distributions for room ${roomId}`, err)
         );
@@ -506,18 +698,32 @@ class E2eeService {
 
         let myMemberId: number;
         try {
-            myMemberId = this.resolveCurrentMemberId(roomId);
+            myMemberId = options?.roomMembers
+                ? this.resolveCurrentMemberIdFromMembers(roomId, options.roomMembers, options.currentMemberId)
+                : this.resolveCurrentMemberId(roomId, options?.currentMemberId);
         } catch (err) {
             logger.warn(`Cannot resolve local sender key state for room ${roomId}`, err);
             return false;
         }
 
         const accountId = this.getCurrentAccountId();
-        const localSenderKeyExists = await hasSenderKey(accountId, myMemberId).catch(() => false);
+        const localStates = options?.roomMembers
+            ? await this.getSenderKeyStateMap(
+                accountId,
+                options.roomMembers.map((member) => member.member_id),
+            ).catch(() => new Map<number, SenderKeyState>())
+            : await this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>());
+        const localSenderKeyExists = localStates.get(myMemberId)?.is_own_key === true;
+        const peerMembers = (options?.roomMembers ?? []).filter((member) => member.member_id !== myMemberId);
+        const allPeerKeysReady = peerMembers.every((member) => {
+            const state = localStates.get(member.member_id);
+            return state !== undefined && !state.is_own_key;
+        });
         return status.own_sender_key_exists
             && localSenderKeyExists
             && (status.pending_from_members?.length ?? 0) === 0
-            && (status.available_from_member_ids?.length ?? 0) === 0;
+            && (status.available_from_member_ids?.length ?? 0) === 0
+            && (peerMembers.length === 0 || allPeerKeysReady);
     }
 }
 

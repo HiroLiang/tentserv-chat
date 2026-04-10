@@ -43,7 +43,7 @@ vi.mock("@/services/wsService.ts", () => ({
 
 vi.mock("@/services/e2eeService.ts", () => ({
     e2eeService: {
-        ensureInitialized: vi.fn(),
+        ensureSessionBootstrap: vi.fn(),
     },
 }));
 
@@ -94,7 +94,7 @@ describe("LoginPage", () => {
         vi.clearAllMocks();
         resetStores();
         vi.mocked(chatService.initialize).mockResolvedValue(undefined);
-        vi.mocked(e2eeService.ensureInitialized).mockResolvedValue(undefined);
+        vi.mocked(e2eeService.ensureSessionBootstrap).mockResolvedValue(true);
     });
 
     it("submits an email login and starts the post-login handoff", async () => {
@@ -118,11 +118,11 @@ describe("LoginPage", () => {
         expect(userService.login).toHaveBeenCalledWith("hiro@example.com", "correct-password");
         expect(wsService.connect).toHaveBeenCalledWith(env.WS_BASE_URL, "token-login", "device-1");
         expect(chatService.initialize).toHaveBeenCalledTimes(1);
-        expect(e2eeService.ensureInitialized).toHaveBeenCalledWith("device-1");
+        expect(e2eeService.ensureSessionBootstrap).toHaveBeenCalledWith("device-1");
         expect(vi.mocked(chatService.initialize).mock.invocationCallOrder[0])
-            .toBeLessThan(vi.mocked(wsService.connect).mock.invocationCallOrder[0]);
+            .toBeGreaterThan(vi.mocked(e2eeService.ensureSessionBootstrap).mock.invocationCallOrder[0]);
         expect(vi.mocked(wsService.connect).mock.invocationCallOrder[0])
-            .toBeLessThan(vi.mocked(e2eeService.ensureInitialized).mock.invocationCallOrder[0]);
+            .toBeGreaterThan(vi.mocked(chatService.initialize).mock.invocationCallOrder[0]);
     });
 
     it("submits an account identifier without requiring an email shape", async () => {
@@ -158,6 +158,6 @@ describe("LoginPage", () => {
         expect(await screen.findByText("invalid credentials")).toBeInTheDocument();
         expect(wsService.connect).not.toHaveBeenCalled();
         expect(chatService.initialize).not.toHaveBeenCalled();
-        expect(e2eeService.ensureInitialized).not.toHaveBeenCalled();
+        expect(e2eeService.ensureSessionBootstrap).not.toHaveBeenCalled();
     });
 });

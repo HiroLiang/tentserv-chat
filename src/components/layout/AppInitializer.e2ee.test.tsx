@@ -11,13 +11,10 @@ import { wsService } from "@/services/wsService.ts";
 import { chatRoomService } from "@/services/chatRoomService.ts";
 import { e2eeApi } from "@/api/index.ts";
 import {
-    getIdentityKeys,
-    getSignedPreKey,
-    hasIdentityKeys,
+    bootstrapLocalE2eeKeys,
+    getSenderKeyStates,
     prepareSenderKeyDistribution,
     replenishOtpKeys,
-    validateIdentityKeys,
-    validateSignedPreKey,
 } from "@/bridge/e2ee.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useE2eeStore } from "@/stores/e2eeStore.ts";
@@ -89,25 +86,22 @@ vi.mock("@/api/index.ts", () => ({
         uploadSenderKey: vi.fn(),
         getSenderKeys: vi.fn(),
         getSenderKeyDistributionStatus: vi.fn(),
+        getPendingSenderKeyDistributions: vi.fn(),
+        consumeSenderKeyDistribution: vi.fn(),
         createSenderKeyRequest: vi.fn(),
     },
 }));
 
 vi.mock("@/bridge/e2ee.ts", () => ({
-    generateIdentityKeys: vi.fn(),
-        getIdentityKeys: vi.fn(),
-        generateSignedPreKey: vi.fn(),
-        getSignedPreKey: vi.fn(),
-        replenishOtpKeys: vi.fn(),
-        prepareSenderKeyDistribution: vi.fn(),
-        consumeSenderKeyDistribution: vi.fn(),
-        performX3dhReceive: vi.fn(),
-        hasIdentityKeys: vi.fn(),
-        validateIdentityKeys: vi.fn(),
-        validateSignedPreKey: vi.fn(),
-        validateE2eeKeyMaterial: vi.fn(),
-        hasSenderKey: vi.fn(),
-        encryptWithSenderKey: vi.fn(),
+    bootstrapLocalE2eeKeys: vi.fn(),
+    replenishOtpKeys: vi.fn(),
+    prepareSenderKeyDistribution: vi.fn(),
+    consumeSenderKeyDistribution: vi.fn(),
+    getSenderKeyStates: vi.fn(),
+    performX3dhReceive: vi.fn(),
+    performX3dhSend: vi.fn(),
+    hasSenderKey: vi.fn(),
+    encryptWithSenderKey: vi.fn(),
     decryptWithSenderKey: vi.fn(),
     storeMemberSenderKey: vi.fn(),
     clearE2eeKeys: vi.fn(),
@@ -145,7 +139,7 @@ const signedPreKey = {
 
 const preparedSenderKeyDistribution = {
     distribution_message: bytes(6, 32),
-    sender_key_version: 1234,
+    sender_key_version: 1775758701055,
 };
 
 const otpKeys = (count: number) =>
@@ -201,6 +195,8 @@ const resetStores = () => {
         otpKeyCount: 0,
         otpKeyTargetCount: 0,
         otpReplenishThreshold: 0,
+        bootstrapStatus: "idle",
+        bootstrapError: null,
         senderKeyRequests: new Set(),
     });
 };
@@ -253,11 +249,24 @@ describe("AppInitializer E2EE replenish integration", () => {
             spk_key_id: signedPreKey.key_id,
         });
         vi.mocked(e2eeApi.uploadSenderKey).mockResolvedValue(undefined);
-        vi.mocked(hasIdentityKeys).mockResolvedValue(true);
-        vi.mocked(getIdentityKeys).mockResolvedValue(identityKeys);
-        vi.mocked(getSignedPreKey).mockResolvedValue(signedPreKey);
-        vi.mocked(validateIdentityKeys).mockResolvedValue(true);
-        vi.mocked(validateSignedPreKey).mockResolvedValue(true);
+        vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue({
+            own_sender_key_exists: true,
+            requestable_member_ids: [],
+            available_from_member_ids: [],
+            available_to_member_ids: [],
+            pending_receivers: [703],
+            pending_from_members: [703],
+        });
+        vi.mocked(e2eeApi.getPendingSenderKeyDistributions).mockResolvedValue({ distributions: [] });
+        vi.mocked(e2eeApi.consumeSenderKeyDistribution).mockResolvedValue(undefined);
+        vi.mocked(e2eeApi.createSenderKeyRequest).mockResolvedValue(undefined);
+        vi.mocked(bootstrapLocalE2eeKeys).mockResolvedValue({
+            identity_keys: identityKeys,
+            spk: signedPreKey,
+            identity_regenerated: false,
+            spk_regenerated: false,
+        });
+        vi.mocked(getSenderKeyStates).mockResolvedValue([]);
         vi.mocked(prepareSenderKeyDistribution).mockResolvedValue(preparedSenderKeyDistribution);
         vi.mocked(replenishOtpKeys).mockImplementation(async (_accountId, count) => otpKeys(count));
     });

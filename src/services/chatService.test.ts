@@ -7,6 +7,7 @@ import { chatRoomService } from "./chatRoomService.ts";
 import { e2eeService } from "./e2eeService.ts";
 import { e2eeApi } from "@/api/index.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
+import { useE2eeStore } from "@/stores/e2eeStore.ts";
 
 vi.mock("./wsService.ts", () => ({
     wsService: {
@@ -25,7 +26,9 @@ vi.mock("./chatParticipantService.ts", () => ({
 vi.mock("./chatRoomService.ts", () => ({
     chatRoomService: {
         loadRooms: vi.fn(),
+        loadRoomDetail: vi.fn(),
         initializeDirectRoomEncryption: vi.fn(),
+        initializeGroupRoomEncryption: vi.fn(),
     },
 }));
 
@@ -62,6 +65,15 @@ const resetChatStore = () => {
         pendingInvitation: null,
         directKeyStatus: {},
     });
+    useE2eeStore.setState({
+        bootstrapStatus: "ready",
+        keysUploaded: true,
+        otpKeyCount: 0,
+        otpKeyTargetCount: 0,
+        otpReplenishThreshold: 0,
+        bootstrapError: null,
+        senderKeyRequests: new Set(),
+    });
 };
 
 describe("chatService sender-key handling", () => {
@@ -76,6 +88,7 @@ describe("chatService sender-key handling", () => {
             own_sender_key_exists: true,
             requestable_member_ids: [],
             available_from_member_ids: [],
+            available_to_member_ids: [],
             pending_receivers: [],
             pending_from_members: [],
         });

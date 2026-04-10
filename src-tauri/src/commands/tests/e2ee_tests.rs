@@ -1,13 +1,14 @@
 use crate::commands::core::{
-    bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, encrypt_with_sender_key_core,
-    generate_identity_keys_core, generate_sender_key_core, generate_signed_pre_key_core,
-    get_identity_keys_core, get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
-    perform_x3dh_receive_core, perform_x3dh_send_core, replenish_otp_keys_core,
-    store_member_sender_key_core, validate_e2ee_key_material_core, validate_identity_keys_core,
-    validate_signed_pre_key_core,
+    bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, consume_sender_key_distribution_core,
+    encrypt_with_sender_key_core, generate_identity_keys_core, generate_sender_key_core,
+    generate_signed_pre_key_core, get_identity_keys_core, get_signed_pre_key_core,
+    has_identity_keys_core, has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
+    prepare_sender_key_distribution_core, replenish_otp_keys_core, store_member_sender_key_core,
+    validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
+    ConsumeSenderKeyDistributionResult,
 };
 use crate::commands::e2ee::IdentityKeyBundle;
-use crate::crypto::x3dh::{PublicKey, PublicKeyBundle, SigningKey, StaticSecret};
+use crate::crypto::x3dh::{InitialMessage, PublicKey, PublicKeyBundle, SigningKey, StaticSecret};
 use crate::store::db::init_schema;
 use ed25519_dalek::Verifier;
 use rusqlite::Connection;
@@ -71,6 +72,23 @@ fn make_bob_bundle_with_opk() -> (
         otpk_key_id: Some(0),
     };
     (ik_dh, spk, opk, ik_sign, bundle)
+}
+
+fn make_local_bundle(conn: &Connection, user_id: &str) -> PublicKeyBundle {
+    let identity = setup_identity(conn, user_id);
+    let spk = generate_signed_pre_key_core(conn, &ZERO_KEY, user_id, 1).unwrap();
+    let otps = replenish_otp_keys_core(conn, &ZERO_KEY, user_id, 1).unwrap();
+    let otp = &otps[0];
+
+    PublicKeyBundle {
+        identity_key_dh: identity.identity_key_dh_pub,
+        identity_key_sign: identity.identity_key_sign_pub,
+        signed_pre_key: spk.public_key,
+        spk_signature: spk.signature,
+        spk_key_id: spk.key_id,
+        one_time_pre_key: Some(otp.public_key),
+        otpk_key_id: Some(otp.key_id),
+    }
 }
 
 // ── Identity key scenarios ───────────────────────────────────────────
@@ -682,6 +700,128 @@ fn store_member_sender_key_rejects_wrong_length() {
     let result = store_member_sender_key_core(&conn, ALICE, MEMBER_BOB, bad_key);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("32 bytes"));
+}
+
+#[test]
+fn prepare_sender_key_distribution_reuses_existing_sender_key_version() {
+    // Given Alice already has local X3DH state and Bob provides a valid recipient bundle
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ACCOUNT_ALICE);
+    let (_bob_ik, _bob_spk, _bob_opk, _bob_sign, bob_bundle) = make_bob_bundle_with_opk();
+
+    // When preparing the sender key distribution twice for the same member
+    let first = prepare_sender_key_distribution_core(
+        &conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        &bob_bundle,
+    )
+    .unwrap();
+    let second = prepare_sender_key_distribution_core(
+        &conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        &bob_bundle,
+    )
+    .unwrap();
+
+    // Then the sender key version is reused instead of rotating locally
+    assert_eq!(first.sender_key_version, second.sender_key_version);
+    assert!(!first.distribution_message.is_empty());
+    assert!(!second.distribution_message.is_empty());
+}
+
+#[test]
+fn consume_sender_key_distribution_returns_stale_when_local_version_is_newer() {
+    // Given Alice already stored Bob's peer sender key with a newer version
+    let (_dir, conn) = test_db();
+    let alice_bundle = make_local_bundle(&conn, ACCOUNT_ALICE);
+    setup_identity(&conn, ACCOUNT_BOB);
+    let prepared = prepare_sender_key_distribution_core(
+        &conn,
+        &ZERO_KEY,
+        ACCOUNT_BOB,
+        MEMBER_BOB,
+        &alice_bundle,
+    )
+    .unwrap();
+    let local_key = vec![9u8; 32];
+    store_member_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB, local_key.clone()).unwrap();
+    let newer_version = prepared.sender_key_version + 1000;
+    crate::store::sender_key_store::store_peer_sender_key_with_version_inner(
+        &conn,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        &local_key.clone().try_into().unwrap(),
+        newer_version,
+    )
+    .unwrap();
+
+    // When Alice consumes an older distribution version from Bob
+    let result = consume_sender_key_distribution_core(
+        &conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        &prepared.distribution_message,
+        prepared.sender_key_version,
+    )
+    .unwrap();
+
+    // Then the older payload is treated as stale and the newer local key is preserved
+    assert!(matches!(result, ConsumeSenderKeyDistributionResult::Stale));
+    let (stored_key, stored_version) =
+        crate::store::sender_key_store::load_peer_sender_key_with_version_inner(
+            &conn,
+            ACCOUNT_ALICE,
+            MEMBER_BOB,
+        )
+        .unwrap();
+    assert_eq!(stored_key.to_vec(), local_key);
+    assert_eq!(stored_version, newer_version);
+}
+
+#[test]
+fn consume_sender_key_distribution_returns_failed_when_x3dh_decrypt_breaks() {
+    // Given Bob prepared a valid distribution for Alice
+    let (_dir, conn) = test_db();
+    let alice_bundle = make_local_bundle(&conn, ACCOUNT_ALICE);
+    setup_identity(&conn, ACCOUNT_BOB);
+    let prepared = prepare_sender_key_distribution_core(
+        &conn,
+        &ZERO_KEY,
+        ACCOUNT_BOB,
+        MEMBER_BOB,
+        &alice_bundle,
+    )
+    .unwrap();
+    let mut initial: InitialMessage =
+        serde_json::from_slice(&prepared.distribution_message).unwrap();
+    initial.ciphertext[0] ^= 0xFF;
+    let corrupted_distribution = serde_json::to_vec(&initial).unwrap();
+
+    // When Alice attempts to consume the corrupted distribution
+    let result = consume_sender_key_distribution_core(
+        &conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        &corrupted_distribution,
+        prepared.sender_key_version,
+    )
+    .unwrap();
+
+    // Then Rust reports a failed consume instead of storing a broken peer key
+    assert!(matches!(result, ConsumeSenderKeyDistributionResult::Failed));
+    assert!(crate::store::sender_key_store::get_sender_key_state_inner(
+        &conn,
+        ACCOUNT_ALICE,
+        MEMBER_BOB
+    )
+    .unwrap()
+    .is_none());
 }
 
 #[test]

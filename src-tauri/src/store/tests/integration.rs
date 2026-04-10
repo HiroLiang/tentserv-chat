@@ -190,7 +190,8 @@ fn scenario_4_sender_keys_own_and_peer_coexist() {
     let alice_key: [u8; 32] = [0x01u8; 32];
     let bob_key: [u8; 32] = [0x02u8; 32];
 
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &alice_key, 0).unwrap();
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &alice_key, 0)
+        .unwrap();
     store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &bob_key, 0).unwrap();
 
     assert!(has_sender_key_inner(&conn, "alice", "m_alice").unwrap());

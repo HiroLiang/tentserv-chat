@@ -5,7 +5,6 @@ import { useE2eeStore } from "@/stores/e2eeStore.ts";
 import { chatParticipantService } from "./chatParticipantService.ts";
 import { chatRoomService } from "./chatRoomService.ts";
 import { e2eeService } from "./e2eeService.ts";
-import { e2eeApi } from "@/api/index.ts";
 import type { Message, MessageType } from "@/types/chat.ts";
 import type { DirectKeyReadyPayload, SenderKeyDistributionAvailablePayload } from "@/api/types.ts";
 
@@ -121,28 +120,14 @@ class ChatService {
         const encryptedRooms = [...rooms.direct, ...rooms.group];
         for (const room of encryptedRooms) {
             try {
-                const status = await e2eeApi.getSenderKeyDistributionStatus(room.room_id);
-                if (!status.own_sender_key_exists) {
-                    if (room.room_type === 'direct') {
-                        await chatRoomService.initializeDirectRoomEncryption(room.room_id);
-                    } else {
-                        await chatRoomService.initializeGroupRoomEncryption(room.room_id);
-                    }
+                const detail = await chatRoomService.loadRoomDetail(room.room_id, { persist: false });
+                if (room.room_type === 'direct') {
+                    await chatRoomService.initializeDirectRoomEncryption(room.room_id, { roomDetail: detail });
                 } else {
-                    // Consume any available distributions first.
-                    await e2eeService.resolveMemberSenderKeys(room.room_id).catch(() => {});
-                    // Request sender keys from members we still don't have keys for.
-                    const refreshed = await e2eeApi.getSenderKeyDistributionStatus(room.room_id).catch(() => null);
-                    if (refreshed) {
-                        const e2eeStore = useE2eeStore.getState();
-                        for (const memberID of (refreshed.pending_from_members ?? [])) {
-                            if (e2eeStore.hasSenderKeyRequest(room.room_id, memberID)) continue;
-                            e2eeStore.addSenderKeyRequest(room.room_id, memberID);
-                            await e2eeApi.createSenderKeyRequest(room.room_id, memberID).catch(() => {});
-                        }
-                    }
+                    await chatRoomService.initializeGroupRoomEncryption(room.room_id, { roomDetail: detail });
                 }
-            } catch {
+            } catch (err) {
+                logger.warn(`Failed to fulfill sender key state for room ${room.room_id}`, err);
                 // best-effort; skip this room
             }
         }

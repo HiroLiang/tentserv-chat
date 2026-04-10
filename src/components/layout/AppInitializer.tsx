@@ -122,8 +122,10 @@ export const AppInitializer = ({ children }: Props) => {
         const handler = (data: unknown) => {
             const payload = data as { room_id?: number; requester_user_id?: number; provider_member_id?: number; requester_member_id?: number };
             if (!payload?.room_id || !payload?.requester_user_id) return;
+            logger.info('Received e2ee.sender_key_needed', payload);
             e2eeService.performInviterKeyExchange(payload.room_id, payload.requester_user_id, payload.provider_member_id, payload.requester_member_id)
-                .then(() => {
+                .then((uploaded) => {
+                    if (!uploaded) return;
                     // Reverse check: do we also need the requester's key?
                     if (payload.requester_member_id) {
                         e2eeService.checkAndRequestReverseKey(payload.room_id!, payload.requester_member_id)
