@@ -74,6 +74,7 @@ class E2eeService {
     private _replenishPromises = new Map<string, Promise<void>>();
     private _sessionBootstrapPromises = new Map<string, Promise<boolean>>();
     private _decryptRequestDebounce = new Map<string, number>();
+    private _senderKeyUploadPromises = new Map<string, Promise<void>>();
 
     private getCurrentUserId(): number {
         const userId = useUserStore.getState().currentUser?.id;
@@ -350,6 +351,30 @@ class E2eeService {
     }
 
     private async uploadOwnSenderKey(
+        roomId: number,
+        targetUserId: number,
+        ownMemberId: number,
+        receiverMemberId: number,
+    ): Promise<void> {
+        const uploadKey = `${roomId}:${ownMemberId}:${receiverMemberId}`;
+        const existing = this._senderKeyUploadPromises.get(uploadKey);
+        if (existing) {
+            await existing;
+            return;
+        }
+
+        const uploadPromise = this.uploadOwnSenderKeyOnce(roomId, targetUserId, ownMemberId, receiverMemberId);
+        this._senderKeyUploadPromises.set(uploadKey, uploadPromise);
+        try {
+            await uploadPromise;
+        } finally {
+            if (this._senderKeyUploadPromises.get(uploadKey) === uploadPromise) {
+                this._senderKeyUploadPromises.delete(uploadKey);
+            }
+        }
+    }
+
+    private async uploadOwnSenderKeyOnce(
         roomId: number,
         targetUserId: number,
         ownMemberId: number,

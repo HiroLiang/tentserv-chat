@@ -407,4 +407,47 @@ describe("e2eeService sender-key reconciliation", () => {
         expect(e2eeApi.getKeyBundle).not.toHaveBeenCalled();
         expect(e2eeApi.uploadSenderKey).not.toHaveBeenCalled();
     });
+
+    it("deduplicates concurrent provider uploads for the same receiver", async () => {
+        vi.mocked(getSenderKeyStates).mockResolvedValue([
+            { member_id: "10", is_own_key: true, sender_key_version: 1775758701055, updated_at: 1 },
+        ]);
+        vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue({
+            own_sender_key_exists: true,
+            requestable_member_ids: [],
+            available_from_member_ids: [],
+            available_to_member_ids: [],
+            pending_receivers: [11],
+            pending_from_members: [],
+        });
+
+        const keyBundleResponse = {
+            identity_key: toBase64(identityKeys.identity_key_dh_pub),
+            identity_key_sign: toBase64(identityKeys.identity_key_sign_pub),
+            signed_pre_key: toBase64(signedPreKey.public_key),
+            spk_signature: toBase64(signedPreKey.signature),
+            spk_key_id: signedPreKey.key_id,
+        };
+        let resolveBundle: (value: typeof keyBundleResponse) => void = () => {};
+        vi.mocked(e2eeApi.getKeyBundle).mockReturnValue(new Promise<typeof keyBundleResponse>((resolve) => {
+            resolveBundle = resolve;
+        }));
+
+        const first = e2eeService.performInviterKeyExchange(79, 601, 10, 11);
+        const second = e2eeService.performInviterKeyExchange(79, 601, 10, 11);
+
+        await expect.poll(() => vi.mocked(e2eeApi.getKeyBundle).mock.calls.length).toBe(1);
+        resolveBundle(keyBundleResponse);
+
+        await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+        expect(e2eeApi.getKeyBundle).toHaveBeenCalledTimes(1);
+        expect(prepareSenderKeyDistribution).toHaveBeenCalledTimes(1);
+        expect(e2eeApi.uploadSenderKey).toHaveBeenCalledTimes(1);
+        expect(e2eeApi.uploadSenderKey).toHaveBeenCalledWith(
+            79,
+            11,
+            preparedSenderKeyDistribution.sender_key_version,
+            expect.any(String),
+        );
+    });
 });
