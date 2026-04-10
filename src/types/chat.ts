@@ -1,4 +1,5 @@
 export type RoomType = 'direct' | 'group' | 'channel' | 'bot';
+export type RoomStatus = 'active' | 'deleted';
 
 // Matches backend ChatRoomSummaryResponse (GET /chat/rooms)
 export interface RoomSummary {
@@ -6,6 +7,7 @@ export interface RoomSummary {
     room_type: RoomType;
     display_name: string;
     avatar_url?: string;
+    status?: RoomStatus;
     latest_message?: string;
     latest_message_sender_id?: number;
     unread_count: number;
@@ -43,6 +45,7 @@ export interface RoomDetail {
     name: string;
     description?: string;
     avatar_url?: string;
+    status?: RoomStatus;
     members: RoomMember[];
     messages: Message[];
 }

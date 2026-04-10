@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
     clearE2eeKeys,
+    deleteSenderKeys,
     generateIdentityKeys,
     generateSenderKey,
     hasIdentityKeys,
@@ -64,6 +65,7 @@ describe("e2ee bridge", () => {
             nonce: Array(12).fill(6),
         }, 1);
         await generateSenderKey(42, 99);
+        await deleteSenderKeys(42, [99, "100"]);
         await clearE2eeKeys(42);
 
         expect(invoke).toHaveBeenNthCalledWith(1, "perform_x3dh_send", {
@@ -83,6 +85,10 @@ describe("e2ee bridge", () => {
             accountId: "42",
             memberId: "99",
         });
-        expect(invoke).toHaveBeenNthCalledWith(5, "clear_e2ee_keys", { accountId: "42" });
+        expect(invoke).toHaveBeenNthCalledWith(5, "delete_sender_keys", {
+            accountId: "42",
+            memberIds: ["99", "100"],
+        });
+        expect(invoke).toHaveBeenNthCalledWith(6, "clear_e2ee_keys", { accountId: "42" });
     });
 });

@@ -80,12 +80,14 @@ function formatTime(iso: string): string {
 }
 
 function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
+    const isDeleted = room.status === 'deleted';
     return {
         id: String(room.room_id),
         type: room.room_type,
-        name: room.display_name,
-        avatarUrl: room.avatar_url,
-        unreadCount: room.unread_count,
+        name: isDeleted ? 'Deleted Contact' : room.display_name,
+        avatarUrl: isDeleted ? undefined : room.avatar_url,
+        status: room.status ?? 'active',
+        unreadCount: isDeleted ? 0 : room.unread_count,
         lastMessage: lastMsg?.content ?? room.latest_message,
         lastMessageTime: lastMsg ? formatTime(lastMsg.created_at) : undefined,
     };
@@ -133,13 +135,24 @@ const ChatPageContent = () => {
         }
     }, [rooms, roomIdParam]);
 
+    const selectedRoomStatus = selectedChatId
+        ? [
+            ...rooms.direct,
+            ...rooms.group,
+            ...rooms.channel,
+            ...rooms.bot,
+        ].find(room => room.room_id === Number(selectedChatId))?.status ?? 'active'
+        : undefined;
+
     useEffect(() => {
         if (!selectedChatId) return;
         const roomId = Number(selectedChatId);
+        if (selectedRoomStatus === 'deleted') return;
+
         chatRoomService.loadRoomDetail(roomId).catch(() => {});
         chatRoomService.loadMessages(roomId).catch(() => {});
         chatRoomService.markAsRead(roomId).catch(() => {});
-    }, [selectedChatId]);
+    }, [selectedChatId, selectedRoomStatus]);
 
     const toGroups = (arr: RoomSummary[]): ChatGroup[] =>
         arr.map(room => {
@@ -176,6 +189,7 @@ const ChatPageContent = () => {
 
     const handleSendMessage = (content: string) => {
         if (!selectedRoomId || !currentUser) return;
+        if (selectedChat?.status === 'deleted') return;
         chatRoomService.sendMessage(selectedRoomId, content).catch(() => {});
     };
 

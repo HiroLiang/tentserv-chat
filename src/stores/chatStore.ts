@@ -32,6 +32,7 @@ interface ChatState {
     setLoadingMessages: (v: boolean) => void;
     setPendingInvitation: (inv: PendingInvitation | null) => void;
     setDirectKeyStatus: (roomId: number, status: DirectKeyStatus) => void;
+    markRoomDeleted: (roomId: number) => void;
     resetChat: () => void;
 }
 
@@ -120,6 +121,40 @@ export const useChatStore = create<ChatState>((set) => ({
         set((state) => ({
             directKeyStatus: { ...state.directKeyStatus, [roomId]: status },
         })),
+
+    markRoomDeleted: (roomId) =>
+        set((state) => {
+            const markSummary = (room: RoomSummary): RoomSummary =>
+                room.room_id === roomId
+                    ? {
+                        ...room,
+                        status: 'deleted',
+                        display_name: 'Deleted Contact',
+                        avatar_url: undefined,
+                        unread_count: 0,
+                    }
+                    : room;
+
+            const currentRoomDetail = state.currentRoomDetail?.room_id === roomId
+                ? {
+                    ...state.currentRoomDetail,
+                    status: 'deleted' as const,
+                    name: 'Deleted Contact',
+                    avatar_url: undefined,
+                }
+                : state.currentRoomDetail;
+
+            return {
+                rooms: {
+                    direct: state.rooms.direct.map(markSummary),
+                    group: state.rooms.group.map(markSummary),
+                    channel: state.rooms.channel.map(markSummary),
+                    bot: state.rooms.bot.map(markSummary),
+                },
+                currentRoomDetail,
+                directKeyStatus: { ...state.directKeyStatus, [roomId]: 'locked' },
+            };
+        }),
 
     resetChat: () => set({
         rooms: { direct: [], group: [], channel: [], bot: [] },

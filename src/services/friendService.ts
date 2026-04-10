@@ -2,6 +2,7 @@ import { friendApi } from "@/api/friend.ts";
 import type {
     FriendRequestResponse,
     FriendResponse,
+    RemoveFriendResponse,
     UserSearchResponse,
 } from "@/api/types.ts";
 import { useUserStore } from "@/stores/userStore.ts";
@@ -42,16 +43,16 @@ class FriendService {
         await friendApi.acceptFriend(friendshipID);
     }
 
-    async rejectFriend(friendshipID: number): Promise<void> {
-        await friendApi.removeFriend(friendshipID);
+    async rejectFriend(friendshipID: number): Promise<RemoveFriendResponse> {
+        return friendApi.removeFriend(friendshipID);
     }
 
     async cancelSentRequest(friendshipID: number): Promise<void> {
         await friendApi.cancelSentRequest(friendshipID);
     }
 
-    async unfriend(friendshipID: number): Promise<void> {
-        await friendApi.removeFriend(friendshipID);
+    async unfriend(friendshipID: number): Promise<RemoveFriendResponse> {
+        return friendApi.removeFriend(friendshipID);
     }
 
     async blockUser(userID: number): Promise<void> {

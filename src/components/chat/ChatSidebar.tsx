@@ -40,7 +40,8 @@ const getInitials = (name: string) =>
     name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
 
 function ChatAvatar({ chat }: { chat: ChatGroup }) {
-    const directAvatarUrl = chat.type === 'direct' && chat.avatarUrl
+    const isDeleted = chat.status === 'deleted';
+    const directAvatarUrl = chat.type === 'direct' && !isDeleted && chat.avatarUrl
         ? `${env.API_BASE_URL}/static/${chat.avatarUrl}`
         : undefined;
 
@@ -56,7 +57,7 @@ function ChatAvatar({ chat }: { chat: ChatGroup }) {
                 )}
                 <AvatarFallback className={cn(
                     'font-semibold text-sm',
-                    avatarBgClass[chat.type],
+                    isDeleted ? 'bg-zinc-300 text-zinc-600' : avatarBgClass[chat.type],
                 )}>
                     {chat.type === 'group'
                         ? <Users className="h-5 w-5"/>
@@ -66,7 +67,7 @@ function ChatAvatar({ chat }: { chat: ChatGroup }) {
                 </AvatarFallback>
             </Avatar>
 
-            {chat.type !== 'group' && (
+            {chat.type !== 'group' && !isDeleted && (
                 <span className={cn(
                     'absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background',
                     chat.isOnline ? 'bg-green-500' : 'bg-zinc-400',

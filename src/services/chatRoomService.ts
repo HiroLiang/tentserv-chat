@@ -38,6 +38,19 @@ class ChatRoomService {
         return undefined;
     }
 
+    private isRoomDeleted(roomId: number): boolean {
+        const store = useChatStore.getState();
+        if (store.currentRoomDetail?.room_id === roomId) {
+            return store.currentRoomDetail.status === 'deleted';
+        }
+        return [
+            ...store.rooms.direct,
+            ...store.rooms.group,
+            ...store.rooms.channel,
+            ...store.rooms.bot,
+        ].some(room => room.room_id === roomId && room.status === 'deleted');
+    }
+
     private async ensureRoomDetail(roomId: number, roomDetail?: RoomDetail, persist = true): Promise<RoomDetail> {
         if (roomDetail) {
             if (persist) {
@@ -79,6 +92,14 @@ class ChatRoomService {
 
     private async decryptRoomSummaryList(rooms: RoomSummary[]): Promise<RoomSummary[]> {
         return Promise.all(rooms.map(async (room) => {
+            if (room.status === 'deleted') {
+                return {
+                    ...room,
+                    display_name: 'Deleted Contact',
+                    avatar_url: undefined,
+                    unread_count: 0,
+                };
+            }
             if (!room.latest_message) {
                 return room;
             }
@@ -148,6 +169,10 @@ class ChatRoomService {
     //      then sends via REST API and marks the room as read.
     // [中] sendMessage：direct/group 文字訊息必須用房間 sender key 加密，再透過 REST API 傳送並標記已讀。
     async sendMessage(roomId: number, content: string, type: SendMessageRequest['type'] = 'text'): Promise<void> {
+        if (this.isRoomDeleted(roomId)) {
+            throw new Error('This chat is no longer available.');
+        }
+
         let finalContent = content;
         if (type === 'text') {
             try {
@@ -193,6 +218,8 @@ class ChatRoomService {
     }
 
     async markAsRead(roomId: number): Promise<void> {
+        if (this.isRoomDeleted(roomId)) return;
+
         useChatStore.getState().clearUnreadCount(roomId);
         try {
             await chatApi.markAsRead(roomId);
@@ -223,6 +250,11 @@ class ChatRoomService {
         roomId: number,
         options?: { roomDetail?: RoomDetail; currentMemberId?: number },
     ): Promise<void> {
+        if (this.isRoomDeleted(roomId) || options?.roomDetail?.status === 'deleted') {
+            useChatStore.getState().setDirectKeyStatus(roomId, 'locked');
+            return;
+        }
+
         if (useE2eeStore.getState().bootstrapStatus !== 'ready') {
             logger.warn(`Skipping direct room E2EE initialization for room ${roomId}: bootstrap not ready`, {
                 bootstrapStatus: useE2eeStore.getState().bootstrapStatus,
@@ -268,6 +300,10 @@ class ChatRoomService {
         roomId: number,
         options?: { roomDetail?: RoomDetail; currentMemberId?: number },
     ): Promise<void> {
+        if (this.isRoomDeleted(roomId) || options?.roomDetail?.status === 'deleted') {
+            return;
+        }
+
         if (useE2eeStore.getState().bootstrapStatus !== 'ready') {
             logger.warn(`Skipping group room E2EE initialization for room ${roomId}: bootstrap not ready`, {
                 bootstrapStatus: useE2eeStore.getState().bootstrapStatus,
@@ -324,6 +360,10 @@ class ChatRoomService {
             logger.error(`Failed to respond to invitation ${invId}`, err);
             throw err;
         }
+    }
+
+    markRoomDeleted(roomId: number): void {
+        useChatStore.getState().markRoomDeleted(roomId);
     }
 }
 

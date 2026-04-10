@@ -28,8 +28,9 @@ use crate::store::message_store::{
     store_encrypted_message_inner, DecryptedMessageRow, EncryptedMessageRow,
 };
 use crate::store::sender_key_store::{
-    get_sender_key_state_inner, has_sender_key_inner, list_sender_key_states_inner,
-    load_own_sender_key_inner, load_own_sender_key_with_version_inner, load_peer_sender_key_inner,
+    delete_sender_keys_inner, get_sender_key_state_inner, has_sender_key_inner,
+    list_sender_key_states_inner, load_own_sender_key_inner,
+    load_own_sender_key_with_version_inner, load_peer_sender_key_inner,
     store_own_sender_key_with_version_inner, store_peer_sender_key_with_version_inner,
     SenderKeyState,
 };
@@ -446,6 +447,14 @@ pub(crate) fn get_sender_key_states_core(
     member_ids: &[String],
 ) -> Result<Vec<SenderKeyState>, String> {
     list_sender_key_states_inner(conn, user_id, member_ids)
+}
+
+pub(crate) fn delete_sender_keys_core(
+    conn: &Connection,
+    user_id: &str,
+    member_ids: &[String],
+) -> Result<usize, String> {
+    delete_sender_keys_inner(conn, user_id, member_ids)
 }
 
 pub(crate) struct PreparedSenderKeyDistribution {

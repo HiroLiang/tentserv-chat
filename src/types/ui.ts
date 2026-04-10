@@ -1,8 +1,11 @@
+import type { RoomStatus } from '@/types/chat.ts';
+
 export interface ChatGroup {
     id: string;
     type: 'direct' | 'group' | 'channel' | 'bot';
     name: string;
     avatarUrl?: string;
+    status?: RoomStatus;
     lastMessage?: string;
     lastMessageTime?: string;
     unreadCount?: number;

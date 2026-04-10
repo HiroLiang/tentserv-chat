@@ -42,7 +42,7 @@ describe("friendService", () => {
         ]);
         vi.mocked(friendApi.applyFriend).mockResolvedValue(undefined);
         vi.mocked(friendApi.acceptFriend).mockResolvedValue(undefined);
-        vi.mocked(friendApi.removeFriend).mockResolvedValue(undefined);
+        vi.mocked(friendApi.removeFriend).mockResolvedValue({});
         vi.mocked(friendApi.cancelSentRequest).mockResolvedValue(undefined);
         vi.mocked(friendApi.blockUser).mockResolvedValue(undefined);
         vi.mocked(friendApi.unblockUser).mockResolvedValue(undefined);
@@ -98,5 +98,21 @@ describe("friendService", () => {
         expect(friendApi.removeFriend).toHaveBeenCalledWith(14);
         expect(friendApi.blockUser).toHaveBeenCalledWith(601);
         expect(friendApi.unblockUser).toHaveBeenCalledWith(601);
+    });
+
+    it("returns deleted direct room metadata from unfriend", async () => {
+        vi.mocked(friendApi.removeFriend).mockResolvedValueOnce({
+            deleted_direct_room: {
+                room_id: 77,
+                member_ids: [10, 11],
+            },
+        });
+
+        const result = await friendService.unfriend(14);
+
+        expect(result.deleted_direct_room).toEqual({
+            room_id: 77,
+            member_ids: [10, 11],
+        });
     });
 });

@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { friendService } from "@/services/friendService.ts";
 import { chatRoomService } from "@/services/chatRoomService.ts";
+import { e2eeService } from "@/services/e2eeService.ts";
 import { FriendsPage } from "./FriendsPage.tsx";
 
 vi.mock("@/components/layout/Navbar.tsx", () => ({
@@ -37,6 +38,21 @@ vi.mock("@/services/chatRoomService.ts", () => ({
     chatRoomService: {
         createRoom: vi.fn(),
         initializeDirectRoomEncryption: vi.fn(),
+        markRoomDeleted: vi.fn(),
+    },
+}));
+
+vi.mock("@/services/e2eeService.ts", () => ({
+    e2eeService: {
+        deleteLocalSenderKeys: vi.fn(),
+    },
+}));
+
+vi.mock("@/utils/logger.ts", () => ({
+    logger: {
+        warn: vi.fn(),
+        error: vi.fn(),
+        info: vi.fn(),
     },
 }));
 
@@ -91,11 +107,17 @@ describe("FriendsPage", () => {
             { friendship_id: 3, user_id: 603, name: "Requester", avatar: "request.png", created_at: "2026-01-03" },
         ]);
         vi.mocked(friendService.acceptFriend).mockResolvedValue(undefined);
-        vi.mocked(friendService.rejectFriend).mockResolvedValue(undefined);
+        vi.mocked(friendService.rejectFriend).mockResolvedValue({});
         vi.mocked(friendService.cancelSentRequest).mockResolvedValue(undefined);
-        vi.mocked(friendService.unfriend).mockResolvedValue(undefined);
+        vi.mocked(friendService.unfriend).mockResolvedValue({
+            deleted_direct_room: {
+                room_id: 77,
+                member_ids: [10, 11],
+            },
+        });
         vi.mocked(friendService.blockUser).mockResolvedValue(undefined);
         vi.mocked(friendService.unblockUser).mockResolvedValue(undefined);
+        vi.mocked(e2eeService.deleteLocalSenderKeys).mockResolvedValue(undefined);
     });
 
     it("loads friends, requests, and blocked users on mount", async () => {
@@ -160,6 +182,9 @@ describe("FriendsPage", () => {
         await screen.findByText("Accepted");
         await user.click(screen.getByRole("button", { name: "Cancel" }));
         await user.click(screen.getByRole("button", { name: "Unfriend" }));
+        expect(screen.getByRole("alertdialog")).toHaveTextContent("Remove Friend");
+        await user.click(screen.getByRole("button", { name: "Remove" }));
+        await waitFor(() => expect(friendService.unfriend).toHaveBeenCalledWith(1));
         await user.click(screen.getAllByRole("button", { name: "Block" })[0]);
         await user.click(screen.getByRole("button", { name: "Requests (1)" }));
         await user.click(screen.getByRole("button", { name: "Block" }));
@@ -167,10 +192,24 @@ describe("FriendsPage", () => {
         await user.click(screen.getByRole("button", { name: "Unblock" }));
 
         expect(friendService.cancelSentRequest).toHaveBeenCalledWith(2);
-        expect(friendService.unfriend).toHaveBeenCalledWith(1);
+        expect(chatRoomService.markRoomDeleted).toHaveBeenCalledWith(77);
+        expect(e2eeService.deleteLocalSenderKeys).toHaveBeenCalledWith([10, 11]);
         expect(friendService.blockUser).toHaveBeenCalledWith(601);
         expect(friendService.blockUser).toHaveBeenCalledWith(603);
         expect(friendService.unblockUser).toHaveBeenCalledWith(604);
         await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(6));
+    });
+
+    it("does not unfriend when the confirmation dialog is cancelled", async () => {
+        const user = userEvent.setup();
+        renderPage();
+
+        await screen.findByText("Accepted");
+        await user.click(screen.getByRole("button", { name: "Unfriend" }));
+        await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+
+        expect(friendService.unfriend).not.toHaveBeenCalled();
+        expect(chatRoomService.markRoomDeleted).not.toHaveBeenCalled();
+        expect(e2eeService.deleteLocalSenderKeys).not.toHaveBeenCalled();
     });
 });

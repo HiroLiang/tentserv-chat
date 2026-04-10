@@ -221,6 +221,23 @@ pub(crate) fn list_sender_key_states_inner(
     Ok(out)
 }
 
+pub(crate) fn delete_sender_keys_inner(
+    conn: &Connection,
+    user_id: &str,
+    member_ids: &[String],
+) -> Result<usize, String> {
+    let mut deleted = 0;
+    for member_id in member_ids {
+        deleted += conn
+            .execute(
+                "DELETE FROM sender_keys WHERE user_id = ?1 AND member_id = ?2",
+                params![user_id, member_id],
+            )
+            .map_err(|e| format!("delete sender key ({member_id}) failed: {e}"))?;
+    }
+    Ok(deleted)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]

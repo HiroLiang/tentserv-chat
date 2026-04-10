@@ -156,6 +156,15 @@ export interface UserSearchResponse {
     friendship_status?: string;
 }
 
+export interface DeletedDirectRoomResponse {
+    room_id: number;
+    member_ids: number[];
+}
+
+export interface RemoveFriendResponse {
+    deleted_direct_room?: DeletedDirectRoomResponse;
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 export interface CreateRoomRequest {

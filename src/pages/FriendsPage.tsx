@@ -5,10 +5,13 @@ import { cn } from '@/lib/utils';
 import { chatRoomService } from '@/services/chatRoomService.ts';
 import type { FriendResponse, FriendRequestResponse } from '@/api/types.ts';
 import { AddFriendDialog } from '@/components/friends/AddFriendDialog.tsx';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog.tsx';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { env } from '@/config/env';
 import { friendService } from '@/services/friendService.ts';
+import { e2eeService } from '@/services/e2eeService.ts';
+import { logger } from '@/utils/logger.ts';
 
 type Tab = 'friends' | 'requests' | 'blocked';
 
@@ -27,6 +30,8 @@ export const FriendsPage = () => {
     const [searchQuery, setSearchQuery] = useState('');
 
     const [showAddDialog, setShowAddDialog] = useState(false);
+    const [unfriendTarget, setUnfriendTarget] = useState<FriendResponse | null>(null);
+    const [unfriendLoading, setUnfriendLoading] = useState(false);
     const [loadingUserId, setLoadingUserId] = useState<number | null>(null);
     const [messageError, setMessageError] = useState<string | null>(null);
 
@@ -110,9 +115,30 @@ export const FriendsPage = () => {
         await refreshLists();
     };
 
-    const handleUnfriend = async (friendshipId: number) => {
-        await friendService.unfriend(friendshipId);
-        await refreshLists();
+    const handleUnfriend = (friend: FriendResponse) => {
+        setUnfriendTarget(friend);
+    };
+
+    const handleConfirmUnfriend = async () => {
+        if (!unfriendTarget) return;
+
+        setUnfriendLoading(true);
+        try {
+            const response = await friendService.unfriend(unfriendTarget.friendship_id);
+            const deletedRoom = response.deleted_direct_room;
+            if (deletedRoom?.room_id) {
+                chatRoomService.markRoomDeleted(deletedRoom.room_id);
+            }
+            if (deletedRoom?.member_ids?.length) {
+                await e2eeService.deleteLocalSenderKeys(deletedRoom.member_ids).catch((err) => {
+                    logger.warn('Failed to delete local sender keys after unfriend', err);
+                });
+            }
+            await refreshLists();
+            setUnfriendTarget(null);
+        } finally {
+            setUnfriendLoading(false);
+        }
     };
 
     const handleBlock = async (userId: number) => {
@@ -238,7 +264,7 @@ export const FriendsPage = () => {
                                                         {loadingUserId === f.user_id ? '...' : 'Message'}
                                                     </button>
                                                     <button
-                                                        onClick={() => handleUnfriend(f.friendship_id)}
+                                                        onClick={() => handleUnfriend(f)}
                                                         className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground"
                                                     >
                                                         Unfriend
@@ -362,6 +388,28 @@ export const FriendsPage = () => {
                     }}
                 />
             )}
+
+            <ConfirmDialog
+                open={unfriendTarget !== null}
+                onOpenChange={(open) => {
+                    if (!open && !unfriendLoading) setUnfriendTarget(null);
+                }}
+                title="Remove Friend"
+                description="Are you sure you want to remove this friend?"
+                actions={[
+                    {
+                        label: 'Cancel',
+                        cancel: true,
+                        disabled: unfriendLoading,
+                    },
+                    {
+                        label: unfriendLoading ? 'Removing...' : 'Remove',
+                        variant: 'destructive',
+                        onClick: () => void handleConfirmUnfriend(),
+                        disabled: unfriendLoading,
+                    },
+                ]}
+            />
         </div>
     );
 };

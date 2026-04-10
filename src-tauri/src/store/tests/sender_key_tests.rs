@@ -4,8 +4,9 @@
 //! from the primary key.  Each test scenario follows the Given/When/Then pattern.
 
 use super::{
-    has_sender_key_inner, load_own_sender_key_inner, load_peer_sender_key_inner,
-    store_own_sender_key_with_version_inner, store_peer_sender_key_with_version_inner,
+    delete_sender_keys_inner, has_sender_key_inner, load_own_sender_key_inner,
+    load_peer_sender_key_inner, store_own_sender_key_with_version_inner,
+    store_peer_sender_key_with_version_inner,
 };
 use crate::store::db::init_schema;
 use rusqlite::Connection;
@@ -167,4 +168,33 @@ fn scenario_user_isolation() {
         load_own_sender_key_inner(&conn, &ZERO_KEY, "bob", "m_x").unwrap(),
         bob_key
     );
+}
+
+// ── Scenario 7: Targeted delete ───────────────────────────────────
+
+#[test]
+fn scenario_delete_sender_keys_scopes_by_user_and_member_ids() {
+    println!("Given: alice and bob each have sender keys, including overlapping member ids");
+    let (_dir, conn) = test_db();
+
+    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32], 0)
+        .unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &[0x02u8; 32], 0).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_keep", &[0x03u8; 32], 0).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "bob", "m_bob", &[0x04u8; 32], 0).unwrap();
+
+    println!("When: deleting alice sender keys for m_alice and m_bob");
+    let deleted = delete_sender_keys_inner(
+        &conn,
+        "alice",
+        &["m_alice".to_string(), "m_bob".to_string()],
+    )
+    .unwrap();
+
+    println!("Then: only alice's requested sender key rows are removed");
+    assert_eq!(deleted, 2);
+    assert!(!has_sender_key_inner(&conn, "alice", "m_alice").unwrap());
+    assert!(!has_sender_key_inner(&conn, "alice", "m_bob").unwrap());
+    assert!(has_sender_key_inner(&conn, "alice", "m_keep").unwrap());
+    assert!(has_sender_key_inner(&conn, "bob", "m_bob").unwrap());
 }

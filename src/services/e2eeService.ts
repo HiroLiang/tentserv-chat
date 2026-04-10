@@ -11,6 +11,7 @@ import {
     performX3dhReceive,
     hasSenderKey,
     getSenderKeyStates,
+    deleteSenderKeys,
     encryptWithSenderKey,
     decryptWithSenderKey,
     prepareSenderKeyDistribution,
@@ -333,6 +334,12 @@ class E2eeService {
         return new Map(
             states.map((state) => [Number(state.member_id), state]),
         );
+    }
+
+    async deleteLocalSenderKeys(memberIds: number[]): Promise<void> {
+        if (memberIds.length === 0) return;
+        const accountId = this.getCurrentAccountId();
+        await deleteSenderKeys(accountId, memberIds);
     }
 
     private async createSenderKeyRequestOnce(roomId: number, providerMemberId: number): Promise<boolean> {

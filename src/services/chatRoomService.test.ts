@@ -126,4 +126,62 @@ describe("chatRoomService.loadRooms latest message summaries", () => {
         expect(useChatStore.getState().rooms.direct[0].latest_message).toBe(LATEST_MESSAGE_FALLBACK);
         expect(useChatStore.getState().rooms.group[0].latest_message).toBe(LATEST_MESSAGE_FALLBACK);
     });
+
+    it("normalizes deleted rooms without decrypting or keeping the avatar", async () => {
+        vi.mocked(chatApi.getRooms).mockResolvedValue({
+            ...emptyRooms(),
+            direct: [
+                room({
+                    room_id: 11,
+                    status: "deleted",
+                    display_name: "Old Contact",
+                    avatar_url: "avatars/old.png",
+                    latest_message: "e2ee:v1:old",
+                    latest_message_sender_id: 101,
+                    unread_count: 9,
+                }),
+            ],
+        });
+
+        await chatRoomService.loadRooms();
+
+        expect(e2eeService.decryptMessage).not.toHaveBeenCalled();
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            status: "deleted",
+            display_name: "Deleted Contact",
+            avatar_url: undefined,
+            unread_count: 0,
+        });
+    });
+
+    it("marks an in-memory room and current room detail as deleted", () => {
+        useChatStore.getState().setRooms({
+            direct: [room({ room_id: 12, display_name: "Luna", avatar_url: "avatars/luna.png", unread_count: 4 })],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+        useChatStore.getState().setRoomDetail({
+            room_id: 12,
+            room_type: "direct",
+            name: "Luna",
+            avatar_url: "avatars/luna.png",
+            members: [],
+            messages: [],
+        });
+
+        chatRoomService.markRoomDeleted(12);
+
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            status: "deleted",
+            display_name: "Deleted Contact",
+            avatar_url: undefined,
+            unread_count: 0,
+        });
+        expect(useChatStore.getState().currentRoomDetail).toMatchObject({
+            status: "deleted",
+            name: "Deleted Contact",
+            avatar_url: undefined,
+        });
+    });
 });

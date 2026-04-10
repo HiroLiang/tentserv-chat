@@ -117,9 +117,10 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const pendingInvitation = useChatStore((s) => s.pendingInvitation);
     const directKeyStatus = useChatStore((s) => s.directKeyStatus[Number(chat.id)]);
-    const isDirectLocked = chat.type === 'direct' && directKeyStatus !== 'unlocked';
-    const inputDisabled = (chat.type === 'group' && pendingInvitation?.found === true) || isDirectLocked;
-    const directAvatarUrl = chat.type === 'direct' && chat.avatarUrl
+    const isDeleted = chat.status === 'deleted';
+    const isDirectLocked = chat.type === 'direct' && !isDeleted && directKeyStatus !== 'unlocked';
+    const inputDisabled = isDeleted || (chat.type === 'group' && pendingInvitation?.found === true) || isDirectLocked;
+    const directAvatarUrl = chat.type === 'direct' && !isDeleted && chat.avatarUrl
         ? `${env.API_BASE_URL}/static/${chat.avatarUrl}`
         : undefined;
 
@@ -131,7 +132,10 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             useChatStore.getState().setDirectKeyStatus(Number(chat.id), status);
         };
 
-        if (chat.type === 'group') {
+        if (isDeleted) {
+            useChatStore.getState().setPendingInvitation(null);
+            setDirectStatus('locked');
+        } else if (chat.type === 'group') {
             const roomId = Number(chat.id);
             void (async () => {
                 const invitation = await chatRoomService.loadMyRoomInvitation(roomId);
@@ -174,11 +178,11 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
         return () => {
             active = false;
         };
-    }, [chat.id, chat.type]);
+    }, [chat.id, chat.type, isDeleted]);
 
     // Subscribe to WS e2ee.direct_key_ready to auto-unlock when invitee completes handshake
     useEffect(() => {
-        if (chat.type !== 'direct') return;
+        if (chat.type !== 'direct' || isDeleted) return;
         const roomId = Number(chat.id);
         const handler = (data: unknown) => {
             const payload = data as { room_id?: number };
@@ -201,7 +205,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
         };
         wsService.on('e2ee.direct_key_ready', handler);
         return () => wsService.off('e2ee.direct_key_ready', handler);
-    }, [chat.id, chat.type]);
+    }, [chat.id, chat.type, isDeleted]);
 
     // Jump to the bottom instantly when switching chats
     useEffect(() => {
@@ -215,7 +219,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
 
     const send = () => {
         const text = input.trim();
-        if (!text) return;
+        if (!text || inputDisabled) return;
         onSendMessage(text);
         setInput('');
         if (textareaRef.current) {
@@ -254,7 +258,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     )}
                     <AvatarFallback className={cn(
                         'text-sm font-semibold',
-                        avatarBgClass[chat.type],
+                        isDeleted ? 'bg-zinc-300 text-zinc-600' : avatarBgClass[chat.type],
                     )}>
                         {chat.type === 'bot'
                             ? <Bot className="h-5 w-5"/>
@@ -276,7 +280,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     </div>
                     <p className="text-xs text-muted-foreground">
                         {chat.type === 'group' && `${chat.memberCount} members`}
-                        {chat.type === 'direct' && (chat.isOnline ? 'Online' : 'Offline')}
+                        {chat.type === 'direct' && (isDeleted ? 'Deleted' : (chat.isOnline ? 'Online' : 'Offline'))}
                         {chat.type === 'bot' && 'AI Assistant'}
                         {chat.type === 'channel' && 'Channel'}
                     </p>
@@ -297,7 +301,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             )}
 
             {/* Invitation Banner (DIRECT) */}
-            {chat.type === 'direct' && pendingInvitation?.found && pendingInvitation.role === 'invitee' && (
+            {chat.type === 'direct' && !isDeleted && pendingInvitation?.found && pendingInvitation.role === 'invitee' && (
                 <InvitationBanner
                     invitation={pendingInvitation}
                     onAccept={() => pendingInvitation.invitation_id !== undefined &&
@@ -318,7 +322,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             )}
 
             {/* Direct chat locked overlay */}
-            {chat.type === 'direct' && directKeyStatus === 'locked' && (
+            {chat.type === 'direct' && !isDeleted && directKeyStatus === 'locked' && (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-muted/30">
                     <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                         <Lock className="h-6 w-6 text-muted-foreground"/>
@@ -348,7 +352,9 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                         onChange={handleChange}
                         onKeyDown={handleKeyDown}
                         placeholder={
-                            isDirectLocked
+                            isDeleted
+                                ? 'This chat is no longer available.'
+                                : isDirectLocked
                                 ? 'Waiting for the other device to unlock...'
                                 : inputDisabled
                                     ? 'Accept the invitation to start chatting...'
@@ -372,7 +378,9 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     </button>
                 </div>
                 <p className="text-[11px] text-muted-foreground text-center mt-2">
-                    {isDirectLocked
+                    {isDeleted
+                        ? 'This chat is no longer available.'
+                        : isDirectLocked
                         ? 'Chat keys are not ready yet. Check the invitation and device status.'
                         : inputDisabled
                             ? 'You cannot send messages until the invitation is accepted'

@@ -3,6 +3,7 @@ import { e2eeApi } from "@/api/index.ts";
 import {
     bootstrapLocalE2eeKeys,
     consumeSenderKeyDistribution,
+    deleteSenderKeys,
     getSenderKeyStates,
     performX3dhSend,
     prepareSenderKeyDistribution,
@@ -41,6 +42,7 @@ vi.mock("@/bridge/e2ee.ts", () => ({
     decryptWithSenderKey: vi.fn(),
     prepareSenderKeyDistribution: vi.fn(),
     consumeSenderKeyDistribution: vi.fn(),
+    deleteSenderKeys: vi.fn(),
     generateSenderKey: vi.fn(),
     storeMemberSenderKey: vi.fn(),
     clearE2eeKeys: vi.fn(),
@@ -198,6 +200,7 @@ const resetMocks = () => {
     vi.mocked(getSenderKeyStates).mockResolvedValue([]);
     vi.mocked(prepareSenderKeyDistribution).mockResolvedValue(preparedSenderKeyDistribution);
     vi.mocked(consumeSenderKeyDistribution).mockResolvedValue({ status: "consumed" });
+    vi.mocked(deleteSenderKeys).mockResolvedValue(undefined);
     mockBootstrap();
 };
 
@@ -288,6 +291,26 @@ describe("e2eeService.performSend", () => {
         expect(bundle.one_time_pre_key).toBeUndefined();
         expect(bundle.otpk_key_id).toBeUndefined();
         expect(plaintext).toEqual(Array.from(new TextEncoder().encode("hello")));
+    });
+});
+
+describe("e2eeService.deleteLocalSenderKeys", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        resetStores();
+        resetMocks();
+    });
+
+    it("deletes sender keys under the current account namespace", async () => {
+        await e2eeService.deleteLocalSenderKeys([10, 11]);
+
+        expect(deleteSenderKeys).toHaveBeenCalledWith(42, [10, 11]);
+    });
+
+    it("skips Rust calls when no member ids are returned", async () => {
+        await e2eeService.deleteLocalSenderKeys([]);
+
+        expect(deleteSenderKeys).not.toHaveBeenCalled();
     });
 });
 

@@ -147,4 +147,28 @@ describe("ChatRoom input and avatar behavior", () => {
 
         expect(avatar).toHaveAttribute("src", "http://api.test/static/avatars/luna.png");
     });
+
+    it("renders a deleted direct room as unavailable and skips key initialization", () => {
+        const onSendMessage = vi.fn();
+        render(
+            <ChatRoom
+                chat={{ ...directChat, status: "deleted", name: "Deleted Contact" }}
+                messages={[]}
+                onSendMessage={onSendMessage}
+            />,
+        );
+
+        const input = screen.getByPlaceholderText("This chat is no longer available.");
+        expect(input).toBeDisabled();
+        expect(screen.queryByAltText("Deleted Contact avatar")).not.toBeInTheDocument();
+        expect(screen.getByText("Deleted")).toBeInTheDocument();
+
+        fireEvent.change(input, { target: { value: "Hello" } });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+
+        expect(onSendMessage).not.toHaveBeenCalled();
+        expect(chatRoomService.loadMyRoomInvitation).not.toHaveBeenCalled();
+        expect(e2eeService.resolveDirectKey).not.toHaveBeenCalled();
+        expect(chatRoomService.initializeDirectRoomEncryption).not.toHaveBeenCalled();
+    });
 });

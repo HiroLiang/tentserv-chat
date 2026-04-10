@@ -105,6 +105,15 @@ export const getSenderKeyStates = (
         memberIds: memberIds.map(toBridgeId),
     });
 
+export const deleteSenderKeys = (
+    accountId: BridgeId,
+    memberIds: BridgeId[],
+): Promise<void> =>
+    invoke('delete_sender_keys', {
+        accountId: toBridgeId(accountId),
+        memberIds: memberIds.map(toBridgeId),
+    });
+
 export const prepareSenderKeyDistribution = (
     accountId: BridgeId,
     ownMemberId: BridgeId,

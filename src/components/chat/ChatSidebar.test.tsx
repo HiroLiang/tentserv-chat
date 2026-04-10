@@ -57,4 +57,26 @@ describe("ChatSidebar avatars", () => {
         expect(screen.getByAltText("Mina Park avatar"))
             .toHaveAttribute("src", "http://api.test/static/avatars/mina.png");
     });
+
+    it("uses the deleted contact fallback without an online dot image", () => {
+        render(
+            <ChatSidebar
+                chatGroups={{
+                    ...groups,
+                    direct: [{
+                        ...groups.direct[0],
+                        status: "deleted",
+                        name: "Deleted Contact",
+                    }],
+                }}
+                selectedChatId={null}
+                onSelectChat={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByText("Deleted Contact")).toBeInTheDocument();
+        expect(screen.queryByAltText("Deleted Contact avatar")).not.toBeInTheDocument();
+    });
 });

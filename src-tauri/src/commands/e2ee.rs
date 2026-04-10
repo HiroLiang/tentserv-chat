@@ -19,10 +19,10 @@ use serde_with::serde_as;
 
 use crate::commands::core::{
     bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, consume_sender_key_distribution_core,
-    decrypt_with_sender_key_result_core, encrypt_with_sender_key_core, generate_identity_keys_core,
-    generate_sender_key_core, generate_signed_pre_key_core, get_identity_keys_core,
-    get_sender_key_states_core, get_signed_pre_key_core, has_identity_keys_core,
-    has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
+    decrypt_with_sender_key_result_core, delete_sender_keys_core, encrypt_with_sender_key_core,
+    generate_identity_keys_core, generate_sender_key_core, generate_signed_pre_key_core,
+    get_identity_keys_core, get_sender_key_states_core, get_signed_pre_key_core,
+    has_identity_keys_core, has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
     prepare_sender_key_distribution_core, replenish_otp_keys_core, store_member_sender_key_core,
     validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
     ConsumeSenderKeyDistributionResult, PreparedSenderKeyDistribution, SenderKeyDecryptResult,
@@ -272,6 +272,17 @@ pub fn get_sender_key_states(
             updated_at: state.updated_at,
         })
         .collect())
+}
+
+#[tauri::command]
+pub fn delete_sender_keys(
+    app: tauri::AppHandle,
+    account_id: String,
+    member_ids: Vec<String>,
+) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    delete_sender_keys_core(&conn, &account_id, &member_ids)?;
+    Ok(())
 }
 
 /// Store a peer's sender key received after X3DH decryption.

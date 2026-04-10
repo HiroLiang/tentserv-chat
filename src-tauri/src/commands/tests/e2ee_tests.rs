@@ -1,9 +1,10 @@
 use crate::commands::core::{
     bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, consume_sender_key_distribution_core,
-    encrypt_with_sender_key_core, generate_identity_keys_core, generate_sender_key_core,
-    generate_signed_pre_key_core, get_identity_keys_core, get_signed_pre_key_core,
-    has_identity_keys_core, has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
-    prepare_sender_key_distribution_core, replenish_otp_keys_core, store_member_sender_key_core,
+    delete_sender_keys_core, encrypt_with_sender_key_core, generate_identity_keys_core,
+    generate_sender_key_core, generate_signed_pre_key_core, get_auth_token_by_account_core,
+    get_identity_keys_core, get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
+    perform_x3dh_receive_core, perform_x3dh_send_core, prepare_sender_key_distribution_core,
+    replenish_otp_keys_core, save_auth_token_core, store_member_sender_key_core,
     validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
     ConsumeSenderKeyDistributionResult,
 };
@@ -839,6 +840,48 @@ fn sender_key_member_isolation() {
     clear_e2ee_keys_core(&conn, ALICE).unwrap();
     assert!(!has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
     assert!(!has_sender_key_core(&conn, ALICE, MEMBER_BOB).unwrap());
+}
+
+#[test]
+fn delete_sender_keys_only_removes_requested_account_member_rows() {
+    // Given identity, SPK, OTP, token, and sender keys exist for Alice
+    let (_dir, conn) = test_db();
+    setup_identity(&conn, ACCOUNT_ALICE);
+    generate_signed_pre_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, 1).unwrap();
+    replenish_otp_keys_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, 1).unwrap();
+    save_auth_token_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, "token-alice").unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, MEMBER_ALICE).unwrap();
+    store_member_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB, vec![0x22; 32]).unwrap();
+    store_member_sender_key_core(&conn, ACCOUNT_ALICE, "member-keep", vec![0x33; 32]).unwrap();
+
+    // And another account has a sender key with an overlapping member id
+    generate_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_BOB, MEMBER_BOB).unwrap();
+
+    // When deleting Alice's obsolete direct-room member sender keys
+    let deleted = delete_sender_keys_core(
+        &conn,
+        ACCOUNT_ALICE,
+        &[MEMBER_ALICE.to_string(), MEMBER_BOB.to_string()],
+    )
+    .unwrap();
+
+    // Then only those sender_keys rows are removed
+    assert_eq!(deleted, 2);
+    assert!(!has_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_ALICE).unwrap());
+    assert!(!has_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB).unwrap());
+    assert!(has_sender_key_core(&conn, ACCOUNT_ALICE, "member-keep").unwrap());
+    assert!(has_sender_key_core(&conn, ACCOUNT_BOB, MEMBER_BOB).unwrap());
+
+    // And non-sender-key E2EE/auth material remains intact
+    assert!(has_identity_keys_core(&conn, ACCOUNT_ALICE).unwrap());
+    assert!(validate_signed_pre_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, 1).unwrap());
+    assert!(
+        crate::store::key_store::load_otp_key_inner(&conn, &ZERO_KEY, ACCOUNT_ALICE, 0).is_ok()
+    );
+    assert_eq!(
+        get_auth_token_by_account_core(&conn, &ZERO_KEY, ACCOUNT_ALICE).unwrap(),
+        Some("token-alice".to_string())
+    );
 }
 
 #[test]
