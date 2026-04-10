@@ -88,6 +88,7 @@ describe("FriendsPage", () => {
             friends: [
                 { friendship_id: 1, user_id: 601, name: "Accepted", avatar: "accepted.png", status: "accepted", created_at: "2026-01-01" },
                 { friendship_id: 2, user_id: 602, name: "Pending", avatar: "pending.png", status: "pending", created_at: "2026-01-02" },
+                { friendship_id: 5, user_id: 605, name: "Blocked By Them", avatar: "blocked-by-them.png", status: "blocked", blocked_by: "them", created_at: "2026-01-05" },
             ],
             requests: [
                 { friendship_id: 3, user_id: 603, name: "Requester", avatar: "request.png", created_at: "2026-01-03" },
@@ -99,6 +100,7 @@ describe("FriendsPage", () => {
         vi.mocked(friendService.getFriendsTab).mockResolvedValue([
             { friendship_id: 1, user_id: 601, name: "Accepted", avatar: "accepted.png", status: "accepted", created_at: "2026-01-01" },
             { friendship_id: 2, user_id: 602, name: "Pending", avatar: "pending.png", status: "pending", created_at: "2026-01-02" },
+            { friendship_id: 5, user_id: 605, name: "Blocked By Them", avatar: "blocked-by-them.png", status: "blocked", blocked_by: "them", created_at: "2026-01-05" },
         ]);
         vi.mocked(friendService.getBlockedUsers).mockResolvedValue([
             { friendship_id: 4, user_id: 604, name: "Blocked", avatar: "blocked.png", status: "blocked", created_at: "2026-01-04" },
@@ -126,7 +128,7 @@ describe("FriendsPage", () => {
         await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(1));
         expect(await screen.findByRole("button", { name: "Message" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-        expect(screen.getByText("Friends (2)")).toBeInTheDocument();
+        expect(screen.getByText("Friends (3)")).toBeInTheDocument();
         expect(screen.getByText("Requests (1)")).toBeInTheDocument();
         expect(screen.getByText("Blocked (1)")).toBeInTheDocument();
     });
@@ -140,7 +142,7 @@ describe("FriendsPage", () => {
         expect(await screen.findByText("Requester")).toBeInTheDocument();
         expect(friendService.getFriendRequests).toHaveBeenCalledTimes(1);
 
-        await user.click(screen.getByRole("button", { name: "Friends (2)" }));
+        await user.click(screen.getByRole("button", { name: "Friends (3)" }));
         expect(friendService.getFriendsTab).toHaveBeenCalledTimes(1);
 
         await user.click(screen.getByRole("button", { name: "Blocked (1)" }));
@@ -159,6 +161,19 @@ describe("FriendsPage", () => {
         await user.click(screen.getByRole("button", { name: "Close Dialog" }));
 
         await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(2));
+    });
+
+    it("renders incoming blocked friends as readonly rows", async () => {
+        renderPage();
+
+        const row = (await screen.findByText("Blocked By Them")).closest(".flex.items-center");
+        expect(row).not.toBeNull();
+
+        const blockedButton = within(row as HTMLElement).getByRole("button", { name: "Blocked" });
+        expect(blockedButton).toBeDisabled();
+        expect(within(row as HTMLElement).queryByRole("button", { name: "Message" })).not.toBeInTheDocument();
+        expect(within(row as HTMLElement).queryByRole("button", { name: "Unfriend" })).not.toBeInTheDocument();
+        expect(within(row as HTMLElement).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     });
 
     it("accepts and rejects incoming requests, then refreshes all lists", async () => {

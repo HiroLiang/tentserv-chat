@@ -4,7 +4,7 @@ import { ChatRoom } from "./ChatRoom.tsx";
 import { chatRoomService } from "@/services/chatRoomService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
-import type { ChatGroup } from "@/types/ui.ts";
+import type { ChatGroup, ChatMessage } from "@/types/ui.ts";
 
 const envMock = vi.hoisted(() => ({
     API_BASE_URL: "http://api.test",
@@ -78,6 +78,12 @@ const directChat: ChatGroup = {
     name: "Luna Stone",
     avatarUrl: "avatars/luna.png",
     isOnline: true,
+};
+
+const groupChat: ChatGroup = {
+    id: "9",
+    type: "group",
+    name: "Crew",
 };
 
 const resetChatStore = () => {
@@ -170,5 +176,47 @@ describe("ChatRoom input and avatar behavior", () => {
         expect(chatRoomService.loadMyRoomInvitation).not.toHaveBeenCalled();
         expect(e2eeService.resolveDirectKey).not.toHaveBeenCalled();
         expect(chatRoomService.initializeDirectRoomEncryption).not.toHaveBeenCalled();
+    });
+
+    it("renders a blocked-by-peer direct room as readonly without key initialization", () => {
+        const onSendMessage = vi.fn();
+        render(
+            <ChatRoom
+                chat={{ ...directChat, blockedByPeer: true }}
+                messages={[]}
+                onSendMessage={onSendMessage}
+            />,
+        );
+
+        const input = screen.getByPlaceholderText("You have been blocked by this user.");
+        expect(input).toBeDisabled();
+        expect(screen.getAllByText("You have been blocked by this user.").length).toBeGreaterThan(0);
+        expect(screen.queryByText("Chat is locked")).not.toBeInTheDocument();
+
+        fireEvent.change(input, { target: { value: "Hello" } });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+
+        expect(onSendMessage).not.toHaveBeenCalled();
+        expect(chatRoomService.loadMyRoomInvitation).not.toHaveBeenCalled();
+        expect(e2eeService.resolveDirectKey).not.toHaveBeenCalled();
+        expect(chatRoomService.initializeDirectRoomEncryption).not.toHaveBeenCalled();
+    });
+
+    it("uses the sender avatar URL for incoming message avatars", () => {
+        const messages: ChatMessage[] = [{
+            id: "1",
+            chatId: "9",
+            senderId: "101",
+            senderName: "Mina Park",
+            senderAvatarUrl: "avatars/mina.png",
+            content: "Hello",
+            timestamp: "10:00",
+            isMe: false,
+        }];
+
+        render(<ChatRoom chat={groupChat} messages={messages} onSendMessage={vi.fn()} />);
+
+        const avatar = screen.getByAltText("Mina Park avatar");
+        expect(avatar).toHaveAttribute("src", "http://api.test/static/avatars/mina.png");
     });
 });

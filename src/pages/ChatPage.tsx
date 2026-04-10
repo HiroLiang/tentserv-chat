@@ -90,6 +90,7 @@ function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
         unreadCount: isDeleted ? 0 : room.unread_count,
         lastMessage: lastMsg?.content ?? room.latest_message,
         lastMessageTime: lastMsg ? formatTime(lastMsg.created_at) : undefined,
+        blockedByPeer: room.blocked_by_peer === true,
     };
 }
 
@@ -101,6 +102,7 @@ function messageToUi(msg: Message, currentParticipantId: number | null, members:
         chatId: '',
         senderId: String(msg.sender_id),
         senderName: senderMember?.display_name ?? '',
+        senderAvatarUrl: senderMember?.avatar_url,
         content: msg.content,
         timestamp: formatTime(msg.created_at),
         isMe: myMember !== undefined && msg.sender_id === myMember.member_id,

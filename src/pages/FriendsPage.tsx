@@ -251,7 +251,14 @@ export const FriendsPage = () => {
                                                 <p className="font-medium text-sm truncate">{f.name}</p>
                                                 <p className="text-xs text-muted-foreground capitalize">{f.status}</p>
                                             </div>
-                                            {f.status === 'accepted' ? (
+                                            {f.status === 'blocked' && f.blocked_by === 'them' ? (
+                                                <button
+                                                    disabled
+                                                    className="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground opacity-60 cursor-not-allowed"
+                                                >
+                                                    Blocked
+                                                </button>
+                                            ) : f.status === 'accepted' ? (
                                                 <div className="flex items-center gap-2">
                                                     <button
                                                         onClick={() => handleOpenDirect(f)}

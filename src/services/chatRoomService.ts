@@ -51,6 +51,14 @@ class ChatRoomService {
         ].some(room => room.room_id === roomId && room.status === 'deleted');
     }
 
+    private isDirectRoomBlockedByPeer(roomId: number): boolean {
+        const store = useChatStore.getState();
+        if (store.currentRoomDetail?.room_id === roomId && store.currentRoomDetail.blocked_by_peer) {
+            return true;
+        }
+        return store.rooms.direct.some(room => room.room_id === roomId && room.blocked_by_peer);
+    }
+
     private async ensureRoomDetail(roomId: number, roomDetail?: RoomDetail, persist = true): Promise<RoomDetail> {
         if (roomDetail) {
             if (persist) {
@@ -172,6 +180,9 @@ class ChatRoomService {
         if (this.isRoomDeleted(roomId)) {
             throw new Error('This chat is no longer available.');
         }
+        if (this.isDirectRoomBlockedByPeer(roomId)) {
+            throw new Error('You have been blocked by this user.');
+        }
 
         let finalContent = content;
         if (type === 'text') {
@@ -251,6 +262,10 @@ class ChatRoomService {
         options?: { roomDetail?: RoomDetail; currentMemberId?: number },
     ): Promise<void> {
         if (this.isRoomDeleted(roomId) || options?.roomDetail?.status === 'deleted') {
+            useChatStore.getState().setDirectKeyStatus(roomId, 'locked');
+            return;
+        }
+        if (this.isDirectRoomBlockedByPeer(roomId) || options?.roomDetail?.blocked_by_peer) {
             useChatStore.getState().setDirectKeyStatus(roomId, 'locked');
             return;
         }

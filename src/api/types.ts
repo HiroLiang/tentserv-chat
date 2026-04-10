@@ -128,6 +128,7 @@ export interface FriendResponse {
     name: string;
     avatar: string;
     status: string;
+    blocked_by?: 'me' | 'them';
     created_at: string;
 }
 
@@ -154,6 +155,7 @@ export interface UserSearchResponse {
     account: string;
     public_id: string;
     friendship_status?: string;
+    blocked_by?: 'me' | 'them';
 }
 
 export interface DeletedDirectRoomResponse {

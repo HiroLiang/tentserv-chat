@@ -11,6 +11,7 @@ export interface ChatGroup {
     unreadCount?: number;
     memberCount?: number;
     isOnline?: boolean;
+    blockedByPeer?: boolean;
 }
 
 export interface ChatMessage {
@@ -18,6 +19,7 @@ export interface ChatMessage {
     chatId: string;
     senderId: string;
     senderName: string;
+    senderAvatarUrl?: string;
     content: string;
     timestamp: string;
     isMe: boolean;

@@ -68,13 +68,22 @@ function MessageAvatar({ message, chat }: { message: ChatMessage; chat: ChatGrou
     const colorClass = chat.type === 'group'
         ? getSenderColor(message.senderId)
         : avatarBgClass[chat.type];
+    const avatarUrl = message.senderAvatarUrl
+        ? `${env.API_BASE_URL}/static/${message.senderAvatarUrl}`
+        : undefined;
     return (
-        <div className={cn(
-            'h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold self-end',
-            colorClass,
-        )}>
-            {getInitials(message.senderName)}
-        </div>
+        <Avatar className="h-8 w-8 flex-shrink-0 self-end">
+            {avatarUrl && (
+                <AvatarImage
+                    src={avatarUrl}
+                    alt={`${message.senderName} avatar`}
+                    className="object-cover"
+                />
+            )}
+            <AvatarFallback className={cn('text-xs font-semibold', colorClass)}>
+                {getInitials(message.senderName)}
+            </AvatarFallback>
+        </Avatar>
     );
 }
 
@@ -118,8 +127,9 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
     const pendingInvitation = useChatStore((s) => s.pendingInvitation);
     const directKeyStatus = useChatStore((s) => s.directKeyStatus[Number(chat.id)]);
     const isDeleted = chat.status === 'deleted';
-    const isDirectLocked = chat.type === 'direct' && !isDeleted && directKeyStatus !== 'unlocked';
-    const inputDisabled = isDeleted || (chat.type === 'group' && pendingInvitation?.found === true) || isDirectLocked;
+    const isBlockedByPeer = chat.type === 'direct' && !isDeleted && chat.blockedByPeer === true;
+    const isDirectLocked = chat.type === 'direct' && !isDeleted && !isBlockedByPeer && directKeyStatus !== 'unlocked';
+    const inputDisabled = isDeleted || isBlockedByPeer || (chat.type === 'group' && pendingInvitation?.found === true) || isDirectLocked;
     const directAvatarUrl = chat.type === 'direct' && !isDeleted && chat.avatarUrl
         ? `${env.API_BASE_URL}/static/${chat.avatarUrl}`
         : undefined;
@@ -132,7 +142,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             useChatStore.getState().setDirectKeyStatus(Number(chat.id), status);
         };
 
-        if (isDeleted) {
+        if (isDeleted || isBlockedByPeer) {
             useChatStore.getState().setPendingInvitation(null);
             setDirectStatus('locked');
         } else if (chat.type === 'group') {
@@ -178,11 +188,11 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
         return () => {
             active = false;
         };
-    }, [chat.id, chat.type, isDeleted]);
+    }, [chat.id, chat.type, isDeleted, isBlockedByPeer]);
 
     // Subscribe to WS e2ee.direct_key_ready to auto-unlock when invitee completes handshake
     useEffect(() => {
-        if (chat.type !== 'direct' || isDeleted) return;
+        if (chat.type !== 'direct' || isDeleted || isBlockedByPeer) return;
         const roomId = Number(chat.id);
         const handler = (data: unknown) => {
             const payload = data as { room_id?: number };
@@ -205,7 +215,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
         };
         wsService.on('e2ee.direct_key_ready', handler);
         return () => wsService.off('e2ee.direct_key_ready', handler);
-    }, [chat.id, chat.type, isDeleted]);
+    }, [chat.id, chat.type, isDeleted, isBlockedByPeer]);
 
     // Jump to the bottom instantly when switching chats
     useEffect(() => {
@@ -301,7 +311,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             )}
 
             {/* Invitation Banner (DIRECT) */}
-            {chat.type === 'direct' && !isDeleted && pendingInvitation?.found && pendingInvitation.role === 'invitee' && (
+            {chat.type === 'direct' && !isDeleted && !isBlockedByPeer && pendingInvitation?.found && pendingInvitation.role === 'invitee' && (
                 <InvitationBanner
                     invitation={pendingInvitation}
                     onAccept={() => pendingInvitation.invitation_id !== undefined &&
@@ -321,8 +331,14 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                 />
             )}
 
+            {isBlockedByPeer && (
+                <div className="px-4 py-2 border-b border-border bg-destructive/10 text-destructive text-sm">
+                    You have been blocked by this user.
+                </div>
+            )}
+
             {/* Direct chat locked overlay */}
-            {chat.type === 'direct' && !isDeleted && directKeyStatus === 'locked' && (
+            {chat.type === 'direct' && !isDeleted && !isBlockedByPeer && directKeyStatus === 'locked' && (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-muted/30">
                     <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                         <Lock className="h-6 w-6 text-muted-foreground"/>
@@ -354,6 +370,8 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                         placeholder={
                             isDeleted
                                 ? 'This chat is no longer available.'
+                                : isBlockedByPeer
+                                ? 'You have been blocked by this user.'
                                 : isDirectLocked
                                 ? 'Waiting for the other device to unlock...'
                                 : inputDisabled
@@ -380,6 +398,8 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                 <p className="text-[11px] text-muted-foreground text-center mt-2">
                     {isDeleted
                         ? 'This chat is no longer available.'
+                        : isBlockedByPeer
+                        ? 'You have been blocked by this user.'
                         : isDirectLocked
                         ? 'Chat keys are not ready yet. Check the invitation and device status.'
                         : inputDisabled
