@@ -16,7 +16,8 @@ export interface AuthRegisterRequest {
 }
 
 export interface AuthRegisterResponse {
-    message?: string;
+    verification_token: string;
+    verification_expires_at_ms: number;
 }
 
 export interface AuthLogoutResponse {
@@ -24,7 +25,20 @@ export interface AuthLogoutResponse {
 }
 
 export interface AuthVerifyEmailResponse {
-    message?: string;
+}
+
+export interface AuthVerifyEmailRequest {
+    token: string;
+    code: string;
+}
+
+export interface AuthResendVerifyEmailRequest {
+    token: string;
+}
+
+export interface AuthResendVerifyEmailResponse {
+    verification_token: string;
+    verification_expires_at_ms: number;
 }
 
 export interface AuthUserProfileItem {
@@ -146,6 +160,12 @@ export interface SentFriendRequestResponse {
     name: string;
     avatar: string;
     created_at: string;
+}
+
+export interface FriendsOverviewResponse {
+    friends: FriendResponse[];
+    requests: FriendRequestResponse[];
+    blocked: FriendResponse[];
 }
 
 export interface UserSearchResponse {

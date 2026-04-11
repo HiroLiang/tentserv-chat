@@ -4,6 +4,7 @@ import { useRoutes } from "react-router-dom";
 import { HomePage } from "../pages/HomePage.tsx";
 import { LoginPage } from "@/pages/LoginPage.tsx";
 import { RegisterPage } from "@/pages/RegisterPage.tsx";
+import { RegisterVerifiedPage } from "@/pages/RegisterVerifiedPage.tsx";
 import { ChatAvailabilityRoute } from "@/routes/ChatAvailabilityRoute.tsx";
 import { ProtectedRoute } from "@/routes/ProtectedRoute.tsx";
 import { AdminRoute } from "@/routes/AdminRoute.tsx";
@@ -38,6 +39,7 @@ const Routes = () => {
         { path: "/", element: <HomePage/> },
         { path: "/login", element: <LoginPage/> },
         { path: "/register", element: <RegisterPage/> },
+        { path: "/register/verified", element: <RegisterVerifiedPage/> },
 
         {
             element: <ProtectedRoute/>,

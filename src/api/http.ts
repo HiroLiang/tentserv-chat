@@ -88,7 +88,7 @@ http.interceptors.response.use(
             const errorBody = error.response.data as ErrorResponse;
             const err = Object.assign(
                 new Error(errorBody.message ?? 'Request failed'),
-                { code: errorBody.code }
+                { code: errorBody.code, details: errorBody.details }
             );
             return Promise.reject(err);
         }

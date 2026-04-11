@@ -20,6 +20,12 @@ export interface AuthMessageResponse {
     message?: string;
 }
 
+export interface PendingVerificationState {
+    email: string;
+    verificationToken: string;
+    verificationExpiresAtMs: number;
+}
+
 export interface CurrentUserResponse {
     id: number;
     accountId: number;

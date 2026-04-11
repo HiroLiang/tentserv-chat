@@ -4,8 +4,11 @@ import type {
     AuthLoginResponse,
     AuthLogoutResponse,
     AuthProfileResponse,
+    AuthResendVerifyEmailRequest,
+    AuthResendVerifyEmailResponse,
     AuthRegisterRequest,
     AuthRegisterResponse,
+    AuthVerifyEmailRequest,
     AuthVerifyEmailResponse,
 } from "@/api/types.ts";
 
@@ -22,8 +25,9 @@ export const authApi = {
     register: (payload: AuthRegisterRequest) =>
         post<AuthRegisterResponse, AuthRegisterRequest>('/api/auth/register', payload),
 
-    verifyEmail: (token: string) =>
-        get<AuthVerifyEmailResponse>('/api/auth/verify-email', {
-            params: { token },
-        }),
+    verifyEmail: (payload: AuthVerifyEmailRequest) =>
+        post<AuthVerifyEmailResponse, AuthVerifyEmailRequest>('/api/auth/verify-email', payload),
+
+    resendVerifyEmail: (payload: AuthResendVerifyEmailRequest) =>
+        post<AuthResendVerifyEmailResponse, AuthResendVerifyEmailRequest>('/api/auth/resend-verify-email', payload),
 };

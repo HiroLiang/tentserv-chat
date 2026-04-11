@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -131,6 +132,18 @@ describe("FriendsPage", () => {
         expect(screen.getByText("Friends (3)")).toBeInTheDocument();
         expect(screen.getByText("Requests (1)")).toBeInTheDocument();
         expect(screen.getByText("Blocked (1)")).toBeInTheDocument();
+    });
+
+    it("deduplicates the initial refresh under StrictMode", async () => {
+        render(
+            <StrictMode>
+                <MemoryRouter>
+                    <FriendsPage />
+                </MemoryRouter>
+            </StrictMode>,
+        );
+
+        await waitFor(() => expect(friendService.refreshFriendsPage).toHaveBeenCalledTimes(1));
     });
 
     it("refreshes the selected tab when switching tabs", async () => {

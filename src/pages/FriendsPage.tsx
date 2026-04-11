@@ -16,6 +16,8 @@ import { logger } from '@/utils/logger.ts';
 type Tab = 'friends' | 'requests' | 'blocked';
 type UserActionTarget = Pick<FriendResponse, 'user_id' | 'name'>;
 
+let initialFriendsPageRefresh: Promise<void> | null = null;
+
 function getInitials(name: string) {
     return name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
 }
@@ -64,7 +66,14 @@ export const FriendsPage = () => {
 
     useEffect(() => {
         setLoading(true);
-        refreshLists().finally(() => setLoading(false));
+        if (!initialFriendsPageRefresh) {
+            initialFriendsPageRefresh = refreshLists()
+                .finally(() => {
+                    initialFriendsPageRefresh = null;
+                });
+        }
+
+        initialFriendsPageRefresh.finally(() => setLoading(false));
     }, []);
 
     const handleOpenDirect = async (friend: FriendResponse) => {

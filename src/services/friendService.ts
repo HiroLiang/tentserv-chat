@@ -2,12 +2,15 @@ import { friendApi } from "@/api/friend.ts";
 import type {
     FriendRequestResponse,
     FriendResponse,
+    FriendsOverviewResponse,
     RemoveFriendResponse,
     UserSearchResponse,
 } from "@/api/types.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 
 class FriendService {
+    private refreshFriendsPageRequest: Promise<FriendsOverviewResponse> | null = null;
+
     async getFriendsTab(): Promise<FriendResponse[]> {
         return friendApi.getFriends();
     }
@@ -21,12 +24,18 @@ class FriendService {
     }
 
     async refreshFriendsPage(): Promise<{ friends: FriendResponse[]; requests: FriendRequestResponse[]; blocked: FriendResponse[] }> {
-        const [friends, requests, blocked] = await Promise.all([
-            this.getFriendsTab(),
-            this.getFriendRequests(),
-            this.getBlockedUsers(),
-        ]);
-        return { friends, requests, blocked };
+        if (!this.refreshFriendsPageRequest) {
+            this.refreshFriendsPageRequest = friendApi.getFriendsOverview()
+                .finally(() => {
+                    this.refreshFriendsPageRequest = null;
+                });
+        }
+        const overview = await this.refreshFriendsPageRequest;
+        return {
+            friends: overview.friends,
+            requests: overview.requests,
+            blocked: overview.blocked,
+        };
     }
 
     async searchUsersByName(name: string): Promise<UserSearchResponse[]> {

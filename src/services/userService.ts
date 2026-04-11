@@ -1,5 +1,11 @@
 import { saveAuthToken, getAuthToken, clearAuthToken } from "@/bridge/auth.ts";
 import { authApi, userApi } from "@/api/index.ts";
+import type {
+    AuthRegisterResponse,
+    AuthResendVerifyEmailResponse,
+    AuthVerifyEmailRequest,
+    AuthVerifyEmailResponse,
+} from "@/api/types.ts";
 import { wsService } from "./wsService.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
@@ -75,13 +81,21 @@ class UserService {
         }
     }
 
-    async register(payload: UserRegisterRequest): Promise<AuthMessageResponse> {
+    async register(payload: UserRegisterRequest): Promise<AuthRegisterResponse> {
         return authApi.register({
             account: payload.account!,
             email: payload.email,
             name: payload.name,
             password: payload.password,
         });
+    }
+
+    async verifyEmail(payload: AuthVerifyEmailRequest): Promise<AuthVerifyEmailResponse> {
+        return authApi.verifyEmail(payload);
+    }
+
+    async resendVerifyEmail(token: string): Promise<AuthResendVerifyEmailResponse> {
+        return authApi.resendVerifyEmail({ token });
     }
 
     // [EN] Logout: call API, disconnect WebSocket, clear keyring token, reset chat and user stores.

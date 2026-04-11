@@ -1,8 +1,16 @@
 import { get, post, del } from '@/api/http.ts';
-import type { FriendResponse, FriendRequestResponse, RemoveFriendResponse, SentFriendRequestResponse, UserSearchResponse } from '@/api/types.ts';
+import type {
+    FriendResponse,
+    FriendRequestResponse,
+    FriendsOverviewResponse,
+    RemoveFriendResponse,
+    SentFriendRequestResponse,
+    UserSearchResponse,
+} from '@/api/types.ts';
 
 export const friendApi = {
     getFriends: () => get<FriendResponse[]>('/api/user/friends'),
+    getFriendsOverview: () => get<FriendsOverviewResponse>('/api/user/friends/overview'),
     getBlockedUsers: () => get<FriendResponse[]>('/api/user/block'),
     getFriendRequests: () => get<FriendRequestResponse[]>('/api/user/friends/requests'),
     getSentRequests: () => get<SentFriendRequestResponse[]>('/api/user/friends/sent'),

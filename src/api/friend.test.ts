@@ -16,16 +16,18 @@ describe("friendApi", () => {
         vi.mocked(del).mockResolvedValue({});
     });
 
-    it("requests friends, requests, and sent requests from the expected paths", async () => {
+    it("requests friendship list endpoints from the expected paths", async () => {
         await friendApi.getFriends();
+        await friendApi.getFriendsOverview();
         await friendApi.getBlockedUsers();
         await friendApi.getFriendRequests();
         await friendApi.getSentRequests();
 
         expect(get).toHaveBeenNthCalledWith(1, "/api/user/friends");
-        expect(get).toHaveBeenNthCalledWith(2, "/api/user/block");
-        expect(get).toHaveBeenNthCalledWith(3, "/api/user/friends/requests");
-        expect(get).toHaveBeenNthCalledWith(4, "/api/user/friends/sent");
+        expect(get).toHaveBeenNthCalledWith(2, "/api/user/friends/overview");
+        expect(get).toHaveBeenNthCalledWith(3, "/api/user/block");
+        expect(get).toHaveBeenNthCalledWith(4, "/api/user/friends/requests");
+        expect(get).toHaveBeenNthCalledWith(5, "/api/user/friends/sent");
     });
 
     it("posts apply and accept payloads with the expected wire shape", async () => {

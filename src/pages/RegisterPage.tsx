@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input.tsx";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { userService } from "@/services/userService.ts";
+import { VerificationCodeDialog } from "@/components/auth/VerificationCodeDialog.tsx";
+import type { PendingVerificationState } from "@/types/user.ts";
 
 export const RegisterPage = () => {
     const navigate = useNavigate();
@@ -15,6 +17,7 @@ export const RegisterPage = () => {
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
+    const [pendingVerification, setPendingVerification] = useState<PendingVerificationState | null>(null);
 
     const handleSubmit = async (e: SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -23,8 +26,12 @@ export const RegisterPage = () => {
 
         try {
             const response = await userService.register({ account, email, name, password });
-            toast.success(response.message ?? "Account created successfully");
-            navigate("/login");
+            toast.success("Verification code sent to your email.");
+            setPendingVerification({
+                email,
+                verificationToken: response.verification_token,
+                verificationExpiresAtMs: response.verification_expires_at_ms,
+            });
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Registration failed');
         } finally {
@@ -153,6 +160,15 @@ export const RegisterPage = () => {
                     </div>
                 </div>
             </div>
+            <VerificationCodeDialog
+                session={pendingVerification}
+                onSessionChange={setPendingVerification}
+                onVerified={() => {
+                    setPendingVerification(null);
+                    navigate("/register/verified", { replace: true });
+                }}
+                onFailed={() => setPendingVerification(null)}
+            />
         </div>
     );
 }

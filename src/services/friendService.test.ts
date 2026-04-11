@@ -6,6 +6,7 @@ import { friendService } from "./friendService.ts";
 vi.mock("@/api/friend.ts", () => ({
     friendApi: {
         getFriends: vi.fn(),
+        getFriendsOverview: vi.fn(),
         getBlockedUsers: vi.fn(),
         getFriendRequests: vi.fn(),
         searchUsers: vi.fn(),
@@ -30,6 +31,18 @@ describe("friendService", () => {
             { friendship_id: 1, user_id: 601, name: "Accepted", avatar: "accepted.png", status: "accepted", created_at: "2026-01-01" },
             { friendship_id: 2, user_id: 602, name: "Pending", avatar: "pending.png", status: "pending", created_at: "2026-01-02" },
         ]);
+        vi.mocked(friendApi.getFriendsOverview).mockResolvedValue({
+            friends: [
+                { friendship_id: 1, user_id: 601, name: "Accepted", avatar: "accepted.png", status: "accepted", created_at: "2026-01-01" },
+                { friendship_id: 2, user_id: 602, name: "Pending", avatar: "pending.png", status: "pending", created_at: "2026-01-02" },
+            ],
+            requests: [
+                { friendship_id: 3, user_id: 603, name: "Request", avatar: "request.png", created_at: "2026-01-03" },
+            ],
+            blocked: [
+                { friendship_id: 4, user_id: 604, name: "Blocked", avatar: "blocked.png", status: "blocked", created_at: "2026-01-04" },
+            ],
+        });
         vi.mocked(friendApi.getBlockedUsers).mockResolvedValue([
             { friendship_id: 4, user_id: 604, name: "Blocked", avatar: "blocked.png", status: "blocked", created_at: "2026-01-04" },
         ]);
@@ -71,6 +84,7 @@ describe("friendService", () => {
         expect(result.friends).toHaveLength(2);
         expect(result.requests).toHaveLength(1);
         expect(result.blocked).toHaveLength(1);
+        expect(friendApi.getFriendsOverview).toHaveBeenCalledTimes(1);
     });
 
     it("filters the current user out of search results", async () => {
