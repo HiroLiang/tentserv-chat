@@ -4,6 +4,11 @@ import { cn } from "@/lib/utils.ts";
 import { userService } from "@/services/userService.ts";
 import { toast } from "sonner";
 import type { PendingVerificationState } from "@/types/user.ts";
+import {
+    formatVerificationRemaining,
+    getVerificationRemainingMs,
+    warnOnSuspiciousVerificationExpiry,
+} from "@/utils/verificationExpiry.ts";
 
 interface VerificationCodeDialogProps {
     session: PendingVerificationState | null;
@@ -16,11 +21,12 @@ function emptyDigits(): string[] {
     return ["", "", "", "", "", ""];
 }
 
-function formatRemaining(remainingMs: number) {
-    const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+function sanitizeDigit(rawValue: string) {
+    return rawValue.replace(/\D/g, "").slice(-1);
+}
+
+function pastedDigits(text: string) {
+    return text.replace(/\D/g, "").slice(0, 6).split("");
 }
 
 export const VerificationCodeDialog = ({
@@ -39,8 +45,18 @@ export const VerificationCodeDialog = ({
 
     const open = session !== null;
     const verificationCode = digits.join("");
-    const remainingMs = Math.max(0, (session?.verificationExpiresAtMs ?? 0) - now);
+    const remainingMs = getVerificationRemainingMs(session?.verificationExpiresAtMs ?? 0, now);
     const canResend = open && remainingMs === 0 && !isSubmitting && !isResending;
+    const remainingLabel = formatVerificationRemaining(remainingMs);
+
+    const focusInput = (index: number) => {
+        window.setTimeout(() => inputRefs.current[index]?.focus(), 0);
+    };
+
+    const clearErrorState = () => {
+        setHasInputError(false);
+        setErrorMessage("");
+    };
 
     useEffect(() => {
         if (!open) {
@@ -55,16 +71,22 @@ export const VerificationCodeDialog = ({
     useEffect(() => {
         if (!open) {
             setDigits(emptyDigits());
-            setHasInputError(false);
-            setErrorMessage("");
+            clearErrorState();
             return;
         }
 
         setDigits(emptyDigits());
-        setHasInputError(false);
-        setErrorMessage("");
-        window.setTimeout(() => inputRefs.current[0]?.focus(), 0);
+        clearErrorState();
+        focusInput(0);
     }, [open, session?.verificationToken]);
+
+    useEffect(() => {
+        if (!open || !session) {
+            return;
+        }
+
+        warnOnSuspiciousVerificationExpiry(session.verificationExpiresAtMs, Date.now());
+    }, [open, session?.verificationExpiresAtMs, session?.verificationToken]);
 
     useEffect(() => {
         if (!open || verificationCode.length !== 6 || digits.some((digit) => digit === "") || isSubmitting || !session) {
@@ -83,7 +105,7 @@ export const VerificationCodeDialog = ({
                 const remainingAttempts = Number(err?.details?.remaining_attempts ?? 0);
                 setHasInputError(true);
                 setDigits(emptyDigits());
-                window.setTimeout(() => inputRefs.current[0]?.focus(), 0);
+                focusInput(0);
 
                 if (err?.code === "VERIFY_CODE_INVALID") {
                     setErrorMessage(`${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`);
@@ -108,9 +130,8 @@ export const VerificationCodeDialog = ({
     }
 
     const updateDigit = (index: number, rawValue: string) => {
-        const nextValue = rawValue.replace(/\D/g, "").slice(-1);
-        setHasInputError(false);
-        setErrorMessage("");
+        const nextValue = sanitizeDigit(rawValue);
+        clearErrorState();
         setDigits((prev) => {
             const next = [...prev];
             next[index] = nextValue;
@@ -128,8 +149,7 @@ export const VerificationCodeDialog = ({
         }
 
         if (digits[index]) {
-            setHasInputError(false);
-            setErrorMessage("");
+            clearErrorState();
             setDigits((prev) => {
                 const next = [...prev];
                 next[index] = "";
@@ -149,24 +169,23 @@ export const VerificationCodeDialog = ({
     };
 
     const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-        const pastedDigits = event.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6).split("");
-        if (pastedDigits.length === 0) {
+        const digitsFromPaste = pastedDigits(event.clipboardData.getData("text"));
+        if (digitsFromPaste.length === 0) {
             return;
         }
 
         event.preventDefault();
-        setHasInputError(false);
-        setErrorMessage("");
+        clearErrorState();
         setDigits([
-            pastedDigits[0] ?? "",
-            pastedDigits[1] ?? "",
-            pastedDigits[2] ?? "",
-            pastedDigits[3] ?? "",
-            pastedDigits[4] ?? "",
-            pastedDigits[5] ?? "",
+            digitsFromPaste[0] ?? "",
+            digitsFromPaste[1] ?? "",
+            digitsFromPaste[2] ?? "",
+            digitsFromPaste[3] ?? "",
+            digitsFromPaste[4] ?? "",
+            digitsFromPaste[5] ?? "",
         ]);
-        const focusIndex = Math.min(Math.max(pastedDigits.length - 1, 0), 5);
-        window.setTimeout(() => inputRefs.current[focusIndex]?.focus(), 0);
+        const focusIndex = Math.min(Math.max(digitsFromPaste.length - 1, 0), 5);
+        focusInput(focusIndex);
     };
 
     const handleResend = async () => {
@@ -231,7 +250,7 @@ export const VerificationCodeDialog = ({
                     )}
 
                     <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-                        <span className="font-medium tabular-nums text-foreground">{formatRemaining(remainingMs)}</span>
+                        <span className="font-medium tabular-nums text-foreground">{remainingLabel}</span>
                         <Button
                             type="button"
                             variant="ghost"

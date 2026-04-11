@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { userService } from "@/services/userService.ts";
+import { logger } from "@/utils/logger.ts";
 import { RegisterPage } from "./RegisterPage.tsx";
 import { RegisterVerifiedPage } from "./RegisterVerifiedPage.tsx";
 
@@ -22,6 +23,14 @@ vi.mock("@/services/userService.ts", () => ({
 vi.mock("sonner", () => ({
     toast: {
         success: vi.fn(),
+        error: vi.fn(),
+    },
+}));
+
+vi.mock("@/utils/logger.ts", () => ({
+    logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
         error: vi.fn(),
     },
 }));
@@ -96,6 +105,33 @@ describe("RegisterPage verification flow", () => {
             password: "redacted-password",
         });
         expect(toast.success).toHaveBeenCalledWith("Verification code sent to your email.");
+    });
+
+    it("formats suspiciously long countdowns as hours and logs a warning", async () => {
+        vi.mocked(userService.register).mockResolvedValue({
+            verification_token: "token-1",
+            verification_expires_at_ms: Date.now() + 86_381_000,
+        });
+
+        const user = userEvent.setup();
+        renderRegisterPage();
+
+        await fillRegisterForm(user);
+        await user.click(screen.getByRole("button", { name: /sign up/i }));
+
+        expect(await screen.findByRole("dialog")).toBeInTheDocument();
+        expect(screen.getByText(/^23:59:4\d$/)).toBeInTheDocument();
+        expect(screen.queryByText(/^1439:4\d$/)).not.toBeInTheDocument();
+        expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+            "Verification countdown looks longer than the expected verification window",
+            expect.objectContaining({
+                expiresAtMs: expect.any(Number),
+                now: expect.any(Number),
+                remainingMs: expect.any(Number),
+            }),
+        );
+        const warningPayload = vi.mocked(logger.warn).mock.calls[0]?.[1] as { remainingMs?: number } | undefined;
+        expect(warningPayload?.remainingMs).toBeGreaterThanOrEqual(86_380_000);
     });
 
     it("submits the six-digit code automatically and routes to the verified page", async () => {
@@ -177,6 +213,8 @@ describe("RegisterPage verification flow", () => {
 
         await waitFor(() => expect(userService.resendVerifyEmail).toHaveBeenCalledWith("token-1"));
         expect(toast.success).toHaveBeenCalledWith("A new verification code has been sent.");
+        await waitFor(() => expect(screen.getByText(/^2:5\d$|^3:00$/)).toBeInTheDocument());
+        expect(resendButton).toBeDisabled();
 
         await enterVerificationCode(user, "654321");
 
