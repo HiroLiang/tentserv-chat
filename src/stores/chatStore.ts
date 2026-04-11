@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { RoomSummary, RoomDetail, Message, PendingInvitation } from '@/types/chat.ts';
+import type { Message, PendingInvitation, PresenceStatus, RoomDetail, RoomSummary } from '@/types/chat.ts';
 
 interface RoomsState {
     direct: RoomSummary[];
@@ -32,6 +32,7 @@ interface ChatState {
     setLoadingMessages: (v: boolean) => void;
     setPendingInvitation: (inv: PendingInvitation | null) => void;
     setDirectKeyStatus: (roomId: number, status: DirectKeyStatus) => void;
+    updateDirectRoomPresence: (peerUserId: number, status: PresenceStatus, lastSeenAt?: string) => void;
     markRoomDeleted: (roomId: number) => void;
     resetChat: () => void;
 }
@@ -120,6 +121,22 @@ export const useChatStore = create<ChatState>((set) => ({
     setDirectKeyStatus: (roomId, status) =>
         set((state) => ({
             directKeyStatus: { ...state.directKeyStatus, [roomId]: status },
+        })),
+
+    updateDirectRoomPresence: (peerUserId, status, lastSeenAt) =>
+        set((state) => ({
+            rooms: {
+                ...state.rooms,
+                direct: state.rooms.direct.map((room) => (
+                    room.peer_user_id === peerUserId
+                        ? {
+                            ...room,
+                            presence_status: status,
+                            last_seen_at: status === 'online' ? undefined : lastSeenAt,
+                        }
+                        : room
+                )),
+            },
         })),
 
     markRoomDeleted: (roomId) =>

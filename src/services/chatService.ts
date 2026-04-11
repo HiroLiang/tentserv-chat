@@ -6,7 +6,7 @@ import { chatParticipantService } from "./chatParticipantService.ts";
 import { chatRoomService } from "./chatRoomService.ts";
 import { e2eeService } from "./e2eeService.ts";
 import type { Message, MessageType } from "@/types/chat.ts";
-import type { DirectKeyReadyPayload, SenderKeyDistributionAvailablePayload } from "@/api/types.ts";
+import type { DirectKeyReadyPayload, PresenceUserStatusChangedPayload, SenderKeyDistributionAvailablePayload } from "@/api/types.ts";
 
 type WsMessagePayload = {
     message_id: number;
@@ -69,6 +69,7 @@ class ChatService {
             logger.info('Typing indicator received:', payload);
         });
 
+        wsService.on('presence.user_status_changed', this.handlePresenceStatusChanged.bind(this));
         wsService.on('e2ee.sender_key_distribution_available', this.handleSenderKeyDistributionAvailable.bind(this));
         wsService.on('e2ee.direct_key_ready', this.handleDirectKeyReady.bind(this));
 
@@ -87,6 +88,13 @@ class ChatService {
         } catch (err) {
             logger.error(`Failed to handle e2ee.sender_key_distribution_available for room ${raw.room_id}`, err);
         }
+    }
+
+    private handlePresenceStatusChanged(payload: unknown): void {
+        const raw = payload as PresenceUserStatusChangedPayload;
+        if (!raw?.user_id || !raw?.status) return;
+
+        useChatStore.getState().updateDirectRoomPresence(raw.user_id, raw.status, raw.last_seen_at);
     }
 
     // [EN] handleDirectKeyReady: called when the backend notifies that the provider has uploaded

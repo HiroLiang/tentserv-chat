@@ -3,6 +3,7 @@ import { useChatStore } from '@/stores/chatStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { logger } from '@/utils/logger.ts';
+import { getWaitingForSenderKeyPreview } from '@/utils/chatCopy.ts';
 import type { CreateRoomRequest, CreateRoomResponse, GetMyRoomInvitationResponse, SendMessageRequest } from '@/api/types.ts';
 import { e2eeService, WAITING_FOR_SENDER_KEY } from '@/services/e2eeService.ts';
 import type { GetUserRoomsResponse, Message, RoomDetail, RoomSummary } from '@/types/chat.ts';
@@ -160,7 +161,7 @@ class ChatRoomService {
                 return {
                     ...room,
                     latest_message: decrypted === WAITING_FOR_SENDER_KEY
-                        ? LATEST_MESSAGE_FALLBACK
+                        ? getWaitingForSenderKeyPreview(room.room_type, LATEST_MESSAGE_FALLBACK)
                         : decrypted,
                 };
             } catch (err) {

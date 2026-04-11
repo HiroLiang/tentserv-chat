@@ -1,4 +1,4 @@
-import type { RoomStatus } from '@/types/chat.ts';
+import type { PresenceStatus, RoomStatus } from '@/types/chat.ts';
 
 export interface ChatGroup {
     id: string;
@@ -9,6 +9,9 @@ export interface ChatGroup {
     lastMessage?: string;
     lastMessageTime?: string;
     unreadCount?: number;
+    peerUserId?: number;
+    presenceStatus?: PresenceStatus;
+    lastSeenAt?: string;
     memberCount?: number;
     isOnline?: boolean;
     blockedByPeer?: boolean;

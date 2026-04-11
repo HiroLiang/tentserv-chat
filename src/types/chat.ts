@@ -1,5 +1,6 @@
 export type RoomType = 'direct' | 'group' | 'channel' | 'bot';
 export type RoomStatus = 'active' | 'deleted';
+export type PresenceStatus = 'online' | 'offline';
 
 // Matches backend ChatRoomSummaryResponse (GET /chat/rooms)
 export interface RoomSummary {
@@ -7,6 +8,9 @@ export interface RoomSummary {
     room_type: RoomType;
     display_name: string;
     avatar_url?: string;
+    peer_user_id?: number;
+    presence_status?: PresenceStatus;
+    last_seen_at?: string;
     status?: RoomStatus;
     latest_message?: string;
     latest_message_sender_id?: number;

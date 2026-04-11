@@ -398,3 +398,9 @@ export interface DirectKeyReadyPayload {
     room_id: number;
     provider_member_id: number;
 }
+
+export interface PresenceUserStatusChangedPayload {
+    user_id: number;
+    status: 'online' | 'offline';
+    last_seen_at?: string;
+}

@@ -100,6 +100,7 @@ describe("chatService sender-key handling", () => {
         await chatService.initialize();
 
         expect(wsService.on).toHaveBeenCalledWith("e2ee.direct_key_ready", expect.any(Function));
+        expect(wsService.on).toHaveBeenCalledWith("presence.user_status_changed", expect.any(Function));
         expect(vi.mocked(wsService.on).mock.calls.some(([event]) => event === "e2ee.sender_key_needed")).toBe(false);
     });
 
@@ -138,10 +139,41 @@ describe("chatService sender-key handling", () => {
         await waitFor(() => expect(e2eeService.resolveDirectKey).toHaveBeenCalledWith(90));
         expect(useChatStore.getState().directKeyStatus[90]).toBeUndefined();
     });
+
+    it("updates matching direct room presence in place when a presence event arrives", async () => {
+        useChatStore.setState({
+            rooms: {
+                direct: [{
+                    room_id: 44,
+                    room_type: "direct",
+                    display_name: "Bell",
+                    peer_user_id: 2,
+                    presence_status: "offline",
+                    unread_count: 0,
+                }],
+                group: [],
+                channel: [],
+                bot: [],
+            },
+        });
+
+        await chatService.initialize();
+        vi.mocked(chatRoomService.loadRooms).mockClear();
+        const handler = getWSHandler("presence.user_status_changed");
+
+        await handler({ user_id: 2, status: "online" });
+
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            peer_user_id: 2,
+            presence_status: "online",
+            last_seen_at: undefined,
+        });
+        expect(chatRoomService.loadRooms).not.toHaveBeenCalled();
+    });
 });
 
-const getWSHandler = (type: string): ((data: unknown) => Promise<void>) => {
+const getWSHandler = (type: string): ((data: unknown) => unknown) => {
     const call = vi.mocked(wsService.on).mock.calls.find(([event]) => event === type);
     if (!call) throw new Error(`missing ws handler for ${type}`);
-    return call[1] as (data: unknown) => Promise<void>;
+    return call[1] as (data: unknown) => unknown;
 };

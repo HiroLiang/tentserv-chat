@@ -7,6 +7,7 @@ import { useUserStore } from "@/stores/userStore.ts";
 import type { GetUserRoomsResponse, RoomSummary } from "@/types/chat.ts";
 import type { SenderKeyState } from "@/types/e2ee.ts";
 import { chatRoomService, LATEST_MESSAGE_FALLBACK } from "./chatRoomService.ts";
+import { WAITING_FOR_PEER_KEY_LABEL } from "@/utils/chatCopy.ts";
 
 vi.mock("@/api/index.ts", () => ({
     chatApi: {
@@ -189,14 +190,14 @@ describe("chatRoomService.loadRooms latest message summaries", () => {
         expect(useChatStore.getState().rooms.channel[0].latest_message).toBe("Plain broadcast");
     });
 
-    it("uses a neutral fallback when the latest message cannot be decrypted", async () => {
+    it("maps waiting sender-key previews to a direct-room specific label while keeping group fallback neutral", async () => {
         vi.mocked(chatApi.getRooms).mockResolvedValue({
             ...emptyRooms(),
             direct: [
                 room({
                     room_id: 8,
                     latest_message: "e2ee:v1:missing-sender",
-                    latest_message_sender_id: undefined,
+                    latest_message_sender_id: 201,
                 }),
             ],
             group: [
@@ -213,10 +214,33 @@ describe("chatRoomService.loadRooms latest message summaries", () => {
 
         await chatRoomService.loadRooms();
 
-        expect(e2eeService.decryptMessage).toHaveBeenCalledTimes(1);
+        expect(e2eeService.decryptMessage).toHaveBeenCalledTimes(2);
+        expect(e2eeService.decryptMessage).toHaveBeenCalledWith("e2ee:v1:missing-sender", 201, 8);
         expect(e2eeService.decryptMessage).toHaveBeenCalledWith("e2ee:v1:waiting", 202, 9);
-        expect(useChatStore.getState().rooms.direct[0].latest_message).toBe(LATEST_MESSAGE_FALLBACK);
+        expect(useChatStore.getState().rooms.direct[0].latest_message).toBe(WAITING_FOR_PEER_KEY_LABEL);
         expect(useChatStore.getState().rooms.group[0].latest_message).toBe(LATEST_MESSAGE_FALLBACK);
+    });
+
+    it("keeps direct-room presence fields when loading summaries", async () => {
+        vi.mocked(chatApi.getRooms).mockResolvedValue({
+            ...emptyRooms(),
+            direct: [
+                room({
+                    room_id: 13,
+                    peer_user_id: 77,
+                    presence_status: "offline",
+                    last_seen_at: "2026-04-12T02:03:04Z",
+                }),
+            ],
+        });
+
+        await chatRoomService.loadRooms();
+
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            peer_user_id: 77,
+            presence_status: "offline",
+            last_seen_at: "2026-04-12T02:03:04Z",
+        });
     });
 
     it("normalizes deleted rooms without decrypting or keeping the avatar", async () => {

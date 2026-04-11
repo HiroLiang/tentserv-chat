@@ -5,6 +5,11 @@ import { chatRoomService } from "@/services/chatRoomService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
 import type { ChatGroup, ChatMessage } from "@/types/ui.ts";
+import {
+    DIRECT_ROOM_WAITING_HINT,
+    DIRECT_ROOM_WAITING_TITLE,
+    WAITING_FOR_PEER_KEY_LABEL,
+} from "@/utils/chatCopy.ts";
 
 const envMock = vi.hoisted(() => ({
     API_BASE_URL: "http://api.test",
@@ -78,6 +83,7 @@ const directChat: ChatGroup = {
     name: "Luna Stone",
     avatarUrl: "avatars/luna.png",
     isOnline: true,
+    presenceStatus: "online",
 };
 
 const groupChat: ChatGroup = {
@@ -252,5 +258,48 @@ describe("ChatRoom input and avatar behavior", () => {
 
         const avatar = screen.getByAltText("Mina Park avatar");
         expect(avatar).toHaveAttribute("src", "http://api.test/static/avatars/mina.png");
+    });
+
+    it("renders missing peer key copy for waiting sender-key messages", () => {
+        useChatStore.getState().setDirectKeyStatus(Number(directChat.id), "unlocked");
+        const messages: ChatMessage[] = [{
+            id: "2",
+            chatId: directChat.id,
+            senderId: "101",
+            senderName: "Luna Stone",
+            content: "WAITING_FOR_SENDER_KEY",
+            timestamp: "10:00",
+            isMe: false,
+        }];
+
+        render(<ChatRoom chat={directChat} messages={messages} onSendMessage={vi.fn()} />);
+
+        expect(screen.getByText(WAITING_FOR_PEER_KEY_LABEL)).toBeInTheDocument();
+    });
+
+    it("renders clearer locked copy and relative last-seen status for direct chats", () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-04-12T08:00:00Z"));
+        useChatStore.getState().setDirectKeyStatus(Number(directChat.id), "locked");
+
+        render(
+            <ChatRoom
+                chat={{
+                    ...directChat,
+                    isOnline: false,
+                    presenceStatus: "offline",
+                    lastSeenAt: "2026-04-12T07:55:00Z",
+                }}
+                messages={[]}
+                onSendMessage={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByText("Last seen 5 minutes ago")).toBeInTheDocument();
+        expect(screen.getAllByText(DIRECT_ROOM_WAITING_TITLE).length).toBeGreaterThan(0);
+        expect(screen.getAllByText(DIRECT_ROOM_WAITING_HINT).length).toBeGreaterThan(0);
+        expect(screen.getByPlaceholderText(DIRECT_ROOM_WAITING_TITLE)).toBeDisabled();
+
+        vi.useRealTimers();
     });
 });

@@ -8,6 +8,12 @@ import { e2eeService, WAITING_FOR_SENDER_KEY } from '@/services/e2eeService';
 import { wsService } from '@/services/wsService';
 import { logger } from '@/utils/logger';
 import { toast } from 'sonner';
+import {
+    DIRECT_ROOM_WAITING_HINT,
+    DIRECT_ROOM_WAITING_TITLE,
+    formatDirectPresenceLabel,
+    WAITING_FOR_PEER_KEY_LABEL,
+} from '@/utils/chatCopy.ts';
 import { InvitationBanner } from './InvitationBanner';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
 import { env } from '@/config/env.ts';
@@ -113,7 +119,7 @@ function MessageBubble({ message, chat }: { message: ChatMessage; chat: ChatGrou
                 )}>
                     {message.content === WAITING_FOR_SENDER_KEY
                         ? <span className="italic text-muted-foreground flex items-center gap-1">
-                            <Lock className="h-3 w-3"/> Waiting for sender key
+                            <Lock className="h-3 w-3"/> {WAITING_FOR_PEER_KEY_LABEL}
                           </span>
                         : message.content
                     }
@@ -284,7 +290,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     </div>
                     <p className="text-xs text-muted-foreground">
                         {chat.type === 'group' && `${chat.memberCount} members`}
-                        {chat.type === 'direct' && (isDeleted ? 'Deleted' : (chat.isOnline ? 'Online' : 'Offline'))}
+                        {chat.type === 'direct' && (isDeleted ? 'Deleted' : formatDirectPresenceLabel(chat.presenceStatus, chat.lastSeenAt))}
                         {chat.type === 'bot' && 'AI Assistant'}
                         {chat.type === 'channel' && 'Channel'}
                     </p>
@@ -337,7 +343,8 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                     <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                         <Lock className="h-6 w-6 text-muted-foreground"/>
                     </div>
-                    <p className="text-sm text-muted-foreground">Chat is locked</p>
+                    <p className="text-sm text-muted-foreground">{DIRECT_ROOM_WAITING_TITLE}</p>
+                    <p className="text-xs text-muted-foreground">{DIRECT_ROOM_WAITING_HINT}</p>
                 </div>
             )}
 
@@ -367,7 +374,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                                 : hasDirectBlock
                                 ? directBlockMessage
                                 : isDirectLocked
-                                ? 'Waiting for the other device to unlock...'
+                                ? DIRECT_ROOM_WAITING_TITLE
                                 : inputDisabled
                                     ? 'Accept the invitation to start chatting...'
                                     : `Message ${chat.name}...`
@@ -395,7 +402,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                         : hasDirectBlock
                         ? directBlockMessage
                         : isDirectLocked
-                        ? 'Chat keys are not ready yet. Check the invitation and device status.'
+                        ? DIRECT_ROOM_WAITING_HINT
                         : inputDisabled
                             ? 'You cannot send messages until the invitation is accepted'
                             : 'Enter to send · Shift+Enter for newline'}

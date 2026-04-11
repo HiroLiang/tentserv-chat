@@ -67,7 +67,7 @@ function ChatAvatar({ chat }: { chat: ChatGroup }) {
                 </AvatarFallback>
             </Avatar>
 
-            {chat.type !== 'group' && !isDeleted && (
+            {chat.type === 'direct' && !isDeleted && (
                 <span className={cn(
                     'absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background',
                     chat.isOnline ? 'bg-green-500' : 'bg-zinc-400',

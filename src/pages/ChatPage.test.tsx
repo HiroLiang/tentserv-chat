@@ -19,13 +19,23 @@ vi.mock("@/components/chat/ChatRoom.tsx", () => ({
         chat,
         messages,
     }: {
-        chat: { name: string; blockedByPeer?: boolean; blockedByMe?: boolean };
+        chat: {
+            name: string;
+            blockedByPeer?: boolean;
+            blockedByMe?: boolean;
+            isOnline?: boolean;
+            lastSeenAt?: string;
+            peerUserId?: number;
+        };
         messages: Array<{ senderAvatarUrl?: string }>;
     }) => (
         <div
             data-testid="chat-room"
             data-blocked-by-peer={chat.blockedByPeer ? "true" : "false"}
             data-blocked-by-me={chat.blockedByMe ? "true" : "false"}
+            data-is-online={chat.isOnline ? "true" : "false"}
+            data-last-seen-at={chat.lastSeenAt ?? ""}
+            data-peer-user-id={chat.peerUserId ?? ""}
         >
             <span>{chat.name}</span>
             {messages.map((message, index) => (
@@ -125,6 +135,9 @@ describe("ChatPage room selection", () => {
                     room_type: "direct",
                     display_name: "Bell",
                     unread_count: 0,
+                    peer_user_id: 2,
+                    presence_status: "offline",
+                    last_seen_at: "2026-04-12T02:03:04Z",
                     blocked_by_me: true,
                     blocked_by_peer: true,
                 }],
@@ -179,6 +192,9 @@ describe("ChatPage room selection", () => {
         const chatRoom = await screen.findByTestId("chat-room");
         expect(chatRoom).toHaveAttribute("data-blocked-by-peer", "true");
         expect(chatRoom).toHaveAttribute("data-blocked-by-me", "true");
+        expect(chatRoom).toHaveAttribute("data-is-online", "false");
+        expect(chatRoom).toHaveAttribute("data-last-seen-at", "2026-04-12T02:03:04Z");
+        expect(chatRoom).toHaveAttribute("data-peer-user-id", "2");
         expect(screen.getByTestId("message-avatar-url")).toHaveTextContent("avatars/bell.png");
     });
 });
