@@ -91,6 +91,7 @@ function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
         lastMessage: lastMsg?.content ?? room.latest_message,
         lastMessageTime: lastMsg ? formatTime(lastMsg.created_at) : undefined,
         blockedByPeer: room.blocked_by_peer === true,
+        blockedByMe: room.blocked_by_me === true,
     };
 }
 
@@ -151,8 +152,7 @@ const ChatPageContent = () => {
         const roomId = Number(selectedChatId);
         if (selectedRoomStatus === 'deleted') return;
 
-        chatRoomService.loadRoomDetail(roomId).catch(() => {});
-        chatRoomService.loadMessages(roomId).catch(() => {});
+        chatRoomService.loadRoomDetail(roomId, { persist: true, hydrateMessages: true }).catch(() => {});
         chatRoomService.markAsRead(roomId).catch(() => {});
     }, [selectedChatId, selectedRoomStatus]);
 

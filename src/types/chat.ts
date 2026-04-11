@@ -12,6 +12,7 @@ export interface RoomSummary {
     latest_message_sender_id?: number;
     unread_count: number;
     blocked_by_peer?: boolean;
+    blocked_by_me?: boolean;
 }
 
 // Matches backend ChatRoomMemberInfoResponse
@@ -47,6 +48,7 @@ export interface RoomDetail {
     description?: string;
     avatar_url?: string;
     blocked_by_peer?: boolean;
+    blocked_by_me?: boolean;
     status?: RoomStatus;
     members: RoomMember[];
     messages: Message[];

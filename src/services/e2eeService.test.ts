@@ -375,6 +375,8 @@ describe("e2eeService sender-key reconciliation", () => {
         expect(consumeSenderKeyDistribution).toHaveBeenCalledWith(42, 11, bytes(7, 32), 88);
         expect(e2eeApi.consumeSenderKeyDistribution).toHaveBeenCalledWith(901, "consumed");
         expect(e2eeApi.createSenderKeyRequest).not.toHaveBeenCalled();
+        expect(e2eeApi.getSenderKeyDistributionStatus).toHaveBeenCalledTimes(2);
+        expect(e2eeApi.getPendingSenderKeyDistributions).toHaveBeenCalledTimes(1);
         expect(result.currentMemberId).toBe(10);
         expect(result.status.available_to_member_ids).toEqual([11]);
     });

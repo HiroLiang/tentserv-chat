@@ -336,6 +336,25 @@ class E2eeService {
         );
     }
 
+    isDirectRoomReadyFromState(
+        status: GetSenderKeyDistributionStatusResponse,
+        localStates: Map<number, SenderKeyState>,
+        options: { roomMembers?: RoomMember[]; currentMemberId: number },
+    ): boolean {
+        const localSenderKeyExists = localStates.get(options.currentMemberId)?.is_own_key === true;
+        const peerMembers = (options.roomMembers ?? []).filter((member) => member.member_id !== options.currentMemberId);
+        const allPeerKeysReady = peerMembers.every((member) => {
+            const state = localStates.get(member.member_id);
+            return state !== undefined && !state.is_own_key;
+        });
+
+        return status.own_sender_key_exists
+            && localSenderKeyExists
+            && (status.pending_from_members?.length ?? 0) === 0
+            && (status.available_from_member_ids?.length ?? 0) === 0
+            && (peerMembers.length === 0 || allPeerKeysReady);
+    }
+
     async deleteLocalSenderKeys(memberIds: number[]): Promise<void> {
         if (memberIds.length === 0) return;
         const accountId = this.getCurrentAccountId();
@@ -745,17 +764,11 @@ class E2eeService {
                 options.roomMembers.map((member) => member.member_id),
             ).catch(() => new Map<number, SenderKeyState>())
             : await this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>());
-        const localSenderKeyExists = localStates.get(myMemberId)?.is_own_key === true;
-        const peerMembers = (options?.roomMembers ?? []).filter((member) => member.member_id !== myMemberId);
-        const allPeerKeysReady = peerMembers.every((member) => {
-            const state = localStates.get(member.member_id);
-            return state !== undefined && !state.is_own_key;
+
+        return this.isDirectRoomReadyFromState(status, localStates, {
+            roomMembers: options?.roomMembers,
+            currentMemberId: myMemberId,
         });
-        return status.own_sender_key_exists
-            && localSenderKeyExists
-            && (status.pending_from_members?.length ?? 0) === 0
-            && (status.available_from_member_ids?.length ?? 0) === 0
-            && (peerMembers.length === 0 || allPeerKeysReady);
     }
 }
 

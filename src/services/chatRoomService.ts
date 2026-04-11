@@ -5,9 +5,11 @@ import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { logger } from '@/utils/logger.ts';
 import type { CreateRoomRequest, CreateRoomResponse, GetMyRoomInvitationResponse, SendMessageRequest } from '@/api/types.ts';
 import { e2eeService, WAITING_FOR_SENDER_KEY } from '@/services/e2eeService.ts';
-import type { GetUserRoomsResponse, RoomDetail, RoomSummary } from '@/types/chat.ts';
+import type { GetUserRoomsResponse, Message, RoomDetail, RoomSummary } from '@/types/chat.ts';
 
 export const LATEST_MESSAGE_FALLBACK = 'New message';
+type DirectRoomBlockState = 'none' | 'blocked_by_me' | 'blocked_by_peer' | 'blocked_both';
+type LoadRoomDetailOptions = { persist?: boolean; hydrateMessages?: boolean };
 
 // [EN] ChatRoomService manages chat room CRUD, message loading/sending (with E2EE encryption),
 //      invitation handling, and direct-room E2EE key initialization.
@@ -15,6 +17,10 @@ export const LATEST_MESSAGE_FALLBACK = 'New message';
 // [日] ChatRoomService はチャットルームの CRUD、メッセージ読み込み/送信（E2EE 暗号化含む）、
 //      招待処理、ダイレクトルーム E2EE 鍵の初期化を担当する。
 class ChatRoomService {
+    private _directRoomOpenPromises = new Map<number, Promise<void>>();
+    private _directRoomInitPromises = new Map<number, Promise<void>>();
+    private _roomDetailFetchPromises = new Map<number, Promise<RoomDetail>>();
+
     private resolveCurrentMemberId(roomId: number): number | null {
         const roomDetail = useChatStore.getState().currentRoomDetail;
         const participantId = useUserStore.getState().participantId;
@@ -51,12 +57,41 @@ class ChatRoomService {
         ].some(room => room.room_id === roomId && room.status === 'deleted');
     }
 
-    private isDirectRoomBlockedByPeer(roomId: number): boolean {
+    private resolveDirectRoomBlockState(roomId: number, roomDetail?: RoomDetail): DirectRoomBlockState {
         const store = useChatStore.getState();
-        if (store.currentRoomDetail?.room_id === roomId && store.currentRoomDetail.blocked_by_peer) {
-            return true;
+        const currentRoomDetail = store.currentRoomDetail?.room_id === roomId
+            ? store.currentRoomDetail
+            : null;
+        const summary = store.rooms.direct.find(room => room.room_id === roomId);
+        const blockedByPeer = roomDetail?.blocked_by_peer === true
+            || currentRoomDetail?.blocked_by_peer === true
+            || summary?.blocked_by_peer === true;
+        const blockedByMe = roomDetail?.blocked_by_me === true
+            || currentRoomDetail?.blocked_by_me === true
+            || summary?.blocked_by_me === true;
+
+        if (blockedByPeer && blockedByMe) return 'blocked_both';
+        if (blockedByPeer) return 'blocked_by_peer';
+        if (blockedByMe) return 'blocked_by_me';
+        return 'none';
+    }
+
+    private isDirectRoomBlocked(roomId: number, roomDetail?: RoomDetail): boolean {
+        return this.resolveDirectRoomBlockState(roomId, roomDetail) !== 'none';
+    }
+
+    private blockedDirectRoomError(roomId: number, roomDetail?: RoomDetail): Error {
+        const state = this.resolveDirectRoomBlockState(roomId, roomDetail);
+        switch (state) {
+            case 'blocked_by_me':
+                return new Error('You blocked this user.');
+            case 'blocked_by_peer':
+                return new Error('You have been blocked by this user.');
+            case 'blocked_both':
+                return new Error('You cannot send messages in this conversation.');
+            default:
+                return new Error('You cannot send messages in this conversation.');
         }
-        return store.rooms.direct.some(room => room.room_id === roomId && room.blocked_by_peer);
     }
 
     private async ensureRoomDetail(roomId: number, roomDetail?: RoomDetail, persist = true): Promise<RoomDetail> {
@@ -135,18 +170,52 @@ class ChatRoomService {
         }));
     }
 
-    async loadRoomDetail(roomId: number, options?: { persist?: boolean }): Promise<RoomDetail> {
-        const store = useChatStore.getState();
+    private async fetchRoomDetail(roomId: number): Promise<RoomDetail> {
+        const existing = this._roomDetailFetchPromises.get(roomId);
+        if (existing) {
+            return existing;
+        }
+
+        const promise = chatApi.getRoomDetail(roomId);
+        this._roomDetailFetchPromises.set(roomId, promise);
+
         try {
-            const detail = await chatApi.getRoomDetail(roomId);
-            if (options?.persist !== false) {
-                store.setRoomDetail(detail);
-            }
-            return detail;
+            return await promise;
         } catch (err) {
             logger.error(`Failed to load room detail for ${roomId}`, err);
             throw err;
+        } finally {
+            if (this._roomDetailFetchPromises.get(roomId) === promise) {
+                this._roomDetailFetchPromises.delete(roomId);
+            }
         }
+    }
+
+    private async decryptRoomMessages(roomId: number, messages: Message[]): Promise<Message[]> {
+        return Promise.all(messages.map(async (message) => ({
+            ...message,
+            content: await e2eeService.decryptMessage(message.content, message.sender_id, roomId).catch(() => message.content),
+        })));
+    }
+
+    async loadRoomDetail(roomId: number, options?: LoadRoomDetailOptions): Promise<RoomDetail> {
+        const store = useChatStore.getState();
+        const detail = await this.fetchRoomDetail(roomId);
+
+        if (options?.persist !== false) {
+            store.setRoomDetail(detail);
+        }
+        if (options?.hydrateMessages) {
+            store.setLoadingMessages(true);
+            try {
+                const decryptedMessages = await this.decryptRoomMessages(roomId, detail.messages);
+                store.setMessages(roomId, decryptedMessages, detail.messages.length === 20);
+            } finally {
+                store.setLoadingMessages(false);
+            }
+        }
+
+        return detail;
     }
 
     async loadMessages(roomId: number, beforeId?: number): Promise<void> {
@@ -154,12 +223,7 @@ class ChatRoomService {
         store.setLoadingMessages(true);
         try {
             const { messages, has_more } = await chatApi.getMessages(roomId, beforeId);
-            const decryptAll = (msgs: typeof messages) =>
-                Promise.all(msgs.map(async m => ({
-                    ...m,
-                    content: await e2eeService.decryptMessage(m.content, m.sender_id, roomId).catch(() => m.content),
-                })));
-            const decrypted = await decryptAll(messages);
+            const decrypted = await this.decryptRoomMessages(roomId, messages);
             if (beforeId === undefined) {
                 store.setMessages(roomId, decrypted, has_more);
             } else {
@@ -180,8 +244,8 @@ class ChatRoomService {
         if (this.isRoomDeleted(roomId)) {
             throw new Error('This chat is no longer available.');
         }
-        if (this.isDirectRoomBlockedByPeer(roomId)) {
-            throw new Error('You have been blocked by this user.');
+        if (this.isDirectRoomBlocked(roomId)) {
+            throw this.blockedDirectRoomError(roomId);
         }
 
         let finalContent = content;
@@ -253,6 +317,46 @@ class ChatRoomService {
         }
     }
 
+    async prepareDirectRoom(roomId: number): Promise<void> {
+        const existing = this._directRoomOpenPromises.get(roomId);
+        if (existing) {
+            await existing;
+            return;
+        }
+
+        const promise = this.prepareDirectRoomOnce(roomId);
+        this._directRoomOpenPromises.set(roomId, promise);
+        try {
+            await promise;
+        } finally {
+            if (this._directRoomOpenPromises.get(roomId) === promise) {
+                this._directRoomOpenPromises.delete(roomId);
+            }
+        }
+    }
+
+    private async prepareDirectRoomOnce(roomId: number): Promise<void> {
+        const chatStore = useChatStore.getState();
+        if (this.isRoomDeleted(roomId)) {
+            chatStore.setPendingInvitation(null);
+            chatStore.setDirectKeyStatus(roomId, 'locked');
+            return;
+        }
+        if (this.isDirectRoomBlocked(roomId)) {
+            chatStore.setPendingInvitation(null);
+            chatStore.setDirectKeyStatus(roomId, 'locked');
+            return;
+        }
+
+        chatStore.setDirectKeyStatus(roomId, 'loading');
+        const invitation = await this.loadMyRoomInvitation(roomId);
+        if (invitation?.found && invitation.role === 'invitee') {
+            return;
+        }
+
+        await this.initializeDirectRoomEncryption(roomId);
+    }
+
     // [EN] initializeDirectRoomEncryption: ensures both local and backend sender-key state exist,
     //      then creates sender key requests for members whose keys are still missing locally.
     // [中] initializeDirectRoomEncryption：確認本地與後端 sender key 狀態都存在，
@@ -261,11 +365,32 @@ class ChatRoomService {
         roomId: number,
         options?: { roomDetail?: RoomDetail; currentMemberId?: number },
     ): Promise<void> {
+        const existing = this._directRoomInitPromises.get(roomId);
+        if (existing) {
+            await existing;
+            return;
+        }
+
+        const promise = this.initializeDirectRoomEncryptionOnce(roomId, options);
+        this._directRoomInitPromises.set(roomId, promise);
+        try {
+            await promise;
+        } finally {
+            if (this._directRoomInitPromises.get(roomId) === promise) {
+                this._directRoomInitPromises.delete(roomId);
+            }
+        }
+    }
+
+    private async initializeDirectRoomEncryptionOnce(
+        roomId: number,
+        options?: { roomDetail?: RoomDetail; currentMemberId?: number },
+    ): Promise<void> {
         if (this.isRoomDeleted(roomId) || options?.roomDetail?.status === 'deleted') {
             useChatStore.getState().setDirectKeyStatus(roomId, 'locked');
             return;
         }
-        if (this.isDirectRoomBlockedByPeer(roomId) || options?.roomDetail?.blocked_by_peer) {
+        if (this.isDirectRoomBlocked(roomId, options?.roomDetail)) {
             useChatStore.getState().setDirectKeyStatus(roomId, 'locked');
             return;
         }
@@ -294,10 +419,10 @@ class ChatRoomService {
                 roomMembers: detail.members,
                 currentMemberId: options?.currentMemberId,
             });
-            const unlocked = await e2eeService.resolveDirectKey(roomId, {
+            const unlocked = e2eeService.isDirectRoomReadyFromState(reconciliation.status, reconciliation.localStates, {
                 roomMembers: detail.members,
                 currentMemberId: reconciliation.currentMemberId,
-            }).catch(() => false);
+            });
             chatStore.setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
             logger.info(`Direct room E2EE initialized for room ${roomId}`);
         } catch (err) {

@@ -16,8 +16,8 @@ vi.mock("@/config/env.ts", () => ({
 
 vi.mock("@/services/chatRoomService.ts", () => ({
     chatRoomService: {
+        prepareDirectRoom: vi.fn(),
         loadMyRoomInvitation: vi.fn(),
-        initializeDirectRoomEncryption: vi.fn(),
         initializeGroupRoomEncryption: vi.fn(),
         respondToInvitation: vi.fn(),
     },
@@ -104,9 +104,9 @@ describe("ChatRoom input and avatar behavior", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         resetChatStore();
+        vi.mocked(chatRoomService.prepareDirectRoom).mockResolvedValue(undefined);
         vi.mocked(chatRoomService.loadMyRoomInvitation).mockResolvedValue({ found: false });
         vi.mocked(e2eeService.resolveDirectKey).mockResolvedValue(true);
-        vi.mocked(chatRoomService.initializeDirectRoomEncryption).mockResolvedValue(undefined);
         vi.mocked(chatRoomService.initializeGroupRoomEncryption).mockResolvedValue(undefined);
     });
 
@@ -173,9 +173,7 @@ describe("ChatRoom input and avatar behavior", () => {
         fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
 
         expect(onSendMessage).not.toHaveBeenCalled();
-        expect(chatRoomService.loadMyRoomInvitation).not.toHaveBeenCalled();
-        expect(e2eeService.resolveDirectKey).not.toHaveBeenCalled();
-        expect(chatRoomService.initializeDirectRoomEncryption).not.toHaveBeenCalled();
+        expect(chatRoomService.prepareDirectRoom).not.toHaveBeenCalled();
     });
 
     it("renders a blocked-by-peer direct room as readonly without key initialization", () => {
@@ -197,9 +195,45 @@ describe("ChatRoom input and avatar behavior", () => {
         fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
 
         expect(onSendMessage).not.toHaveBeenCalled();
-        expect(chatRoomService.loadMyRoomInvitation).not.toHaveBeenCalled();
-        expect(e2eeService.resolveDirectKey).not.toHaveBeenCalled();
-        expect(chatRoomService.initializeDirectRoomEncryption).not.toHaveBeenCalled();
+        expect(chatRoomService.prepareDirectRoom).not.toHaveBeenCalled();
+    });
+
+    it("renders a blocked-by-me direct room as readonly without key initialization", () => {
+        const onSendMessage = vi.fn();
+        render(
+            <ChatRoom
+                chat={{ ...directChat, blockedByMe: true }}
+                messages={[]}
+                onSendMessage={onSendMessage}
+            />,
+        );
+
+        const input = screen.getByPlaceholderText("You blocked this user.");
+        expect(input).toBeDisabled();
+        expect(screen.getAllByText("You blocked this user.").length).toBeGreaterThan(0);
+        expect(screen.queryByText("Chat is locked")).not.toBeInTheDocument();
+
+        fireEvent.change(input, { target: { value: "Hello" } });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+
+        expect(onSendMessage).not.toHaveBeenCalled();
+        expect(chatRoomService.prepareDirectRoom).not.toHaveBeenCalled();
+    });
+
+    it("renders a mutually blocked direct room with the neutral readonly copy", () => {
+        render(
+            <ChatRoom
+                chat={{ ...directChat, blockedByMe: true, blockedByPeer: true }}
+                messages={[]}
+                onSendMessage={vi.fn()}
+            />,
+        );
+
+        const input = screen.getByPlaceholderText("You cannot send messages in this conversation.");
+        expect(input).toBeDisabled();
+        expect(screen.getAllByText("You cannot send messages in this conversation.").length).toBeGreaterThan(0);
+        expect(screen.queryByText("Chat is locked")).not.toBeInTheDocument();
+        expect(chatRoomService.prepareDirectRoom).not.toHaveBeenCalled();
     });
 
     it("uses the sender avatar URL for incoming message avatars", () => {

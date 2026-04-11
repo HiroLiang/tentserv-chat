@@ -20,9 +20,11 @@ export const ProfilePage = () => {
     const [croppedAvatarFile, setCroppedAvatarFile] = useState<File | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [isCropEditorOpen, setIsCropEditorOpen] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const cropperRef = useRef<ReactCropperElement>(null);
     const longPressTimerRef = useRef<number | null>(null);
+    const savingRef = useRef(false);
 
     const avatarSource = useMemo(
         () => previewUrl ?? user?.avatar ?? null,
@@ -46,10 +48,12 @@ export const ProfilePage = () => {
     }, [previewUrl]);
 
     const handleChooseAvatar = () => {
+        if (isSaving) return;
         fileInputRef.current?.click();
     };
 
     const handleAvatarFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+        if (isSaving) return;
         const file = event.target.files?.[0];
         if (!file) return;
 
@@ -69,6 +73,7 @@ export const ProfilePage = () => {
     };
 
     const handleAvatarPointerDown = () => {
+        if (isSaving) return;
         if (!avatarSource) return;
         clearLongPressTimer();
         longPressTimerRef.current = window.setTimeout(() => {
@@ -78,6 +83,7 @@ export const ProfilePage = () => {
     };
 
     const applyCrop = async () => {
+        if (isSaving) return;
         const cropper = cropperRef.current?.cropper;
         if (!cropper) return;
 
@@ -109,33 +115,65 @@ export const ProfilePage = () => {
 
     const handleProfileSubmit = async (event: SubmitEvent<HTMLFormElement>) => {
         event.preventDefault();
+        if (savingRef.current) return;
 
-        // Upload avatar
+        const normalizedName = name.trim();
         const avatarFile = croppedAvatarFile ?? selectedAvatarFile;
+        const currentName = user?.name ?? "";
+        const shouldUploadAvatar = avatarFile !== null;
+        const shouldUpdateName = normalizedName.length > 0 && normalizedName !== currentName;
 
-        if (avatarFile) {
-            toast.loading('Uploading avatar...');
-            userService.uploadAvatar(avatarFile)
-                .then(({ avatarUrl }) => {
-                    const user = useUserStore.getState().currentUser;
-                    if (user) {
-                        user.avatar = avatarUrl;
-                        useUserStore.getState().setCurrentUser(user);
-                    }
-                    toast.dismiss();
-                    toast.success('Avatar uploaded successfully');
-                })
-                .catch((error) => {
-                    toast.dismiss();
-                    logger.error('Failed to upload avatar', error);
-                    toast.error('Failed to upload avatar');
-                });
+        if (!shouldUploadAvatar && !shouldUpdateName) {
+            return;
         }
 
-        // Update profile
-        if (name !== user?.name) {
-            await userService.updateUser({ name });
-            toast.success('Profile updated successfully');
+        savingRef.current = true;
+        setIsSaving(true);
+        const savingToastId = toast.loading("Saving...");
+
+        try {
+            let uploadedAvatarUrl: string | undefined;
+
+            if (shouldUploadAvatar && avatarFile) {
+                const response = await userService.uploadAvatar(avatarFile);
+                uploadedAvatarUrl = response.avatarUrl;
+            }
+
+            if (shouldUpdateName) {
+                await userService.updateUser({ name: normalizedName });
+            }
+
+            if (uploadedAvatarUrl && !shouldUpdateName) {
+                const currentUser = useUserStore.getState().currentUser;
+                if (currentUser) {
+                    useUserStore.getState().setCurrentUser({
+                        ...currentUser,
+                        avatar: uploadedAvatarUrl,
+                    });
+                }
+            }
+
+            if (previewUrl) {
+                URL.revokeObjectURL(previewUrl);
+                setPreviewUrl(null);
+            }
+            setSelectedAvatarFile(null);
+            setCroppedAvatarFile(null);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = "";
+            }
+            if (shouldUpdateName) {
+                setName(normalizedName);
+            }
+            toast.dismiss(savingToastId);
+            toast.success("Profile updated successfully");
+        } catch (error) {
+            toast.dismiss(savingToastId);
+            logger.error("Failed to save profile", error);
+            toast.error("Failed to save profile");
+        } finally {
+            savingRef.current = false;
+            setIsSaving(false);
         }
     };
 
@@ -179,6 +217,7 @@ export const ProfilePage = () => {
                                     <button
                                         type="button"
                                         onClick={handleChooseAvatar}
+                                        disabled={isSaving}
                                         className="absolute inset-x-0 bottom-0 h-9 rounded-b-full bg-black/45 text-white text-xs font-medium transition-colors hover:bg-black/55 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                     >
                                         Edit
@@ -190,6 +229,7 @@ export const ProfilePage = () => {
                                     type="file"
                                     accept="image/*"
                                     className="hidden"
+                                    disabled={isSaving}
                                     onChange={handleAvatarFileChange}
                                 />
                             </div>
@@ -203,11 +243,12 @@ export const ProfilePage = () => {
                                     value={name}
                                     onChange={(event) => setName(event.target.value)}
                                     placeholder="Enter your name"
+                                    disabled={isSaving}
                                 />
                             </div>
 
-                            <Button type="submit" className="w-full">
-                                Save Changes
+                            <Button type="submit" className="w-full" disabled={isSaving}>
+                                {isSaving ? "Saving..." : "Save Changes"}
                             </Button>
                         </form>
                     </CardContent>
@@ -256,11 +297,12 @@ export const ProfilePage = () => {
                             <Button
                                 type="button"
                                 variant="outline"
+                                disabled={isSaving}
                                 onClick={() => setIsCropEditorOpen(false)}
                             >
                                 Cancel
                             </Button>
-                            <Button type="button" onClick={applyCrop}>
+                            <Button type="button" onClick={applyCrop} disabled={isSaving}>
                                 Apply
                             </Button>
                         </div>

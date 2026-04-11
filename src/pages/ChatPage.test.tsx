@@ -19,10 +19,14 @@ vi.mock("@/components/chat/ChatRoom.tsx", () => ({
         chat,
         messages,
     }: {
-        chat: { name: string; blockedByPeer?: boolean };
+        chat: { name: string; blockedByPeer?: boolean; blockedByMe?: boolean };
         messages: Array<{ senderAvatarUrl?: string }>;
     }) => (
-        <div data-testid="chat-room" data-blocked-by-peer={chat.blockedByPeer ? "true" : "false"}>
+        <div
+            data-testid="chat-room"
+            data-blocked-by-peer={chat.blockedByPeer ? "true" : "false"}
+            data-blocked-by-me={chat.blockedByMe ? "true" : "false"}
+        >
             <span>{chat.name}</span>
             {messages.map((message, index) => (
                 <span key={index} data-testid="message-avatar-url">{message.senderAvatarUrl ?? ""}</span>
@@ -107,7 +111,8 @@ describe("ChatPage room selection", () => {
         await new Promise(resolve => window.setTimeout(resolve, 20));
 
         expect(chatRoomService.loadRoomDetail).toHaveBeenCalledTimes(1);
-        expect(chatRoomService.loadMessages).toHaveBeenCalledTimes(1);
+        expect(chatRoomService.loadRoomDetail).toHaveBeenCalledWith(42, { persist: true, hydrateMessages: true });
+        expect(chatRoomService.loadMessages).not.toHaveBeenCalled();
         expect(chatRoomService.markAsRead).toHaveBeenCalledTimes(1);
     });
 
@@ -120,6 +125,7 @@ describe("ChatPage room selection", () => {
                     room_type: "direct",
                     display_name: "Bell",
                     unread_count: 0,
+                    blocked_by_me: true,
                     blocked_by_peer: true,
                 }],
                 group: [],
@@ -172,6 +178,7 @@ describe("ChatPage room selection", () => {
 
         const chatRoom = await screen.findByTestId("chat-room");
         expect(chatRoom).toHaveAttribute("data-blocked-by-peer", "true");
+        expect(chatRoom).toHaveAttribute("data-blocked-by-me", "true");
         expect(screen.getByTestId("message-avatar-url")).toHaveTextContent("avatars/bell.png");
     });
 });

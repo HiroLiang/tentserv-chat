@@ -12,6 +12,7 @@ export interface ChatGroup {
     memberCount?: number;
     isOnline?: boolean;
     blockedByPeer?: boolean;
+    blockedByMe?: boolean;
 }
 
 export interface ChatMessage {
