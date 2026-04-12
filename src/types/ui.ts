@@ -8,6 +8,7 @@ export interface ChatGroup {
     status?: RoomStatus;
     lastMessage?: string;
     lastMessageTime?: string;
+    lastActivityAt?: string;
     unreadCount?: number;
     peerUserId?: number;
     presenceStatus?: PresenceStatus;

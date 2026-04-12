@@ -10,6 +10,50 @@ interface RoomsState {
 
 type DirectKeyStatus = 'loading' | 'locked' | 'unlocked';
 
+const ROOM_SECTION_KEYS: Array<keyof RoomsState> = ['direct', 'group', 'channel', 'bot'];
+
+const getRoomActivityTime = (room: RoomSummary): number => {
+    if (!room.latest_message_created_at) return Number.NEGATIVE_INFINITY;
+    const timestamp = Date.parse(room.latest_message_created_at);
+    return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
+};
+
+const sortRoomSummaries = (rooms: RoomSummary[]): RoomSummary[] =>
+    [...rooms].sort((left, right) => getRoomActivityTime(right) - getRoomActivityTime(left));
+
+const sortRoomsState = (rooms: RoomsState): RoomsState => ({
+    direct: sortRoomSummaries(rooms.direct),
+    group: sortRoomSummaries(rooms.group),
+    channel: sortRoomSummaries(rooms.channel),
+    bot: sortRoomSummaries(rooms.bot),
+});
+
+const updateRoomSummariesForMessage = (
+    rooms: RoomsState,
+    roomId: number,
+    msg: Message,
+    isCurrentRoom: boolean,
+): RoomsState => {
+    const nextSections = ROOM_SECTION_KEYS.reduce((acc, key) => {
+        const updated = rooms[key].map((room) => {
+            if (room.room_id !== roomId) return room;
+            if (room.status === 'deleted') return room;
+
+            return {
+                ...room,
+                latest_message: msg.content,
+                latest_message_created_at: msg.created_at,
+                latest_message_sender_id: msg.sender_id,
+                unread_count: isCurrentRoom ? room.unread_count : room.unread_count + 1,
+            };
+        });
+        acc[key] = sortRoomSummaries(updated);
+        return acc;
+    }, {} as RoomsState);
+
+    return nextSections;
+};
+
 interface ChatState {
     rooms: RoomsState;
     currentRoomId: number | null;
@@ -60,7 +104,7 @@ export const useChatStore = create<ChatState>((set) => ({
     pendingInvitation: null,
     directKeyStatus: {},
 
-    setRooms: (rooms) => set({ rooms }),
+    setRooms: (rooms) => set({ rooms: sortRoomsState(rooms) }),
 
     setCurrentRoomId: (id) => set({ currentRoomId: id }),
 
@@ -96,6 +140,12 @@ export const useChatStore = create<ChatState>((set) => ({
                 ...state.messages,
                 [roomId]: [...(state.messages[roomId] ?? []), msg],
             },
+            rooms: updateRoomSummariesForMessage(
+                state.rooms,
+                roomId,
+                msg,
+                state.currentRoomId === roomId,
+            ),
         })),
 
     clearUnreadCount: (roomId) =>

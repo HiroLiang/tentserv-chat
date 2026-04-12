@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatSidebar } from "./ChatSidebar.tsx";
 import type { ChatGroups } from "./ChatSidebar.tsx";
 
@@ -34,6 +34,7 @@ const groups: ChatGroups = {
         avatarUrl: "avatars/mina.png",
         lastMessage: "See you soon",
         lastMessageTime: "10:30",
+        lastActivityAt: "2026-04-12T10:30:00Z",
         unreadCount: 0,
         isOnline: true,
     }],
@@ -43,6 +44,10 @@ const groups: ChatGroups = {
 };
 
 describe("ChatSidebar avatars", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("uses the direct room avatar URL before falling back to initials", () => {
         render(
             <ChatSidebar
@@ -78,5 +83,50 @@ describe("ChatSidebar avatars", () => {
 
         expect(screen.getByText("Deleted Contact")).toBeInTheDocument();
         expect(screen.queryByAltText("Deleted Contact avatar")).not.toBeInTheDocument();
+    });
+
+    it("briefly marks a chat card as active when its latest activity changes", () => {
+        vi.useFakeTimers();
+
+        const { rerender } = render(
+            <ChatSidebar
+                chatGroups={groups}
+                selectedChatId={null}
+                onSelectChat={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+            />,
+        );
+
+        const originalCard = screen.getByText("Mina Park").closest('[data-chat-card-id="12"]');
+        expect(originalCard).toHaveAttribute("data-activity-state", "idle");
+
+        rerender(
+            <ChatSidebar
+                chatGroups={{
+                    ...groups,
+                    direct: [{
+                        ...groups.direct[0],
+                        lastMessage: "Just now",
+                        lastMessageTime: "10:31",
+                        lastActivityAt: "2026-04-12T10:31:00Z",
+                    }],
+                }}
+                selectedChatId={null}
+                onSelectChat={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+            />,
+        );
+
+        const activeCard = screen.getByText("Mina Park").closest('[data-chat-card-id="12"]');
+        expect(activeCard).toHaveAttribute("data-activity-state", "active");
+
+        act(() => {
+            vi.advanceTimersByTime(421);
+        });
+
+        expect(screen.getByText("Mina Park").closest('[data-chat-card-id="12"]'))
+            .toHaveAttribute("data-activity-state", "idle");
     });
 });

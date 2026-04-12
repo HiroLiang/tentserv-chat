@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { ChatGroup } from '@/types/ui';
 import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, MessageSquare, Users } from 'lucide-react';
@@ -35,6 +35,8 @@ const SECTION_LABELS: Record<ChatGroup['type'], string> = {
 };
 
 const SECTION_ORDER: ChatGroup['type'][] = ['direct', 'group', 'channel', 'bot'];
+const SIDEBAR_ACTIVITY_ANIMATION_MS = 420;
+const SIDEBAR_REORDER_TRANSITION = 'transform 280ms cubic-bezier(0.22, 1, 0.36, 1)';
 
 const getInitials = (name: string) =>
     name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
@@ -85,6 +87,11 @@ export function ChatSidebar({
     onToggleCollapse,
 }: ChatSidebarProps) {
     const [searchQuery, setSearchQuery] = useState('');
+    const itemRefs = useRef(new Map<string, HTMLDivElement>());
+    const previousRectsRef = useRef(new Map<string, DOMRect>());
+    const previousActivityRef = useRef(new Map<string, string | undefined>());
+    const activityTimeoutsRef = useRef(new Map<string, number>());
+    const [activeChatIds, setActiveChatIds] = useState<string[]>([]);
     const [expanded, setExpanded] = useState<Record<ChatGroup['type'], boolean>>({
         direct: true,
         group: true,
@@ -103,6 +110,172 @@ export function ChatSidebar({
         chatGroups[type].filter(chat =>
             chat.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
         );
+
+    const visibleChats = useMemo(() => (
+        collapsed
+            ? allChats.map((chat) => ({ id: chat.id, activityAt: chat.lastActivityAt }))
+            : SECTION_ORDER.flatMap((type) =>
+                expanded[type]
+                    ? filteredBySection(type).map((chat) => ({ id: chat.id, activityAt: chat.lastActivityAt }))
+                    : []
+            )
+    ), [allChats, collapsed, expanded, searchQuery, chatGroups]);
+
+    const visibleSignature = visibleChats
+        .map((chat, index) => `${index}:${chat.id}:${chat.activityAt ?? ''}`)
+        .join('|');
+
+    const registerItemRef = (chatId: string) => (node: HTMLDivElement | null) => {
+        if (node) {
+            itemRefs.current.set(chatId, node);
+            return;
+        }
+        itemRefs.current.delete(chatId);
+    };
+
+    useEffect(() => () => {
+        activityTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+        activityTimeoutsRef.current.clear();
+    }, []);
+
+    useLayoutEffect(() => {
+        const nextRects = new Map<string, DOMRect>();
+        visibleChats.forEach((chat) => {
+            const node = itemRefs.current.get(chat.id);
+            if (node) {
+                nextRects.set(chat.id, node.getBoundingClientRect());
+            }
+        });
+
+        nextRects.forEach((rect, chatId) => {
+            const previousRect = previousRectsRef.current.get(chatId);
+            if (!previousRect) return;
+            const deltaY = previousRect.top - rect.top;
+            if (Math.abs(deltaY) < 1) return;
+
+            const node = itemRefs.current.get(chatId);
+            if (!node) return;
+
+            node.style.transition = 'none';
+            node.style.transform = `translateY(${deltaY}px)`;
+            node.style.zIndex = '1';
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    node.style.transition = SIDEBAR_REORDER_TRANSITION;
+                    node.style.transform = 'translateY(0)';
+                });
+            });
+
+            window.setTimeout(() => {
+                if (!itemRefs.current.has(chatId)) return;
+                node.style.transition = '';
+                node.style.transform = '';
+                node.style.zIndex = '';
+            }, 320);
+        });
+
+        const bumpedChatIds = visibleChats
+            .filter((chat) => {
+                const previousActivityAt = previousActivityRef.current.get(chat.id);
+                return previousActivityAt !== undefined
+                    && chat.activityAt !== undefined
+                    && previousActivityAt !== chat.activityAt;
+            })
+            .map((chat) => chat.id);
+
+        if (bumpedChatIds.length > 0) {
+            setActiveChatIds((currentIds) => Array.from(new Set([...currentIds, ...bumpedChatIds])));
+            bumpedChatIds.forEach((chatId) => {
+                const existingTimeout = activityTimeoutsRef.current.get(chatId);
+                if (existingTimeout !== undefined) {
+                    window.clearTimeout(existingTimeout);
+                }
+                const timeoutId = window.setTimeout(() => {
+                    setActiveChatIds((currentIds) => currentIds.filter((currentId) => currentId !== chatId));
+                    activityTimeoutsRef.current.delete(chatId);
+                }, SIDEBAR_ACTIVITY_ANIMATION_MS);
+                activityTimeoutsRef.current.set(chatId, timeoutId);
+            });
+        }
+
+        previousRectsRef.current = nextRects;
+        previousActivityRef.current = new Map(
+            visibleChats.map((chat) => [chat.id, chat.activityAt]),
+        );
+    }, [visibleSignature]);
+
+    const renderChatItem = (chat: ChatGroup, compact = false) => {
+        const isActive = activeChatIds.includes(chat.id);
+
+        if (compact) {
+            return (
+                <div
+                    key={chat.id}
+                    ref={registerItemRef(chat.id)}
+                    className="sidebar-chat-item"
+                >
+                    <button
+                        onClick={() => onSelectChat(chat.id)}
+                        title={chat.name}
+                        data-chat-card-id={chat.id}
+                        data-activity-state={isActive ? 'active' : 'idle'}
+                        className={cn(
+                            'sidebar-chat-card w-full rounded-lg p-2 transition-colors text-left',
+                            'hover:bg-accent flex items-center justify-center',
+                            selectedChatId === chat.id && 'bg-accent',
+                            isActive && 'sidebar-chat-card--active',
+                        )}
+                    >
+                        <div className="relative">
+                            <ChatAvatar chat={chat}/>
+                            {!!chat.unreadCount && chat.unreadCount > 0 && (
+                                <span className="absolute -top-1 -right-1 h-4 min-w-4 px-0.5 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center">
+                                    {chat.unreadCount > 9 ? '9+' : chat.unreadCount}
+                                </span>
+                            )}
+                        </div>
+                    </button>
+                </div>
+            );
+        }
+
+        return (
+            <div
+                key={chat.id}
+                ref={registerItemRef(chat.id)}
+                className="sidebar-chat-item"
+            >
+                <button
+                    onClick={() => onSelectChat(chat.id)}
+                    data-chat-card-id={chat.id}
+                    data-activity-state={isActive ? 'active' : 'idle'}
+                    className={cn(
+                        'sidebar-chat-card w-full rounded-lg p-2 transition-colors text-left',
+                        'hover:bg-accent flex items-center gap-3',
+                        selectedChatId === chat.id && 'bg-accent',
+                        isActive && 'sidebar-chat-card--active',
+                    )}
+                >
+                    <ChatAvatar chat={chat}/>
+                    <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                            <span className="font-medium text-sm truncate">{chat.name}</span>
+                            <span className="text-xs text-muted-foreground flex-shrink-0">{chat.lastMessageTime}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-1 mt-0.5">
+                            <span className="text-xs text-muted-foreground truncate">{chat.lastMessage}</span>
+                            {!!chat.unreadCount && chat.unreadCount > 0 && (
+                                <span className="h-4 min-w-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center flex-shrink-0">
+                                    {chat.unreadCount}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </button>
+            </div>
+        );
+    };
 
     return (
         <div className={cn(
@@ -150,27 +323,7 @@ export function ChatSidebar({
             <div className="flex-1 min-h-0 overflow-y-auto py-2 px-2">
                 {collapsed ? (
                     // Collapsed: show all avatars flat
-                    allChats.map((chat) => (
-                        <button
-                            key={chat.id}
-                            onClick={() => onSelectChat(chat.id)}
-                            title={chat.name}
-                            className={cn(
-                                'w-full rounded-lg p-2 transition-colors text-left',
-                                'hover:bg-accent flex items-center justify-center',
-                                selectedChatId === chat.id && 'bg-accent',
-                            )}
-                        >
-                            <div className="relative">
-                                <ChatAvatar chat={chat}/>
-                                {!!chat.unreadCount && chat.unreadCount > 0 && (
-                                    <span className="absolute -top-1 -right-1 h-4 min-w-4 px-0.5 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center">
-                                        {chat.unreadCount > 9 ? '9+' : chat.unreadCount}
-                                    </span>
-                                )}
-                            </div>
-                        </button>
-                    ))
+                    allChats.map((chat) => renderChatItem(chat, true))
                 ) : (
                     // Expanded: collapsible sections per type
                     SECTION_ORDER.map((type) => {
@@ -195,33 +348,7 @@ export function ChatSidebar({
                                         : <ChevronDown className="h-3 w-3"/>}
                                 </button>
 
-                                {expanded[type] && items.map((chat) => (
-                                    <button
-                                        key={chat.id}
-                                        onClick={() => onSelectChat(chat.id)}
-                                        className={cn(
-                                            'w-full rounded-lg p-2 transition-colors text-left',
-                                            'hover:bg-accent flex items-center gap-3',
-                                            selectedChatId === chat.id && 'bg-accent',
-                                        )}
-                                    >
-                                        <ChatAvatar chat={chat}/>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between gap-1">
-                                                <span className="font-medium text-sm truncate">{chat.name}</span>
-                                                <span className="text-xs text-muted-foreground flex-shrink-0">{chat.lastMessageTime}</span>
-                                            </div>
-                                            <div className="flex items-center justify-between gap-1 mt-0.5">
-                                                <span className="text-xs text-muted-foreground truncate">{chat.lastMessage}</span>
-                                                {!!chat.unreadCount && chat.unreadCount > 0 && (
-                                                    <span className="h-4 min-w-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center flex-shrink-0">
-                                                        {chat.unreadCount}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </button>
-                                ))}
+                                {expanded[type] && items.map((chat) => renderChatItem(chat))}
                             </div>
                         );
                     })

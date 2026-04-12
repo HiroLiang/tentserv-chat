@@ -13,6 +13,7 @@ export interface RoomSummary {
     last_seen_at?: string;
     status?: RoomStatus;
     latest_message?: string;
+    latest_message_created_at?: string;
     latest_message_sender_id?: number;
     unread_count: number;
     blocked_by_peer?: boolean;

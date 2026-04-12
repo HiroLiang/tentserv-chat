@@ -81,6 +81,7 @@ function formatTime(iso: string): string {
 
 function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
     const isDeleted = room.status === 'deleted';
+    const lastActivityAt = lastMsg?.created_at ?? room.latest_message_created_at;
     return {
         id: String(room.room_id),
         type: room.room_type,
@@ -92,7 +93,8 @@ function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
         status: room.status ?? 'active',
         unreadCount: isDeleted ? 0 : room.unread_count,
         lastMessage: lastMsg?.content ?? room.latest_message,
-        lastMessageTime: lastMsg ? formatTime(lastMsg.created_at) : undefined,
+        lastMessageTime: lastActivityAt ? formatTime(lastActivityAt) : undefined,
+        lastActivityAt,
         isOnline: room.room_type === 'direct' ? room.presence_status === 'online' : undefined,
         blockedByPeer: room.blocked_by_peer === true,
         blockedByMe: room.blocked_by_me === true,
@@ -120,6 +122,7 @@ const ChatPageContent = () => {
 
     const { rooms, messages } = useChatStore();
     const currentRoomDetail = useChatStore((s) => s.currentRoomDetail);
+    const setCurrentRoomId = useChatStore((s) => s.setCurrentRoomId);
     const currentUser = useUserStore(s => s.currentUser);
     const currentParticipantId = useUserStore(s => s.participantId);
     const currentRoomMembers = currentRoomDetail?.members ?? EMPTY_ROOM_MEMBERS;
@@ -159,6 +162,11 @@ const ChatPageContent = () => {
         chatRoomService.loadRoomDetail(roomId, { persist: true, hydrateMessages: true }).catch(() => {});
         chatRoomService.markAsRead(roomId).catch(() => {});
     }, [selectedChatId, selectedRoomStatus]);
+
+    useEffect(() => {
+        setCurrentRoomId(selectedChatId ? Number(selectedChatId) : null);
+        return () => setCurrentRoomId(null);
+    }, [selectedChatId, setCurrentRoomId]);
 
     const toGroups = (arr: RoomSummary[]): ChatGroup[] =>
         arr.map(room => {
