@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Message, PendingInvitation, PresenceStatus, RoomDetail, RoomSummary } from '@/types/chat.ts';
+import { normalizeRoomSummaryPreview } from '@/utils/chatCopy.ts';
 
 interface RoomsState {
     direct: RoomSummary[];
@@ -41,7 +42,7 @@ const updateRoomSummariesForMessage = (
 
             return {
                 ...room,
-                latest_message: msg.content,
+                latest_message: normalizeRoomSummaryPreview(room.room_type, msg.content),
                 latest_message_created_at: msg.created_at,
                 latest_message_sender_id: msg.sender_id,
                 unread_count: isCurrentRoom ? room.unread_count : room.unread_count + 1,

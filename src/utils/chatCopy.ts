@@ -1,6 +1,8 @@
 import type { PresenceStatus, RoomType } from '@/types/chat.ts';
 
-export const WAITING_FOR_PEER_KEY_LABEL = 'Missing peer key';
+export const WAITING_FOR_SENDER_KEY_SENTINEL = '__E2EE_WAITING_KEY__';
+export const LATEST_MESSAGE_FALLBACK = 'New message';
+export const WAITING_FOR_PEER_KEY_LABEL = 'Missing the other person\'s key';
 export const DIRECT_ROOM_WAITING_TITLE = 'Waiting for the other user to sign in and provide keys...';
 export const DIRECT_ROOM_WAITING_HINT = 'Chat keys are not ready yet.';
 export const DIRECT_ROOM_ONLINE_LABEL = 'Online';
@@ -8,6 +10,13 @@ export const DIRECT_ROOM_OFFLINE_LABEL = 'Offline';
 
 export function getWaitingForSenderKeyPreview(roomType: RoomType, fallback: string): string {
     return roomType === 'direct' ? WAITING_FOR_PEER_KEY_LABEL : fallback;
+}
+
+export function normalizeRoomSummaryPreview(roomType: RoomType, latestMessage: string): string {
+    if (latestMessage !== WAITING_FOR_SENDER_KEY_SENTINEL) {
+        return latestMessage;
+    }
+    return getWaitingForSenderKeyPreview(roomType, LATEST_MESSAGE_FALLBACK);
 }
 
 export function formatDirectPresenceLabel(status?: PresenceStatus, lastSeenAt?: string, now = new Date()): string {

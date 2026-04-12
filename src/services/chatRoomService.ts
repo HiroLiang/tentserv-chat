@@ -3,12 +3,12 @@ import { useChatStore } from '@/stores/chatStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { logger } from '@/utils/logger.ts';
-import { getWaitingForSenderKeyPreview } from '@/utils/chatCopy.ts';
+import { LATEST_MESSAGE_FALLBACK, normalizeRoomSummaryPreview } from '@/utils/chatCopy.ts';
 import type { CreateRoomRequest, CreateRoomResponse, GetMyRoomInvitationResponse, SendMessageRequest } from '@/api/types.ts';
-import { e2eeService, WAITING_FOR_SENDER_KEY } from '@/services/e2eeService.ts';
+import { e2eeService } from '@/services/e2eeService.ts';
 import type { GetUserRoomsResponse, Message, RoomDetail, RoomSummary } from '@/types/chat.ts';
 
-export const LATEST_MESSAGE_FALLBACK = 'New message';
+export { LATEST_MESSAGE_FALLBACK };
 type DirectRoomBlockState = 'none' | 'blocked_by_me' | 'blocked_by_peer' | 'blocked_both';
 type LoadRoomDetailOptions = { persist?: boolean; hydrateMessages?: boolean };
 
@@ -18,6 +18,7 @@ type LoadRoomDetailOptions = { persist?: boolean; hydrateMessages?: boolean };
 // [日] ChatRoomService はチャットルームの CRUD、メッセージ読み込み/送信（E2EE 暗号化含む）、
 //      招待処理、ダイレクトルーム E2EE 鍵の初期化を担当する。
 class ChatRoomService {
+    private _loadRoomsPromise: Promise<void> | null = null;
     private _directRoomOpenPromises = new Map<number, Promise<void>>();
     private _directRoomInitPromises = new Map<number, Promise<void>>();
     private _roomDetailFetchPromises = new Map<number, Promise<RoomDetail>>();
@@ -112,17 +113,30 @@ class ChatRoomService {
     }
 
     async loadRooms(): Promise<void> {
-        const store = useChatStore.getState();
-        store.setLoadingRooms(true);
-        try {
-            const rooms = await chatApi.getRooms();
-            store.setRooms(await this.decryptRoomSummaries(rooms));
-        } catch (err) {
-            logger.error('Failed to load rooms', err);
-            throw err;
-        } finally {
-            store.setLoadingRooms(false);
+        const existing = this._loadRoomsPromise;
+        if (existing) {
+            return existing;
         }
+
+        const store = useChatStore.getState();
+        let promise!: Promise<void>;
+        promise = (async () => {
+            store.setLoadingRooms(true);
+            try {
+                const rooms = await chatApi.getRooms();
+                store.setRooms(await this.decryptRoomSummaries(rooms));
+            } catch (err) {
+                logger.error('Failed to load rooms', err);
+                throw err;
+            } finally {
+                store.setLoadingRooms(false);
+                if (this._loadRoomsPromise === promise) {
+                    this._loadRoomsPromise = null;
+                }
+            }
+        })();
+        this._loadRoomsPromise = promise;
+        return promise;
     }
 
     private async decryptRoomSummaries(rooms: GetUserRoomsResponse): Promise<GetUserRoomsResponse> {
@@ -160,9 +174,7 @@ class ChatRoomService {
                 );
                 return {
                     ...room,
-                    latest_message: decrypted === WAITING_FOR_SENDER_KEY
-                        ? getWaitingForSenderKeyPreview(room.room_type, LATEST_MESSAGE_FALLBACK)
-                        : decrypted,
+                    latest_message: normalizeRoomSummaryPreview(room.room_type, decrypted),
                 };
             } catch (err) {
                 logger.warn(`Failed to decrypt latest message for room ${room.room_id}`, err);

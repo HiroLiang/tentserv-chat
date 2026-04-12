@@ -413,6 +413,44 @@ describe("e2eeService sender-key reconciliation", () => {
         expect(e2eeApi.createSenderKeyRequest).toHaveBeenCalledWith(78, 11);
     });
 
+    it("treats a direct room as ready from local sender keys even when status still reports stale pending", async () => {
+        const localStates = [
+            { member_id: "10", is_own_key: true, sender_key_version: 1775758701055, updated_at: 1 },
+            { member_id: "11", is_own_key: false, sender_key_version: 88, updated_at: 2 },
+        ];
+        vi.mocked(getSenderKeyStates)
+            .mockResolvedValueOnce(localStates)
+            .mockResolvedValueOnce(localStates);
+        vi.mocked(e2eeApi.getSenderKeyDistributionStatus)
+            .mockResolvedValueOnce({
+                own_sender_key_exists: true,
+                requestable_member_ids: [11],
+                available_from_member_ids: [],
+                available_to_member_ids: [],
+                pending_receivers: [],
+                pending_from_members: [11],
+            })
+            .mockResolvedValueOnce({
+                own_sender_key_exists: true,
+                requestable_member_ids: [11],
+                available_from_member_ids: [],
+                available_to_member_ids: [],
+                pending_receivers: [],
+                pending_from_members: [11],
+            });
+
+        const result = await e2eeService.reconcileRoomSenderKeys({
+            roomId: 81,
+            roomMembers,
+        });
+
+        expect(e2eeApi.createSenderKeyRequest).not.toHaveBeenCalled();
+        expect(e2eeService.isDirectRoomReadyFromState(result.status, result.localStates, {
+            roomMembers,
+            currentMemberId: result.currentMemberId,
+        })).toBe(true);
+    });
+
     it("skips provider-side upload when the requester already has a current available distribution", async () => {
         vi.mocked(getSenderKeyStates).mockResolvedValue([
             { member_id: "10", is_own_key: true, sender_key_version: 1775758701055, updated_at: 1 },
@@ -431,6 +469,33 @@ describe("e2eeService sender-key reconciliation", () => {
         expect(uploaded).toBe(false);
         expect(e2eeApi.getKeyBundle).not.toHaveBeenCalled();
         expect(e2eeApi.uploadSenderKey).not.toHaveBeenCalled();
+    });
+
+    it("forces provider-side upload when sender_key_needed explicitly targets the requester", async () => {
+        vi.mocked(getSenderKeyStates).mockResolvedValue([
+            { member_id: "10", is_own_key: true, sender_key_version: 1775758701055, updated_at: 1 },
+        ]);
+        vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue({
+            own_sender_key_exists: true,
+            requestable_member_ids: [],
+            available_from_member_ids: [],
+            available_to_member_ids: [11],
+            pending_receivers: [],
+            pending_from_members: [],
+        });
+
+        const uploaded = await e2eeService.performInviterKeyExchange(80, 601, 10, 11, {
+            forceUpload: true,
+        });
+
+        expect(uploaded).toBe(true);
+        expect(e2eeApi.getKeyBundle).toHaveBeenCalledWith(601);
+        expect(e2eeApi.uploadSenderKey).toHaveBeenCalledWith(
+            80,
+            11,
+            preparedSenderKeyDistribution.sender_key_version,
+            expect.any(String),
+        );
     });
 
     it("deduplicates concurrent provider uploads for the same receiver", async () => {

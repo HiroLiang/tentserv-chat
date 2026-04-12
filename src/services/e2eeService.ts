@@ -3,6 +3,7 @@ import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { useChatStore } from '@/stores/chatStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
 import { logger } from '@/utils/logger.ts';
+import { WAITING_FOR_SENDER_KEY_SENTINEL } from '@/utils/chatCopy.ts';
 import { toast } from 'sonner';
 import {
     bootstrapLocalE2eeKeys,
@@ -18,7 +19,7 @@ import {
     consumeSenderKeyDistribution,
 } from '@/bridge/e2ee.ts';
 
-export const WAITING_FOR_SENDER_KEY = '__E2EE_WAITING_KEY__';
+export const WAITING_FOR_SENDER_KEY = WAITING_FOR_SENDER_KEY_SENTINEL;
 import type {
     PublicKeyBundle,
     InitialMessage,
@@ -336,23 +337,36 @@ class E2eeService {
         );
     }
 
+    private isDirectRoomLocallyReady(
+        localStates: Map<number, SenderKeyState>,
+        options: { roomMembers?: RoomMember[]; currentMemberId: number },
+    ): boolean {
+        const localSenderKeyExists = localStates.get(options.currentMemberId)?.is_own_key === true;
+        if (!localSenderKeyExists) {
+            return false;
+        }
+
+        const peerMembers = (options.roomMembers ?? []).filter((member) => member.member_id !== options.currentMemberId);
+        return peerMembers.every((member) => {
+            const state = localStates.get(member.member_id);
+            return state !== undefined && !state.is_own_key;
+        });
+    }
+
     isDirectRoomReadyFromState(
         status: GetSenderKeyDistributionStatusResponse,
         localStates: Map<number, SenderKeyState>,
         options: { roomMembers?: RoomMember[]; currentMemberId: number },
     ): boolean {
-        const localSenderKeyExists = localStates.get(options.currentMemberId)?.is_own_key === true;
         const peerMembers = (options.roomMembers ?? []).filter((member) => member.member_id !== options.currentMemberId);
-        const allPeerKeysReady = peerMembers.every((member) => {
-            const state = localStates.get(member.member_id);
-            return state !== undefined && !state.is_own_key;
-        });
+        if (peerMembers.length > 0) {
+            return this.isDirectRoomLocallyReady(localStates, options);
+        }
 
-        return status.own_sender_key_exists
-            && localSenderKeyExists
+        const localSenderKeyExists = localStates.get(options.currentMemberId)?.is_own_key === true;
+        return localSenderKeyExists
             && (status.pending_from_members?.length ?? 0) === 0
-            && (status.available_from_member_ids?.length ?? 0) === 0
-            && (peerMembers.length === 0 || allPeerKeysReady);
+            && (status.available_from_member_ids?.length ?? 0) === 0;
     }
 
     async deleteLocalSenderKeys(memberIds: number[]): Promise<void> {
@@ -468,7 +482,7 @@ class E2eeService {
 
             const localState = localStates.get(member.member_id);
             const hasLocalPeerKey = localState !== undefined && !localState.is_own_key;
-            if (hasLocalPeerKey && !pendingFromMembers.has(member.member_id)) {
+            if (hasLocalPeerKey) {
                 this.clearSenderKeyRequest(roomId, member.member_id);
                 continue;
             }
@@ -645,27 +659,34 @@ class E2eeService {
         requesterUserId: number,
         memberId?: number,
         requesterMemberId?: number,
+        options?: { forceUpload?: boolean },
     ): Promise<boolean> {
         const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
         const receiverMemberId = this.resolvePeerMemberId(roomId, requesterUserId, requesterMemberId);
-        const [status, localStates] = await Promise.all([
-            e2eeApi.getSenderKeyDistributionStatus(roomId).catch(() => null),
-            this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>()),
-        ]);
-        const ownState = localStates.get(myMemberId);
-        const shouldUpload = !ownState?.is_own_key
-            || !status?.own_sender_key_exists
-            || (status.pending_receivers ?? []).includes(receiverMemberId);
+        const forceUpload = options?.forceUpload === true;
 
-        if (!shouldUpload) {
-            logger.info(`Sender key upload skipped for room ${roomId}: receiver ${receiverMemberId} already has the latest distribution`);
-            return false;
+        if (!forceUpload) {
+            const [status, localStates] = await Promise.all([
+                e2eeApi.getSenderKeyDistributionStatus(roomId).catch(() => null),
+                this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>()),
+            ]);
+            const ownState = localStates.get(myMemberId);
+            const shouldUpload = !ownState?.is_own_key
+                || !status?.own_sender_key_exists
+                || (status.pending_receivers ?? []).includes(receiverMemberId);
+
+            if (!shouldUpload) {
+                logger.info(`Sender key upload skipped for room ${roomId}: receiver ${receiverMemberId} already has the latest distribution`);
+                return false;
+            }
         }
 
         await this.uploadOwnSenderKey(roomId, requesterUserId, myMemberId, receiverMemberId);
 
-        logger.info(`Inviter key exchange completed for room ${roomId}`);
+        logger.info(`Inviter key exchange completed for room ${roomId}`, {
+            forceUpload,
+        });
         return true;
     }
 
@@ -741,16 +762,16 @@ class E2eeService {
         await this.resolveMemberSenderKeys(roomId).catch(err =>
             logger.warn(`Failed to consume pending sender key distributions for room ${roomId}`, err)
         );
-        const status = await e2eeApi.getSenderKeyDistributionStatus(roomId);
-        if (!status || !Array.isArray(status.pending_from_members)) {
-            logger.warn(`Invalid sender key distribution status for room ${roomId}`, status);
-            return false;
-        }
+
+        const roomMembers = options?.roomMembers
+            ?? (useChatStore.getState().currentRoomDetail?.room_id === roomId
+                ? useChatStore.getState().currentRoomDetail?.members
+                : undefined);
 
         let myMemberId: number;
         try {
-            myMemberId = options?.roomMembers
-                ? this.resolveCurrentMemberIdFromMembers(roomId, options.roomMembers, options.currentMemberId)
+            myMemberId = roomMembers
+                ? this.resolveCurrentMemberIdFromMembers(roomId, roomMembers, options?.currentMemberId)
                 : this.resolveCurrentMemberId(roomId, options?.currentMemberId);
         } catch (err) {
             logger.warn(`Cannot resolve local sender key state for room ${roomId}`, err);
@@ -758,15 +779,30 @@ class E2eeService {
         }
 
         const accountId = this.getCurrentAccountId();
-        const localStates = options?.roomMembers
+        const localStates = roomMembers
             ? await this.getSenderKeyStateMap(
                 accountId,
-                options.roomMembers.map((member) => member.member_id),
+                roomMembers.map((member) => member.member_id),
             ).catch(() => new Map<number, SenderKeyState>())
             : await this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>());
 
+        const status = await e2eeApi.getSenderKeyDistributionStatus(roomId).catch((err) => {
+            logger.warn(`Failed to fetch sender key distribution status for room ${roomId}`, err);
+            return null;
+        });
+        if (!status || !Array.isArray(status.pending_from_members) || !Array.isArray(status.available_from_member_ids)) {
+            if (roomMembers && roomMembers.length > 0) {
+                return this.isDirectRoomLocallyReady(localStates, {
+                    roomMembers,
+                    currentMemberId: myMemberId,
+                });
+            }
+            logger.warn(`Invalid sender key distribution status for room ${roomId}`, status);
+            return false;
+        }
+
         return this.isDirectRoomReadyFromState(status, localStates, {
-            roomMembers: options?.roomMembers,
+            roomMembers,
             currentMemberId: myMemberId,
         });
     }

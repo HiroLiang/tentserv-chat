@@ -18,7 +18,7 @@ vi.mock("@/api/index.ts", () => ({
 }));
 
 vi.mock("@/services/e2eeService.ts", () => ({
-    WAITING_FOR_SENDER_KEY: "WAITING_FOR_SENDER_KEY",
+    WAITING_FOR_SENDER_KEY: "__E2EE_WAITING_KEY__",
     e2eeService: {
         decryptMessage: vi.fn(),
         resolveDirectKey: vi.fn(),
@@ -120,13 +120,15 @@ describe("chatRoomService.loadRooms latest message summaries", () => {
         });
         vi.mocked(e2eeService.resolveDirectKey).mockResolvedValue(true);
         vi.mocked(e2eeService.isDirectRoomReadyFromState).mockImplementation((status, localStates, options) => {
-            const ownState = localStates.get(options.currentMemberId);
             const peerMembers = (options.roomMembers ?? []).filter((member) => member.member_id !== options.currentMemberId);
-            return status.own_sender_key_exists
-                && ownState?.is_own_key === true
+            const ownState = localStates.get(options.currentMemberId);
+            if (peerMembers.length > 0) {
+                return ownState?.is_own_key === true
+                    && peerMembers.every((member) => localStates.get(member.member_id)?.is_own_key === false);
+            }
+            return ownState?.is_own_key === true
                 && status.pending_from_members.length === 0
-                && status.available_from_member_ids.length === 0
-                && peerMembers.every((member) => localStates.get(member.member_id)?.is_own_key === false);
+                && status.available_from_member_ids.length === 0;
         });
         const localStates = new Map<number, SenderKeyState>([
             [401, {
@@ -219,6 +221,39 @@ describe("chatRoomService.loadRooms latest message summaries", () => {
         expect(e2eeService.decryptMessage).toHaveBeenCalledWith("e2ee:v1:waiting", 202, 9);
         expect(useChatStore.getState().rooms.direct[0].latest_message).toBe(WAITING_FOR_PEER_KEY_LABEL);
         expect(useChatStore.getState().rooms.group[0].latest_message).toBe(LATEST_MESSAGE_FALLBACK);
+    });
+
+    it("deduplicates concurrent room summary loads into a single /api/chat/rooms request", async () => {
+        let resolveRooms: ((value: GetUserRoomsResponse) => void) | undefined;
+        vi.mocked(chatApi.getRooms).mockImplementationOnce(() => new Promise((resolve) => {
+            resolveRooms = resolve;
+        }));
+        vi.mocked(e2eeService.decryptMessage).mockImplementation(async (content) => (
+            content === "e2ee:v1:encrypted" ? "Hello Mina" : content
+        ));
+
+        const first = chatRoomService.loadRooms();
+        const second = chatRoomService.loadRooms();
+
+        expect(chatApi.getRooms).toHaveBeenCalledTimes(1);
+
+        resolveRooms?.({
+            ...emptyRooms(),
+            direct: [
+                room({
+                    room_id: 14,
+                    latest_message: "e2ee:v1:encrypted",
+                    latest_message_sender_id: 101,
+                }),
+            ],
+        });
+
+        await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+        expect(e2eeService.decryptMessage).toHaveBeenCalledTimes(1);
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            room_id: 14,
+            latest_message: "Hello Mina",
+        });
     });
 
     it("keeps direct-room presence fields when loading summaries", async () => {
@@ -354,6 +389,54 @@ describe("chatRoomService.loadRooms latest message summaries", () => {
         expect(chatApi.getRoomDetail).toHaveBeenCalledTimes(1);
         expect(e2eeService.reconcileRoomSenderKeys).toHaveBeenCalledTimes(1);
         expect(e2eeService.resolveDirectKey).not.toHaveBeenCalled();
+        expect(useChatStore.getState().directKeyStatus[21]).toBe("unlocked");
+    });
+
+    it("unlocks a prepared direct room when local sender keys are ready even if status still reports stale pending", async () => {
+        useChatStore.getState().setRooms({
+            direct: [room({ room_id: 21, display_name: "Mina Park" })],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+        const localStates = new Map<number, SenderKeyState>([
+            [401, {
+                member_id: "401",
+                is_own_key: true,
+                sender_key_version: 1775758701055,
+                updated_at: 1,
+            }],
+            [402, {
+                member_id: "402",
+                is_own_key: false,
+                sender_key_version: 88,
+                updated_at: 2,
+            }],
+        ]);
+        vi.mocked(e2eeService.reconcileRoomSenderKeys).mockResolvedValueOnce({
+            currentMemberId: 401,
+            status: {
+                own_sender_key_exists: true,
+                requestable_member_ids: [402],
+                available_from_member_ids: [],
+                available_to_member_ids: [],
+                pending_receivers: [],
+                pending_from_members: [402],
+            },
+            localStates,
+        });
+
+        await chatRoomService.prepareDirectRoom(21);
+
+        expect(e2eeService.isDirectRoomReadyFromState).toHaveBeenCalledWith(
+            expect.objectContaining({
+                pending_from_members: [402],
+            }),
+            localStates,
+            expect.objectContaining({
+                currentMemberId: 401,
+            }),
+        );
         expect(useChatStore.getState().directKeyStatus[21]).toBe("unlocked");
     });
 });

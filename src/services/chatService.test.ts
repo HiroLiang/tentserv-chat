@@ -8,6 +8,10 @@ import { e2eeService } from "./e2eeService.ts";
 import { e2eeApi } from "@/api/index.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
 import { useE2eeStore } from "@/stores/e2eeStore.ts";
+import {
+    WAITING_FOR_PEER_KEY_LABEL,
+    WAITING_FOR_SENDER_KEY_SENTINEL,
+} from "@/utils/chatCopy.ts";
 
 vi.mock("./wsService.ts", () => ({
     wsService: {
@@ -169,6 +173,46 @@ describe("chatService sender-key handling", () => {
             last_seen_at: undefined,
         });
         expect(chatRoomService.loadRooms).not.toHaveBeenCalled();
+    });
+
+    it("maps waiting sender-key messages to a user-facing direct-room preview on chat.message", async () => {
+        useChatStore.setState({
+            rooms: {
+                direct: [{
+                    room_id: 55,
+                    room_type: "direct",
+                    display_name: "Bell",
+                    unread_count: 0,
+                }],
+                group: [],
+                channel: [],
+                bot: [],
+            },
+        });
+        vi.mocked(e2eeService.decryptMessage).mockResolvedValueOnce(WAITING_FOR_SENDER_KEY_SENTINEL);
+
+        await chatService.initialize();
+        const handler = getWSHandler("chat.message");
+
+        await handler({
+            message_id: 101,
+            room_id: 55,
+            sender_id: 205,
+            content: "e2ee:v1:encrypted",
+            type: "text",
+            is_edited: false,
+            is_deleted: false,
+            created_at: "2026-04-12T07:00:00Z",
+        });
+
+        await waitFor(() => expect(e2eeService.decryptMessage).toHaveBeenCalledWith("e2ee:v1:encrypted", 205, 55));
+        expect(useChatStore.getState().messages[55][0]?.content).toBe(WAITING_FOR_SENDER_KEY_SENTINEL);
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            latest_message: WAITING_FOR_PEER_KEY_LABEL,
+            latest_message_sender_id: 205,
+            latest_message_created_at: "2026-04-12T07:00:00Z",
+            unread_count: 1,
+        });
     });
 });
 
