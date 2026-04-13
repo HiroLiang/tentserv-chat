@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { ChatGroup, ChatMessage } from '@/types/ui';
-import { Bot, Lock, Send, Users } from 'lucide-react';
+import { Bot, Clock3, Lock, RotateCcw, Send, Users } from 'lucide-react';
 import { useChatStore } from '@/stores/chatStore';
 import { chatRoomService } from '@/services/chatRoomService';
-import { e2eeService, WAITING_FOR_SENDER_KEY } from '@/services/e2eeService';
-import { wsService } from '@/services/wsService';
-import { logger } from '@/utils/logger';
-import { toast } from 'sonner';
 import {
     DIRECT_ROOM_WAITING_HINT,
     DIRECT_ROOM_WAITING_TITLE,
     formatDirectPresenceLabel,
+    WAITING_FOR_SENDER_KEY_SENTINEL,
     WAITING_FOR_PEER_KEY_LABEL,
 } from '@/utils/chatCopy.ts';
 import { InvitationBanner } from './InvitationBanner';
@@ -22,6 +19,7 @@ interface ChatRoomProps {
     chat: ChatGroup;
     messages: ChatMessage[];
     onSendMessage: (content: string) => void;
+    onRetryMessage: (clientMessageId: string) => void;
 }
 
 const avatarBgClass: Record<ChatGroup['type'], string> = {
@@ -100,8 +98,18 @@ function MessageAvatar({ message, chat }: { message: ChatMessage; chat: ChatGrou
     );
 }
 
-function MessageBubble({ message, chat }: { message: ChatMessage; chat: ChatGroup }) {
+function MessageBubble({
+    message,
+    chat,
+    onRetryMessage,
+}: {
+    message: ChatMessage;
+    chat: ChatGroup;
+    onRetryMessage: (clientMessageId: string) => void;
+}) {
     const showSenderName = !message.isMe && chat.type === 'group';
+    const isPending = message.deliveryStatus === 'pending';
+    const isFailed = message.deliveryStatus === 'failed';
 
     return (
         <div className={cn('flex items-end gap-2', message.isMe ? 'flex-row-reverse' : 'flex-row')}>
@@ -117,14 +125,33 @@ function MessageBubble({ message, chat }: { message: ChatMessage; chat: ChatGrou
                         ? 'bg-primary text-primary-foreground rounded-tl-2xl rounded-tr-sm rounded-bl-2xl'
                         : 'bg-muted text-foreground rounded-tr-2xl rounded-tl-sm rounded-br-2xl',
                 )}>
-                    {message.content === WAITING_FOR_SENDER_KEY
+                    {message.content === WAITING_FOR_SENDER_KEY_SENTINEL
                         ? <span className="italic text-muted-foreground flex items-center gap-1">
                             <Lock className="h-3 w-3"/> {WAITING_FOR_PEER_KEY_LABEL}
                           </span>
                         : message.content
                     }
                 </div>
-                <span className="text-[11px] text-muted-foreground mt-1 px-1">{message.timestamp}</span>
+                <div className="mt-1 px-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>{message.timestamp}</span>
+                    {message.isMe && isPending && (
+                        <span className="inline-flex items-center gap-1">
+                            <Clock3 className="h-3 w-3"/> Sending...
+                        </span>
+                    )}
+                    {message.isMe && isFailed && (
+                        <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-destructive hover:text-destructive/80"
+                            onClick={() => message.clientMessageId && onRetryMessage(message.clientMessageId)}
+                        >
+                            <RotateCcw className="h-3 w-3"/> Retry
+                        </button>
+                    )}
+                    {message.isMe && isFailed && message.deliveryError && (
+                        <span className="text-destructive">{message.deliveryError}</span>
+                    )}
+                </div>
             </div>
 
             {/* Spacer to mirror avatar width on my side */}
@@ -133,12 +160,12 @@ function MessageBubble({ message, chat }: { message: ChatMessage; chat: ChatGrou
     );
 }
 
-export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
+export function ChatRoom({ chat, messages, onSendMessage, onRetryMessage }: ChatRoomProps) {
     const [input, setInput] = useState('');
     const bottomRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const pendingInvitation = useChatStore((s) => s.pendingInvitation);
-    const directKeyStatus = useChatStore((s) => s.directKeyStatus[Number(chat.id)]);
+    const directKeyStatus = useChatStore((s) => s.directKeyStatus[Number(chat.id)] ?? 'loading');
     const isDeleted = chat.status === 'deleted';
     const isBlockedByMe = chat.type === 'direct' && !isDeleted && chat.blockedByMe === true;
     const isBlockedByPeer = chat.type === 'direct' && !isDeleted && chat.blockedByPeer === true;
@@ -149,73 +176,6 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
     const directAvatarUrl = chat.type === 'direct' && !isDeleted && chat.avatarUrl
         ? `${env.API_BASE_URL}/static/${chat.avatarUrl}`
         : undefined;
-
-    // Load pending invitation for GROUP; resolve direct key for DIRECT
-    useEffect(() => {
-        let active = true;
-        const setDirectStatus = (status: 'loading' | 'locked' | 'unlocked') => {
-            if (!active) return;
-            useChatStore.getState().setDirectKeyStatus(Number(chat.id), status);
-        };
-
-        if (isDeleted || hasDirectBlock) {
-            useChatStore.getState().setPendingInvitation(null);
-            setDirectStatus('locked');
-        } else if (chat.type === 'group') {
-            const roomId = Number(chat.id);
-            void (async () => {
-                const invitation = await chatRoomService.loadMyRoomInvitation(roomId);
-                useChatStore.getState().setDirectKeyStatus(roomId, 'unlocked');
-                if (!invitation?.found) {
-                    chatRoomService.initializeGroupRoomEncryption(roomId).catch(err =>
-                        logger.warn(`Group E2EE init failed for room ${roomId}`, err)
-                    );
-                }
-            })();
-        } else if (chat.type === 'direct') {
-            const roomId = Number(chat.id);
-            void chatRoomService.prepareDirectRoom(roomId).catch((err) => {
-                logger.error(`Failed to initialize direct chat state for room ${roomId}`, err);
-                toast.error('Unable to verify chat invitation status.', {
-                    id: `direct-chat-init-${roomId}`,
-                });
-                setDirectStatus('locked');
-            });
-        } else {
-            useChatStore.getState().setPendingInvitation(null);
-            useChatStore.getState().setDirectKeyStatus(Number(chat.id), 'unlocked');
-        }
-        return () => {
-            active = false;
-        };
-    }, [chat.id, chat.type, isDeleted, hasDirectBlock]);
-
-    // Subscribe to WS e2ee.direct_key_ready to auto-unlock when invitee completes handshake
-    useEffect(() => {
-        if (chat.type !== 'direct' || isDeleted || hasDirectBlock) return;
-        const roomId = Number(chat.id);
-        const handler = (data: unknown) => {
-            const payload = data as { room_id?: number };
-            if (payload?.room_id === roomId) {
-                useChatStore.getState().setDirectKeyStatus(roomId, 'loading');
-                void e2eeService.resolveDirectKey(roomId)
-                    .then((unlocked) => {
-                        useChatStore.getState().setDirectKeyStatus(roomId, unlocked ? 'unlocked' : 'locked');
-                        if (unlocked) {
-                            e2eeService.resolveMemberSenderKeys(roomId).catch(err =>
-                                logger.warn(`Failed to resolve sender keys after unlock for room ${roomId}`, err)
-                            );
-                        }
-                    })
-                    .catch((err) => {
-                        logger.error(`Failed to refresh direct key status for room ${roomId}`, err);
-                        useChatStore.getState().setDirectKeyStatus(roomId, 'locked');
-                    });
-            }
-        };
-        wsService.on('e2ee.direct_key_ready', handler);
-        return () => wsService.off('e2ee.direct_key_ready', handler);
-    }, [chat.id, chat.type, isDeleted, hasDirectBlock]);
 
     // Jump to the bottom instantly when switching chats
     useEffect(() => {
@@ -289,7 +249,7 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
                         </span>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        {chat.type === 'group' && `${chat.memberCount} members`}
+                        {chat.type === 'group' && `${chat.memberCount ?? 0} members`}
                         {chat.type === 'direct' && (isDeleted ? 'Deleted' : formatDirectPresenceLabel(chat.presenceStatus, chat.lastSeenAt))}
                         {chat.type === 'bot' && 'AI Assistant'}
                         {chat.type === 'channel' && 'Channel'}
@@ -353,7 +313,12 @@ export function ChatRoom({ chat, messages, onSendMessage }: ChatRoomProps) {
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4">
                 <div className="flex flex-col gap-3">
                     {messages.map((msg) => (
-                        <MessageBubble key={msg.id} message={msg} chat={chat}/>
+                        <MessageBubble
+                            key={msg.id}
+                            message={msg}
+                            chat={chat}
+                            onRetryMessage={onRetryMessage}
+                        />
                     ))}
                     <div ref={bottomRef}/>
                 </div>

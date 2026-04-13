@@ -1,6 +1,8 @@
 export type RoomType = 'direct' | 'group' | 'channel' | 'bot';
 export type RoomStatus = 'active' | 'deleted';
 export type PresenceStatus = 'online' | 'offline';
+export type DirectKeyStatus = 'loading' | 'locked' | 'unlocked';
+export type DeliveryStatus = 'sent' | 'pending' | 'failed';
 
 // Matches backend ChatRoomSummaryResponse (GET /chat/rooms)
 export interface RoomSummary {
@@ -18,6 +20,8 @@ export interface RoomSummary {
     unread_count: number;
     blocked_by_peer?: boolean;
     blocked_by_me?: boolean;
+    direct_key_status?: DirectKeyStatus;
+    member_count?: number;
 }
 
 // Matches backend ChatRoomMemberInfoResponse
@@ -36,13 +40,19 @@ export type MessageType = 'text' | 'image' | 'file';
 
 // Matches backend ChatMessageInfoResponse
 export interface Message {
-    message_id: number;
+    client_message_id: string;
+    message_id?: number | null;
     sender_id: number;
     type: MessageType;
     content: string;
     reply_to_id?: number;
     is_edited: boolean;
+    is_deleted?: boolean;
     created_at: string;
+    sort_key: number;
+    delivery_status: DeliveryStatus;
+    delivery_error?: string;
+    is_local_echo?: boolean;
 }
 
 // Matches backend GetChatRoomDetailResponse (GET /chat/room/{id})
@@ -57,6 +67,10 @@ export interface RoomDetail {
     status?: RoomStatus;
     members: RoomMember[];
     messages: Message[];
+    has_more?: boolean;
+    pending_invitation?: PendingInvitation | null;
+    direct_key_status?: DirectKeyStatus;
+    member_count?: number;
 }
 
 // Matches backend GetUserChatRoomsResponse (GET /chat/rooms)

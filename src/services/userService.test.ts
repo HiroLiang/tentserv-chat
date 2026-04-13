@@ -5,7 +5,7 @@ import { useChatStore } from "@/stores/chatStore.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { userService } from "./userService.ts";
-import { wsService } from "./wsService.ts";
+import { chatService } from "./chatService.ts";
 
 vi.mock("@/api/index.ts", () => ({
     authApi: {
@@ -26,9 +26,9 @@ vi.mock("@/bridge/auth.ts", () => ({
     clearAuthToken: vi.fn(),
 }));
 
-vi.mock("./wsService.ts", () => ({
-    wsService: {
-        disconnect: vi.fn(),
+vi.mock("./chatService.ts", () => ({
+    chatService: {
+        stop: vi.fn(),
     },
 }));
 
@@ -73,6 +73,9 @@ const resetStores = () => {
         loadingMessages: false,
         pendingInvitation: null,
         directKeyStatus: {},
+        syncState: null,
+        runtimeStatus: "idle",
+        runtimeError: null,
     });
 };
 
@@ -154,7 +157,7 @@ describe("userService login/session", () => {
         expect(useUserStore.getState().currentUser?.token).toBeUndefined();
     });
 
-    it("logs out by revoking the backend session, disconnecting websocket, and resetting stores", async () => {
+    it("logs out by revoking the backend session, stopping the runtime, and resetting stores", async () => {
         useUserStore.setState({
             currentUser: {
                 id: 501,
@@ -180,7 +183,7 @@ describe("userService login/session", () => {
         await userService.logout();
 
         expect(authApi.logout).toHaveBeenCalledTimes(1);
-        expect(wsService.disconnect).toHaveBeenCalledTimes(1);
+        expect(chatService.stop).toHaveBeenCalledTimes(1);
         expect(clearAuthToken).toHaveBeenCalledWith(42);
         expect(useChatStore.getState()).toMatchObject({
             currentRoomId: null,
@@ -188,6 +191,7 @@ describe("userService login/session", () => {
             hasMore: {},
             directKeyStatus: {},
         });
+        expect(useUserStore.getState().participantId).toBeNull();
         expect(useUserStore.getState().currentUser).toMatchObject({
             id: 0,
             token: undefined,

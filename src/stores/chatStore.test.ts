@@ -5,6 +5,7 @@ import {
     WAITING_FOR_PEER_KEY_LABEL,
     WAITING_FOR_SENDER_KEY_SENTINEL,
 } from "@/utils/chatCopy.ts";
+import type { Message } from "@/types/chat.ts";
 
 const resetChatStore = () => {
     useChatStore.setState({
@@ -17,8 +18,27 @@ const resetChatStore = () => {
         loadingMessages: false,
         pendingInvitation: null,
         directKeyStatus: {},
+        syncState: null,
+        runtimeStatus: "idle",
+        runtimeError: null,
     });
 };
+
+const message = (overrides: Partial<Message>): Message => ({
+    client_message_id: overrides.client_message_id ?? `client-${overrides.message_id ?? overrides.sort_key ?? 1}`,
+    message_id: overrides.message_id ?? null,
+    sender_id: overrides.sender_id ?? 1,
+    type: overrides.type ?? "text",
+    content: overrides.content ?? "",
+    reply_to_id: overrides.reply_to_id,
+    is_edited: overrides.is_edited ?? false,
+    is_deleted: overrides.is_deleted ?? false,
+    created_at: overrides.created_at ?? "2026-04-12T00:00:00Z",
+    sort_key: overrides.sort_key ?? Date.parse(overrides.created_at ?? "2026-04-12T00:00:00Z"),
+    delivery_status: overrides.delivery_status ?? "sent",
+    delivery_error: overrides.delivery_error,
+    is_local_echo: overrides.is_local_echo,
+});
 
 describe("chatStore room activity ordering", () => {
     beforeEach(() => {
@@ -98,14 +118,14 @@ describe("chatStore room activity ordering", () => {
         });
         useChatStore.getState().setCurrentRoomId(10);
 
-        useChatStore.getState().appendMessage(11, {
+        useChatStore.getState().appendMessage(11, message({
             message_id: 91,
             sender_id: 201,
             type: "text",
             content: "fresh message",
             is_edited: false,
             created_at: "2026-04-12T04:00:00Z",
-        });
+        }));
 
         const state = useChatStore.getState();
         expect(state.rooms.direct.map((room) => room.room_id)).toEqual([11, 10]);
@@ -113,7 +133,7 @@ describe("chatStore room activity ordering", () => {
             latest_message: "fresh message",
             latest_message_sender_id: 201,
             latest_message_created_at: "2026-04-12T04:00:00Z",
-            unread_count: 3,
+            unread_count: 2,
         });
     });
 
@@ -134,14 +154,14 @@ describe("chatStore room activity ordering", () => {
             bot: [],
         });
 
-        useChatStore.getState().appendMessage(12, {
+        useChatStore.getState().appendMessage(12, message({
             message_id: 92,
             sender_id: 202,
             type: "text",
             content: WAITING_FOR_SENDER_KEY_SENTINEL,
             is_edited: false,
             created_at: "2026-04-12T05:00:00Z",
-        });
+        }));
 
         const state = useChatStore.getState();
         expect(state.messages[12][0]?.content).toBe(WAITING_FOR_SENDER_KEY_SENTINEL);
@@ -149,7 +169,7 @@ describe("chatStore room activity ordering", () => {
             latest_message: WAITING_FOR_PEER_KEY_LABEL,
             latest_message_sender_id: 202,
             latest_message_created_at: "2026-04-12T05:00:00Z",
-            unread_count: 2,
+            unread_count: 1,
         });
     });
 
@@ -170,14 +190,14 @@ describe("chatStore room activity ordering", () => {
             bot: [],
         });
 
-        useChatStore.getState().appendMessage(13, {
+        useChatStore.getState().appendMessage(13, message({
             message_id: 93,
             sender_id: 203,
             type: "text",
             content: WAITING_FOR_SENDER_KEY_SENTINEL,
             is_edited: false,
             created_at: "2026-04-12T06:00:00Z",
-        });
+        }));
 
         const state = useChatStore.getState();
         expect(state.messages[13][0]?.content).toBe(WAITING_FOR_SENDER_KEY_SENTINEL);
@@ -185,7 +205,64 @@ describe("chatStore room activity ordering", () => {
             latest_message: LATEST_MESSAGE_FALLBACK,
             latest_message_sender_id: 203,
             latest_message_created_at: "2026-04-12T06:00:00Z",
-            unread_count: 1,
+            unread_count: 0,
+        });
+    });
+
+    it("does not increment unread when appending a message to the active room", () => {
+        useChatStore.getState().setRooms({
+            direct: [{
+                room_id: 21,
+                room_type: "direct",
+                display_name: "Current",
+                latest_message: "older",
+                latest_message_created_at: "2026-04-12T01:00:00Z",
+                unread_count: 4,
+            }],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+        useChatStore.getState().setCurrentRoomId(21);
+
+        useChatStore.getState().appendMessage(21, message({
+            message_id: 94,
+            sender_id: 301,
+            content: "read in room",
+            created_at: "2026-04-12T07:00:00Z",
+        }));
+
+        expect(useChatStore.getState().rooms.direct[0]?.unread_count).toBe(4);
+    });
+
+    it("deduplicates a pending local row with the later server-backed row using the server message id", () => {
+        const store = useChatStore.getState();
+        store.setMessages(30, [
+            message({
+                client_message_id: "local:30:1",
+                message_id: 120,
+                sender_id: 401,
+                content: "hello",
+                created_at: "2026-04-12T08:00:00Z",
+                delivery_status: "sent",
+                is_local_echo: false,
+            }),
+            message({
+                client_message_id: "server:120",
+                message_id: 120,
+                sender_id: 401,
+                content: "hello",
+                created_at: "2026-04-12T08:00:00Z",
+                delivery_status: "sent",
+                is_local_echo: false,
+            }),
+        ], false);
+
+        const messages = useChatStore.getState().messages[30] ?? [];
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+            message_id: 120,
+            content: "hello",
         });
     });
 });

@@ -10,6 +10,10 @@ import { useUserStore } from '@/stores/userStore.ts';
 import { chatRoomService } from '@/services/chatRoomService.ts';
 import type { ChatGroup, ChatMessage } from '@/types/ui.ts';
 import type { RoomSummary, Message, RoomMember } from '@/types/chat.ts';
+import {
+    CHAT_RUNTIME_DEGRADED_MESSAGE,
+    CHAT_RUNTIME_UNAVAILABLE_MESSAGE,
+} from '@/utils/chatCopy.ts';
 import { logger } from '@/utils/logger.ts';
 import { MessageSquare } from 'lucide-react';
 
@@ -98,6 +102,7 @@ function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
         isOnline: room.room_type === 'direct' ? room.presence_status === 'online' : undefined,
         blockedByPeer: room.blocked_by_peer === true,
         blockedByMe: room.blocked_by_me === true,
+        memberCount: room.member_count,
     };
 }
 
@@ -105,14 +110,17 @@ function messageToUi(msg: Message, currentParticipantId: number | null, members:
     const myMember = members.find(m => m.participant_id === currentParticipantId);
     const senderMember = members.find(m => m.member_id === msg.sender_id);
     return {
-        id: String(msg.message_id),
+        id: msg.client_message_id || String(msg.message_id ?? msg.sort_key),
         chatId: '',
         senderId: String(msg.sender_id),
-        senderName: senderMember?.display_name ?? '',
+        senderName: senderMember?.display_name ?? 'Unknown',
         senderAvatarUrl: senderMember?.avatar_url,
         content: msg.content,
         timestamp: formatTime(msg.created_at),
         isMe: myMember !== undefined && msg.sender_id === myMember.member_id,
+        clientMessageId: msg.client_message_id,
+        deliveryStatus: msg.delivery_status,
+        deliveryError: msg.delivery_error,
     };
 }
 
@@ -122,7 +130,7 @@ const ChatPageContent = () => {
 
     const { rooms, messages } = useChatStore();
     const currentRoomDetail = useChatStore((s) => s.currentRoomDetail);
-    const setCurrentRoomId = useChatStore((s) => s.setCurrentRoomId);
+    const runtimeStatus = useChatStore((s) => s.runtimeStatus);
     const currentUser = useUserStore(s => s.currentUser);
     const currentParticipantId = useUserStore(s => s.participantId);
     const currentRoomMembers = currentRoomDetail?.members ?? EMPTY_ROOM_MEMBERS;
@@ -131,7 +139,9 @@ const ChatPageContent = () => {
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
     useEffect(() => {
-        chatRoomService.loadRooms().catch(() => {});
+        chatRoomService.loadRooms().catch((error) => {
+            logger.warn('Failed to load chat rooms on page mount', error);
+        });
     }, []);
 
     // Auto-select room from URL param once rooms are loaded
@@ -164,9 +174,12 @@ const ChatPageContent = () => {
     }, [selectedChatId, selectedRoomStatus]);
 
     useEffect(() => {
-        setCurrentRoomId(selectedChatId ? Number(selectedChatId) : null);
-        return () => setCurrentRoomId(null);
-    }, [selectedChatId, setCurrentRoomId]);
+        const roomId = selectedChatId ? Number(selectedChatId) : null;
+        chatRoomService.setActiveRoom(roomId).catch(() => {});
+        return () => {
+            void chatRoomService.setActiveRoom(null).catch(() => {});
+        };
+    }, [selectedChatId]);
 
     const toGroups = (arr: RoomSummary[]): ChatGroup[] =>
         arr.map(room => {
@@ -207,9 +220,19 @@ const ChatPageContent = () => {
         chatRoomService.sendMessage(selectedRoomId, content).catch(() => {});
     };
 
+    const handleRetryMessage = (clientMessageId: string) => {
+        if (!selectedRoomId) return;
+        void chatRoomService.retryMessage(selectedRoomId, clientMessageId).catch(() => {});
+    };
+
     return (
         <div className="flex flex-col h-screen overflow-hidden">
             <Navbar/>
+            {runtimeStatus === 'degraded' && (
+                <div className="px-4 py-2 bg-amber-100 text-amber-900 text-sm border-b border-amber-200">
+                    {CHAT_RUNTIME_DEGRADED_MESSAGE}
+                </div>
+            )}
             <div className="flex flex-1 overflow-hidden">
                 <ChatSidebar
                     chatGroups={chatGroups}
@@ -223,7 +246,18 @@ const ChatPageContent = () => {
                         chat={selectedChat}
                         messages={currentMessages}
                         onSendMessage={handleSendMessage}
+                        onRetryMessage={handleRetryMessage}
                     />
+                ) : runtimeStatus === 'starting' ? (
+                    <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground select-none">
+                        <MessageSquare className="h-12 w-12 opacity-20"/>
+                        <p className="text-sm">Starting chat runtime...</p>
+                    </div>
+                ) : runtimeStatus === 'failed' ? (
+                    <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
+                        <MessageSquare className="h-12 w-12 opacity-20"/>
+                        <p className="text-sm text-foreground">{CHAT_RUNTIME_UNAVAILABLE_MESSAGE}</p>
+                    </div>
                 ) : (
                     <div
                         className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground select-none">

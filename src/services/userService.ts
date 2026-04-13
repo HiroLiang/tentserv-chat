@@ -6,7 +6,6 @@ import type {
     AuthVerifyEmailRequest,
     AuthVerifyEmailResponse,
 } from "@/api/types.ts";
-import { wsService } from "./wsService.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
 import {
@@ -17,6 +16,7 @@ import {
 import { toast } from "sonner";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useE2eeStore } from "@/stores/e2eeStore.ts";
+import { chatService } from "@/services/chatService.ts";
 
 // [EN] UserService handles authentication lifecycle: login, register, session restore, logout, and profile updates.
 //      Token is persisted in the OS keyring via the Tauri bridge.
@@ -98,13 +98,13 @@ class UserService {
         return authApi.resendVerifyEmail({ token });
     }
 
-    // [EN] Logout: call API, disconnect WebSocket, clear keyring token, reset chat and user stores.
-    // [中] 登出：呼叫 API、中斷 WebSocket、清除 keyring token，重置聊天與使用者狀態。
-    // [日] ログアウト：API 呼び出し、WebSocket 切断、keyring トークン削除、チャット・ユーザーストアをリセットする。
+    // [EN] Logout: call API, stop the Rust chat runtime, clear keyring token, reset chat and user stores.
+    // [中] 登出：呼叫 API、停止 Rust chat runtime、清除 keyring token，重置聊天與使用者狀態。
+    // [日] ログアウト：API 呼び出し、Rust chat runtime を停止し、keyring トークン削除、チャット・ユーザーストアをリセットする。
     async logout(): Promise<void> {
         const accountId = useUserStore.getState().currentUser?.accountId;
         await authApi.logout();
-        wsService.disconnect();
+        await chatService.stop();
 
         if (accountId) await clearAuthToken(accountId);
 
@@ -112,6 +112,7 @@ class UserService {
         useE2eeStore.getState().resetBootstrapState();
 
         const state = useUserStore.getState();
+        state.setParticipantId(null);
         state.setCurrentUser({
             id: 0,
             name: undefined,

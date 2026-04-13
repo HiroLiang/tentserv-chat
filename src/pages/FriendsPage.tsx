@@ -7,10 +7,16 @@ import type { FriendResponse, FriendRequestResponse } from '@/api/types.ts';
 import { AddFriendDialog } from '@/components/friends/AddFriendDialog.tsx';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog.tsx';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
+import { useChatStore } from '@/stores/chatStore.ts';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { env } from '@/config/env';
 import { friendService } from '@/services/friendService.ts';
 import { e2eeService } from '@/services/e2eeService.ts';
+import { chatService } from '@/services/chatService.ts';
+import {
+    CHAT_RUNTIME_DEGRADED_MESSAGE,
+    CHAT_RUNTIME_UNAVAILABLE_MESSAGE,
+} from '@/utils/chatCopy.ts';
 import { logger } from '@/utils/logger.ts';
 
 type Tab = 'friends' | 'requests' | 'blocked';
@@ -24,7 +30,8 @@ function getInitials(name: string) {
 
 export const FriendsPage = () => {
     const navigate = useNavigate();
-    const chatAvailable = useE2eeStore((state) => state.bootstrapStatus === 'ready');
+    const chatBootstrapReady = useE2eeStore((state) => state.bootstrapStatus === 'ready');
+    const runtimeStatus = useChatStore((state) => state.runtimeStatus);
     const [activeTab, setActiveTab] = useState<Tab>('friends');
     const [friends, setFriends] = useState<FriendResponse[]>([]);
     const [requests, setRequests] = useState<FriendRequestResponse[]>([]);
@@ -77,7 +84,7 @@ export const FriendsPage = () => {
     }, []);
 
     const handleOpenDirect = async (friend: FriendResponse) => {
-        if (!chatAvailable) {
+        if (!chatBootstrapReady) {
             setMessageError('Chat is unavailable until end-to-end encryption is ready.');
             return;
         }
@@ -85,6 +92,7 @@ export const FriendsPage = () => {
         setLoadingUserId(friend.user_id);
         setMessageError(null);
         try {
+            await chatService.ensureRuntimeReady();
             const room = await chatRoomService.createRoom({
                 type: 'direct',
                 name: friend.name,
@@ -92,10 +100,12 @@ export const FriendsPage = () => {
             });
             navigate(`/chat?room_id=${room.id}`);
         } catch (err: any) {
-            if (err.code === 'USER_BLOCKED') {
+            if (err?.code === 'USER_BLOCKED') {
                 setMessageError(`Cannot send a message to ${friend.name}.`);
+            } else if (err instanceof Error && err.message) {
+                setMessageError(err.message);
             } else {
-                setMessageError('Failed to open chat. Please try again.');
+                setMessageError(CHAT_RUNTIME_UNAVAILABLE_MESSAGE);
             }
         } finally {
             setLoadingUserId(null);
@@ -105,9 +115,10 @@ export const FriendsPage = () => {
     const handleAccept = async (friendshipId: number, friendUserId: number, friendName: string) => {
         await friendService.acceptFriend(friendshipId);
         await refreshLists();
-        if (!chatAvailable) return;
+        if (!chatBootstrapReady) return;
 
         try {
+            await chatService.ensureRuntimeReady();
             const room = await chatRoomService.createRoom({
                 type: 'direct',
                 name: friendName,
@@ -266,6 +277,16 @@ export const FriendsPage = () => {
                             </button>
                         </div>
                     )}
+                    {!messageError && chatBootstrapReady && runtimeStatus === 'degraded' && (
+                        <div className="mb-3 px-3 py-2 rounded-md bg-amber-100 text-amber-900 text-sm">
+                            {CHAT_RUNTIME_DEGRADED_MESSAGE}
+                        </div>
+                    )}
+                    {!messageError && chatBootstrapReady && runtimeStatus === 'failed' && (
+                        <div className="mb-3 px-3 py-2 rounded-md bg-amber-100 text-amber-900 text-sm">
+                            {CHAT_RUNTIME_UNAVAILABLE_MESSAGE}
+                        </div>
+                    )}
 
                     {/* List */}
                     {loading ? (
@@ -300,13 +321,21 @@ export const FriendsPage = () => {
                                                 <div className="flex items-center gap-2">
                                                     <button
                                                         onClick={() => handleOpenDirect(f)}
-                                                        disabled={loadingUserId === f.user_id || !chatAvailable}
-                                                        title={!chatAvailable
+                                                        disabled={loadingUserId === f.user_id || !chatBootstrapReady || runtimeStatus === 'starting'}
+                                                        title={!chatBootstrapReady
                                                             ? 'Chat is unavailable until end-to-end encryption is ready.'
+                                                            : runtimeStatus === 'starting'
+                                                                ? 'Starting chat runtime...'
+                                                                : runtimeStatus === 'failed'
+                                                                    ? CHAT_RUNTIME_UNAVAILABLE_MESSAGE
                                                             : undefined}
                                                         className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                                                     >
-                                                        {loadingUserId === f.user_id ? '...' : 'Message'}
+                                                        {loadingUserId === f.user_id
+                                                            ? '...'
+                                                            : runtimeStatus === 'starting'
+                                                                ? 'Starting...'
+                                                                : 'Message'}
                                                     </button>
                                                     <button
                                                         onClick={() => handleUnfriend(f)}

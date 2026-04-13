@@ -1,52 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { waitFor } from "@testing-library/react";
-import { chatService } from "./chatService.ts";
-import { wsService } from "./wsService.ts";
-import { chatParticipantService } from "./chatParticipantService.ts";
-import { chatRoomService } from "./chatRoomService.ts";
-import { e2eeService } from "./e2eeService.ts";
-import { e2eeApi } from "@/api/index.ts";
-import { useChatStore } from "@/stores/chatStore.ts";
-import { useE2eeStore } from "@/stores/e2eeStore.ts";
 import {
-    WAITING_FOR_PEER_KEY_LABEL,
-    WAITING_FOR_SENDER_KEY_SENTINEL,
-} from "@/utils/chatCopy.ts";
+    chatGetRoomsSnapshot,
+    chatRuntimeStart,
+    onChatMessageDeliveryUpdated,
+    onChatRoomUpdated,
+    onChatRoomsUpdated,
+    onChatSyncStateChanged,
+    type ChatDeliveryUpdate,
+    type ChatRoomSnapshot,
+    type ChatRoomsSnapshot,
+    type ChatSyncState,
+} from "@/bridge/chat.ts";
+import { env } from "@/config/env.ts";
+import { useChatStore } from "@/stores/chatStore.ts";
+import { useDeviceStore } from "@/stores/deviceStore.ts";
+import { useE2eeStore } from "@/stores/e2eeStore.ts";
+import { useUserStore } from "@/stores/userStore.ts";
+import { CHAT_RUNTIME_DEGRADED_MESSAGE } from "@/utils/chatCopy.ts";
+import { chatService } from "./chatService.ts";
 
-vi.mock("./wsService.ts", () => ({
-    wsService: {
-        on: vi.fn(),
-        off: vi.fn(),
-        send: vi.fn(),
+vi.mock("@/config/env.ts", () => ({
+    env: {
+        API_BASE_URL: "http://api.test",
+        WS_BASE_URL: "ws://ws.test",
+        IS_DEV: false,
     },
 }));
 
-vi.mock("./chatParticipantService.ts", () => ({
-    chatParticipantService: {
-        ensureParticipant: vi.fn(),
-    },
-}));
-
-vi.mock("./chatRoomService.ts", () => ({
-    chatRoomService: {
-        loadRooms: vi.fn(),
-        loadRoomDetail: vi.fn(),
-        initializeDirectRoomEncryption: vi.fn(),
-        initializeGroupRoomEncryption: vi.fn(),
-    },
-}));
-
-vi.mock("./e2eeService.ts", () => ({
-    e2eeService: {
-        decryptMessage: vi.fn(),
-        resolveDirectKey: vi.fn(),
-    },
-}));
-
-vi.mock("@/api/index.ts", () => ({
-    e2eeApi: {
-        getSenderKeyDistributionStatus: vi.fn(),
-    },
+vi.mock("@/bridge/chat.ts", () => ({
+    CHAT_ROOMS_UPDATED_EVENT: "chat:rooms_updated",
+    CHAT_ROOM_UPDATED_EVENT: "chat:room_updated",
+    CHAT_MESSAGE_DELIVERY_UPDATED_EVENT: "chat:message_delivery_updated",
+    CHAT_SYNC_STATE_CHANGED_EVENT: "chat:sync_state_changed",
+    chatRuntimeStart: vi.fn(),
+    chatRuntimeStop: vi.fn(),
+    chatGetRoomsSnapshot: vi.fn(),
+    onChatRoomsUpdated: vi.fn(),
+    onChatRoomUpdated: vi.fn(),
+    onChatMessageDeliveryUpdated: vi.fn(),
+    onChatSyncStateChanged: vi.fn(),
 }));
 
 vi.mock("@/utils/logger.ts", () => ({
@@ -57,7 +49,7 @@ vi.mock("@/utils/logger.ts", () => ({
     },
 }));
 
-const resetChatStore = () => {
+const resetStores = () => {
     useChatStore.setState({
         rooms: { direct: [], group: [], channel: [], bot: [] },
         currentRoomId: null,
@@ -68,6 +60,27 @@ const resetChatStore = () => {
         loadingMessages: false,
         pendingInvitation: null,
         directKeyStatus: {},
+        syncState: null,
+        runtimeStatus: "idle",
+        runtimeError: null,
+    });
+    useDeviceStore.setState({
+        deviceId: "device-1",
+        deviceName: "MacBook",
+        platform: "macos",
+        registered: true,
+        createdAt: 1000,
+        updatedAt: null,
+    });
+    useUserStore.setState({
+        currentUser: {
+            id: 501,
+            accountId: 42,
+            token: "token-restored",
+            isLoggedIn: true,
+        },
+        recordedUsers: new Map(),
+        participantId: null,
     });
     useE2eeStore.setState({
         bootstrapStatus: "ready",
@@ -80,144 +93,223 @@ const resetChatStore = () => {
     });
 };
 
-describe("chatService sender-key handling", () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        resetChatStore();
-        (chatService as unknown as { handlersRegistered: boolean }).handlersRegistered = false;
-
-        vi.mocked(chatParticipantService.ensureParticipant).mockResolvedValue(undefined);
-        vi.mocked(chatRoomService.loadRooms).mockResolvedValue(undefined);
-        vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue({
-            own_sender_key_exists: true,
-            requestable_member_ids: [],
-            available_from_member_ids: [],
-            available_to_member_ids: [],
-            pending_receivers: [],
-            pending_from_members: [],
-        });
-        vi.mocked(e2eeService.decryptMessage).mockImplementation(async (content: string) => content);
-        vi.mocked(e2eeService.resolveDirectKey).mockResolvedValue(true);
-    });
-
-    it("registers requester-side direct_key_ready handling without a duplicate provider-side sender_key_needed listener", async () => {
-        await chatService.initialize();
-
-        expect(wsService.on).toHaveBeenCalledWith("e2ee.direct_key_ready", expect.any(Function));
-        expect(wsService.on).toHaveBeenCalledWith("presence.user_status_changed", expect.any(Function));
-        expect(vi.mocked(wsService.on).mock.calls.some(([event]) => event === "e2ee.sender_key_needed")).toBe(false);
-    });
-
-    it("updates direct room status to unlocked when direct_key_ready resolves successfully", async () => {
-        await chatService.initialize();
-        const handler = getWSHandler("e2ee.direct_key_ready");
-
-        await handler({ room_id: 88, provider_member_id: 202 });
-
-        await waitFor(() => expect(e2eeService.resolveDirectKey).toHaveBeenCalledWith(88));
-        expect(useChatStore.getState().directKeyStatus[88]).toBe("unlocked");
-    });
-
-    it("updates direct room status to locked when direct_key_ready still cannot unlock the room", async () => {
-        vi.mocked(e2eeService.resolveDirectKey).mockResolvedValue(false);
-
-        await chatService.initialize();
-        const handler = getWSHandler("e2ee.direct_key_ready");
-
-        await handler({ room_id: 89, provider_member_id: 203 });
-
-        await waitFor(() => expect(e2eeService.resolveDirectKey).toHaveBeenCalledWith(89));
-        expect(useChatStore.getState().directKeyStatus[89]).toBe("locked");
-    });
-
-    it("ignores malformed or failed direct_key_ready events safely", async () => {
-        await chatService.initialize();
-        const handler = getWSHandler("e2ee.direct_key_ready");
-
-        await handler({ provider_member_id: 204 });
-        expect(e2eeService.resolveDirectKey).not.toHaveBeenCalled();
-
-        vi.mocked(e2eeService.resolveDirectKey).mockRejectedValueOnce(new Error("resolve failed"));
-        await handler({ room_id: 90, provider_member_id: 204 });
-
-        await waitFor(() => expect(e2eeService.resolveDirectKey).toHaveBeenCalledWith(90));
-        expect(useChatStore.getState().directKeyStatus[90]).toBeUndefined();
-    });
-
-    it("updates matching direct room presence in place when a presence event arrives", async () => {
-        useChatStore.setState({
-            rooms: {
-                direct: [{
-                    room_id: 44,
-                    room_type: "direct",
-                    display_name: "Bell",
-                    peer_user_id: 2,
-                    presence_status: "offline",
-                    unread_count: 0,
-                }],
-                group: [],
-                channel: [],
-                bot: [],
-            },
-        });
-
-        await chatService.initialize();
-        vi.mocked(chatRoomService.loadRooms).mockClear();
-        const handler = getWSHandler("presence.user_status_changed");
-
-        await handler({ user_id: 2, status: "online" });
-
-        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
-            peer_user_id: 2,
-            presence_status: "online",
-            last_seen_at: undefined,
-        });
-        expect(chatRoomService.loadRooms).not.toHaveBeenCalled();
-    });
-
-    it("maps waiting sender-key messages to a user-facing direct-room preview on chat.message", async () => {
-        useChatStore.setState({
-            rooms: {
-                direct: [{
-                    room_id: 55,
-                    room_type: "direct",
-                    display_name: "Bell",
-                    unread_count: 0,
-                }],
-                group: [],
-                channel: [],
-                bot: [],
-            },
-        });
-        vi.mocked(e2eeService.decryptMessage).mockResolvedValueOnce(WAITING_FOR_SENDER_KEY_SENTINEL);
-
-        await chatService.initialize();
-        const handler = getWSHandler("chat.message");
-
-        await handler({
-            message_id: 101,
-            room_id: 55,
-            sender_id: 205,
-            content: "e2ee:v1:encrypted",
-            type: "text",
-            is_edited: false,
-            is_deleted: false,
-            created_at: "2026-04-12T07:00:00Z",
-        });
-
-        await waitFor(() => expect(e2eeService.decryptMessage).toHaveBeenCalledWith("e2ee:v1:encrypted", 205, 55));
-        expect(useChatStore.getState().messages[55][0]?.content).toBe(WAITING_FOR_SENDER_KEY_SENTINEL);
-        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
-            latest_message: WAITING_FOR_PEER_KEY_LABEL,
-            latest_message_sender_id: 205,
-            latest_message_created_at: "2026-04-12T07:00:00Z",
-            unread_count: 1,
-        });
-    });
+const syncState = (overrides: Partial<ChatSyncState> = {}): ChatSyncState => ({
+    ws_status: "connected",
+    pending_business_jobs: 0,
+    pending_sync_jobs: 0,
+    self_sender_key_sync_status: "idle",
+    ...overrides,
 });
 
-const getWSHandler = (type: string): ((data: unknown) => unknown) => {
-    const call = vi.mocked(wsService.on).mock.calls.find(([event]) => event === type);
-    if (!call) throw new Error(`missing ws handler for ${type}`);
-    return call[1] as (data: unknown) => unknown;
-};
+const roomsSnapshot = (): ChatRoomsSnapshot => ({
+    participant_id: 701,
+    rooms: {
+        direct: [{
+            room_id: 55,
+            room_type: "direct",
+            display_name: "Bell",
+            latest_message: "hello",
+            latest_message_created_at: "2026-04-12T07:00:00Z",
+            latest_message_sender_id: 205,
+            unread_count: 1,
+            direct_key_status: "unlocked",
+        }],
+        group: [],
+        channel: [],
+        bot: [],
+    },
+    sync_state: syncState(),
+});
+
+const roomSnapshot = (): ChatRoomSnapshot => ({
+    room_id: 55,
+    room_type: "direct",
+    name: "Bell",
+    members: [
+        {
+            member_id: 205,
+            participant_id: 702,
+            display_name: "Bell",
+            role: "member",
+            joined_at: "2026-04-12T07:00:00Z",
+        },
+    ],
+    messages: [{
+        client_message_id: "server-101",
+        message_id: 101,
+        sender_id: 205,
+        type: "text",
+        content: "hello",
+        is_edited: false,
+        is_deleted: false,
+        created_at: "2026-04-12T07:00:00Z",
+        sort_key: Date.parse("2026-04-12T07:00:00Z"),
+        delivery_status: "sent",
+        is_local_echo: false,
+    }],
+    has_more: false,
+    pending_invitation: null,
+    direct_key_status: "unlocked",
+    member_count: 2,
+});
+
+let roomsUpdatedHandler: ((payload: ChatRoomsSnapshot) => void) | undefined;
+let roomUpdatedHandler: ((payload: ChatRoomSnapshot) => void) | undefined;
+let deliveryUpdatedHandler: ((payload: ChatDeliveryUpdate) => void) | undefined;
+let syncChangedHandler: ((payload: ChatSyncState) => void) | undefined;
+
+describe("chatService", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        resetStores();
+        (chatService as unknown as {
+            initPromise: Promise<void> | null;
+            listenersRegistered: boolean;
+            unlisteners: Array<() => void>;
+        }).initPromise = null;
+        (chatService as unknown as {
+            initPromise: Promise<void> | null;
+            listenersRegistered: boolean;
+            unlisteners: Array<() => void>;
+        }).listenersRegistered = false;
+        (chatService as unknown as {
+            initPromise: Promise<void> | null;
+            listenersRegistered: boolean;
+            unlisteners: Array<() => void>;
+        }).unlisteners = [];
+
+        roomsUpdatedHandler = undefined;
+        roomUpdatedHandler = undefined;
+        deliveryUpdatedHandler = undefined;
+        syncChangedHandler = undefined;
+
+        vi.mocked(chatRuntimeStart).mockResolvedValue(roomsSnapshot());
+        vi.mocked(chatGetRoomsSnapshot).mockResolvedValue(roomsSnapshot());
+        vi.mocked(onChatRoomsUpdated).mockImplementation(async (handler) => {
+            roomsUpdatedHandler = handler;
+            return () => {};
+        });
+        vi.mocked(onChatRoomUpdated).mockImplementation(async (handler) => {
+            roomUpdatedHandler = handler;
+            return () => {};
+        });
+        vi.mocked(onChatMessageDeliveryUpdated).mockImplementation(async (handler) => {
+            deliveryUpdatedHandler = handler;
+            return () => {};
+        });
+        vi.mocked(onChatSyncStateChanged).mockImplementation(async (handler) => {
+            syncChangedHandler = handler;
+            return () => {};
+        });
+    });
+
+    it("starts the Rust chat runtime with the authenticated session and hydrates stores", async () => {
+        await chatService.initialize();
+
+        expect(chatRuntimeStart).toHaveBeenCalledWith({
+            api_base_url: env.API_BASE_URL,
+            ws_base_url: env.WS_BASE_URL,
+            token: "token-restored",
+            account_id: 42,
+            user_id: 501,
+            device_id: "device-1",
+        });
+        expect(useUserStore.getState().participantId).toBe(701);
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            room_id: 55,
+            display_name: "Bell",
+            direct_key_status: "unlocked",
+        });
+        expect(useChatStore.getState().syncState?.ws_status).toBe("connected");
+        expect(useChatStore.getState().runtimeStatus).toBe("ready");
+    });
+
+    it("skips startup when bootstrap is not ready", async () => {
+        useE2eeStore.setState({ bootstrapStatus: "loading" });
+
+        await chatService.initialize();
+
+        expect(chatRuntimeStart).not.toHaveBeenCalled();
+    });
+
+    it("hydrates fresh room snapshots from runtime events", async () => {
+        await chatService.initialize();
+        useChatStore.getState().setCurrentRoomId(55);
+
+        roomUpdatedHandler?.(roomSnapshot());
+
+        expect(useChatStore.getState().currentRoomDetail?.room_id).toBe(55);
+        expect(useChatStore.getState().messages[55][0]?.message_id).toBe(101);
+        expect(useChatStore.getState().directKeyStatus[55]).toBe("unlocked");
+    });
+
+    it("updates room lists and sync state from runtime emits", async () => {
+        await chatService.initialize();
+
+        roomsUpdatedHandler?.({
+            ...roomsSnapshot(),
+            sync_state: syncState({ pending_sync_jobs: 3 }),
+        });
+        expect(useChatStore.getState().syncState).toMatchObject({
+            ws_status: "connected",
+            pending_sync_jobs: 3,
+        });
+
+        syncChangedHandler?.(syncState({ ws_status: "reconnecting" }));
+
+        expect(useChatStore.getState().rooms.direct[0]?.room_id).toBe(55);
+        expect(useChatStore.getState().syncState).toMatchObject({
+            ws_status: "reconnecting",
+        });
+    });
+
+    it("updates optimistic delivery state for local echo rows", async () => {
+        await chatService.initialize();
+        useChatStore.getState().setMessages(55, [{
+            client_message_id: "local-55",
+            message_id: null,
+            sender_id: 701,
+            type: "text",
+            content: "hello",
+            is_edited: false,
+            is_deleted: false,
+            created_at: "2026-04-12T07:05:00Z",
+            sort_key: Date.parse("2026-04-12T07:05:00Z"),
+            delivery_status: "pending",
+            is_local_echo: true,
+        }], false);
+
+        deliveryUpdatedHandler?.({
+            room_id: 55,
+            client_message_id: "local-55",
+            delivery_status: "failed",
+            delivery_error: "network error",
+            server_message_id: null,
+        });
+
+        expect(useChatStore.getState().messages[55][0]).toMatchObject({
+            client_message_id: "local-55",
+            delivery_status: "failed",
+            delivery_error: "network error",
+        });
+    });
+
+    it("refreshes rooms through the bridge on demand", async () => {
+        useChatStore.getState().setRuntimeStatus("ready");
+
+        await chatService.refreshRooms(true);
+
+        expect(chatGetRoomsSnapshot).toHaveBeenCalledWith(true);
+        expect(useChatStore.getState().rooms.direct[0]?.room_id).toBe(55);
+    });
+
+    it("starts the runtime before wiring listeners so listener registration failure degrades but does not block startup", async () => {
+        vi.mocked(onChatSyncStateChanged).mockRejectedValueOnce(new Error("listen failed"));
+
+        await chatService.initialize();
+
+        expect(chatRuntimeStart).toHaveBeenCalledTimes(1);
+        expect(useChatStore.getState().runtimeStatus).toBe("degraded");
+        expect(useChatStore.getState().runtimeError).toBe(CHAT_RUNTIME_DEGRADED_MESSAGE);
+    });
+});

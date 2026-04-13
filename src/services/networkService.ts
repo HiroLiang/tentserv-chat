@@ -1,13 +1,13 @@
 import { NetworkState, useNetworkStore } from "@/stores/networkStore.ts";
 import { logger } from "@/utils/logger.ts";
 import { toast } from "sonner";
-import { wsService } from "@/services/wsService.ts";
+import { chatService } from "@/services/chatService.ts";
 
 // [EN] NetworkService monitors connectivity: registers browser online/offline events and polls /api/health every 30s.
-//      On reconnect, it also triggers a WebSocket force-reconnect.
-// [中] NetworkService 監控網路狀態：監聽瀏覽器 online/offline 事件並每 30 秒輪詢 /api/health；重新上線時觸發 WebSocket 強制重連。
+//      On reconnect, it also asks the Rust chat runtime to refresh local room state.
+// [中] NetworkService 監控網路狀態：監聽瀏覽器 online/offline 事件並每 30 秒輪詢 /api/health；重新上線時要求 Rust chat runtime 重新整理本地房間狀態。
 // [日] NetworkService はネットワーク監視：ブラウザの online/offline イベントを登録し、30 秒ごとに /api/health をポーリングする。
-//      再接続時は WebSocket の強制再接続もトリガーする。
+//      再接続時は Rust chat runtime にローカル room state の再同期を依頼する。
 class NetworkService {
     private initialized: boolean = false;
     private pollingInterval: ReturnType<typeof setInterval> | null = null;
@@ -22,8 +22,9 @@ class NetworkService {
                 toast.success('Network connection restored', { duration: 3000 });
                 store.checkConnection();
 
-                logger.info("Reconnecting websocket...");
-                wsService.forceReconnect();
+                void chatService.refreshRooms(true).catch((error) => {
+                    logger.warn('Failed to refresh chat rooms after reconnect', error);
+                });
             });
 
             window.addEventListener('offline', () => {

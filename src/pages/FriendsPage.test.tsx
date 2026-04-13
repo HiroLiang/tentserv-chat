@@ -6,6 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { friendService } from "@/services/friendService.ts";
 import { chatRoomService } from "@/services/chatRoomService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
+import { useChatStore } from "@/stores/chatStore.ts";
+import { useE2eeStore } from "@/stores/e2eeStore.ts";
+import {
+    CHAT_RUNTIME_DEGRADED_MESSAGE,
+    CHAT_RUNTIME_UNAVAILABLE_MESSAGE,
+} from "@/utils/chatCopy.ts";
 import { FriendsPage } from "./FriendsPage.tsx";
 
 vi.mock("@/components/layout/Navbar.tsx", () => ({
@@ -76,6 +82,16 @@ const renderPage = () =>
 describe("FriendsPage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        useChatStore.setState({
+            runtimeStatus: "idle",
+            runtimeError: null,
+        });
+        useE2eeStore.setState({
+            bootstrapStatus: "ready",
+            bootstrapError: null,
+            keysUploaded: true,
+            senderKeyRequests: new Set(),
+        });
         vi.mocked(chatRoomService.createRoom).mockResolvedValue({
             id: 77,
             type: "direct",
@@ -187,6 +203,29 @@ describe("FriendsPage", () => {
         expect(within(row as HTMLElement).queryByRole("button", { name: "Message" })).not.toBeInTheDocument();
         expect(within(row as HTMLElement).queryByRole("button", { name: "Unfriend" })).not.toBeInTheDocument();
         expect(within(row as HTMLElement).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    });
+
+    it("surfaces runtime startup failures instead of a generic chat-open error", async () => {
+        useChatStore.setState({
+            runtimeStatus: "failed",
+            runtimeError: "Chat runtime is unavailable.",
+        });
+
+        renderPage();
+
+        expect(await screen.findByText(CHAT_RUNTIME_UNAVAILABLE_MESSAGE)).toBeInTheDocument();
+    });
+
+    it("shows a friendly degraded realtime banner without exposing internals", async () => {
+        useChatStore.setState({
+            runtimeStatus: "degraded",
+            runtimeError: "raw internal details",
+        });
+
+        renderPage();
+
+        expect(await screen.findByText(CHAT_RUNTIME_DEGRADED_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText("raw internal details")).not.toBeInTheDocument();
     });
 
     it("accepts and rejects incoming requests, then refreshes all lists", async () => {

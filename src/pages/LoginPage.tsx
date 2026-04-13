@@ -6,11 +6,8 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { userService } from "@/services/userService.ts";
 import { chatService } from "@/services/chatService.ts";
-import { wsService } from "@/services/wsService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
-import { useUserStore } from "@/stores/userStore.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
-import { env } from "@/config/env.ts";
 import { logger } from "@/utils/logger.ts";
 
 export const LoginPage = () => {
@@ -31,7 +28,6 @@ export const LoginPage = () => {
             const response = await userService.login(identifier, password);
             toast.success(response.message ?? "Login successfully");
 
-            const token = useUserStore.getState().currentUser?.token;
             const deviceId = useDeviceStore.getState().deviceId ?? undefined;
             const bootstrapReady = deviceId
                 ? await e2eeService.ensureSessionBootstrap(deviceId)
@@ -39,11 +35,8 @@ export const LoginPage = () => {
 
             if (bootstrapReady) {
                 await chatService.initialize().catch(err => {
-                    logger.warn('Participant initialization failed on login', err);
+                    logger.warn('Chat runtime initialization failed on login', err);
                 });
-                if (token && deviceId) {
-                    wsService.connect(env.WS_BASE_URL, token, deviceId);
-                }
             }
             navigate("/");
         } catch (err) {

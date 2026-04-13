@@ -166,9 +166,9 @@ fn aes_gcm_bad_nonce_length_returns_err() {
 // ── Schema migration ─────────────────────────────────────────────
 
 /// Fresh install: init_schema creates sender_keys with sender_key_version already present.
-/// migrate_schema must complete v0→v4 without hitting a nested transaction error.
+/// migrate_schema must complete v0→v6 without hitting a nested transaction error.
 #[test]
-fn migration_v3_to_v4_fresh_install_no_nested_transaction() {
+fn migration_v3_to_v5_fresh_install_no_nested_transaction() {
     let conn = Connection::open_in_memory().expect("in-memory db must open");
     println!("Given: fresh install — init_schema builds sender_keys with sender_key_version");
 
@@ -180,13 +180,13 @@ fn migration_v3_to_v4_fresh_install_no_nested_transaction() {
     let ver: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("user_version must be readable");
-    assert_eq!(ver, 4, "user_version must reach 4 after all migrations");
+    assert_eq!(ver, 6, "user_version must reach 6 after all migrations");
 }
 
 /// Existing user upgrading from v3: sender_keys lacks sender_key_version.
-/// migrate_schema must add the column and seed values from updated_at.
+/// migrate_schema must add the column, seed values from updated_at, and continue to v6.
 #[test]
-fn migration_v3_to_v4_upgrades_real_v3_db() {
+fn migration_v3_to_v5_upgrades_real_v3_db() {
     let conn = Connection::open_in_memory().expect("in-memory db must open");
     println!("Given: real v3 DB — sender_keys has no sender_key_version column");
 
@@ -211,12 +211,12 @@ fn migration_v3_to_v4_upgrades_real_v3_db() {
     println!("Action: migrate_schema with user_version=3");
     let result = migrate_schema(&conn);
     println!("Output: {:?}", result);
-    assert!(result.is_ok(), "v3→v4 upgrade must succeed: {:?}", result);
+    assert!(result.is_ok(), "v3→v5 upgrade must succeed: {:?}", result);
 
     let ver: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("user_version must be readable");
-    assert_eq!(ver, 4);
+    assert_eq!(ver, 6);
 
     let skv: i64 = conn
         .query_row(
@@ -233,9 +233,9 @@ fn migration_v3_to_v4_upgrades_real_v3_db() {
 
 /// Calling migrate_schema twice must be idempotent — all version < N guards skip on second call.
 #[test]
-fn migration_is_idempotent_after_v4() {
+fn migration_is_idempotent_after_v5() {
     let conn = Connection::open_in_memory().expect("in-memory db must open");
-    println!("Given: fresh install reaching v4 after first call");
+    println!("Given: fresh install reaching v6 after first call");
 
     init_schema(&conn).expect("init_schema must succeed");
     migrate_schema(&conn).expect("first migrate_schema must succeed");
@@ -244,4 +244,91 @@ fn migration_is_idempotent_after_v4() {
     let result = migrate_schema(&conn);
     println!("Output: {:?}", result);
     assert!(result.is_ok(), "second call must be no-op: {:?}", result);
+}
+
+#[test]
+fn migration_v6_rebuilds_chat_message_tables_for_server_dedup_and_encrypted_cache() {
+    let conn = Connection::open_in_memory().expect("in-memory db must open");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE chat_messages (
+            account_id INTEGER NOT NULL,
+            room_id INTEGER NOT NULL,
+            client_message_id TEXT NOT NULL,
+            server_message_id INTEGER,
+            sender_id INTEGER NOT NULL,
+            message_type TEXT NOT NULL,
+            content TEXT NOT NULL,
+            reply_to_id INTEGER,
+            is_edited INTEGER NOT NULL DEFAULT 0,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            sort_key INTEGER NOT NULL,
+            delivery_status TEXT NOT NULL,
+            delivery_error TEXT,
+            is_local_echo INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            PRIMARY KEY (account_id, client_message_id)
+        );
+        CREATE TABLE chat_messages_encrypted (
+            account_id INTEGER NOT NULL,
+            room_id INTEGER NOT NULL,
+            server_message_id INTEGER NOT NULL,
+            sender_id INTEGER NOT NULL,
+            encrypted_content BLOB NOT NULL,
+            message_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            received_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            PRIMARY KEY (account_id, server_message_id)
+        );
+        INSERT INTO chat_messages (
+            account_id, room_id, client_message_id, server_message_id, sender_id, message_type,
+            content, created_at, sort_key, delivery_status, is_local_echo
+        ) VALUES
+            (1, 3, 'server:11', 11, 5, 'text', 'duplicate-server-row', '2026-04-13T03:00:01Z', 1, 'sent', 0),
+            (1, 3, 'local:3:1776020000000', 11, 5, 'text', 'preferred-local-row', '2026-04-13T03:00:00Z', 0, 'sent', 0);
+        INSERT INTO chat_messages_encrypted (
+            account_id, room_id, server_message_id, sender_id, encrypted_content, message_type, created_at
+        ) VALUES
+            (1, 3, 11, 5, X'AA', 'text', '2026-04-13T03:00:00Z');
+        PRAGMA user_version = 5;
+        "#,
+    )
+    .expect("v5 fixture setup must succeed");
+
+    migrate_schema(&conn).expect("v5→v6 migration must succeed");
+
+    let encrypted_columns: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('chat_messages_encrypted') WHERE name = 'client_message_id'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("encrypted table columns should be readable");
+    let migrated_client_message_id: String = conn
+        .query_row(
+            "SELECT client_message_id FROM chat_messages_encrypted WHERE account_id = 1 AND server_message_id = 11",
+            [],
+            |row| row.get(0),
+        )
+        .expect("encrypted row should carry a client_message_id after migration");
+    let message_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM chat_messages WHERE account_id = 1 AND room_id = 3 AND server_message_id = 11",
+            [],
+            |row| row.get(0),
+        )
+        .expect("chat message count should be readable");
+    let preferred_row_client_id: String = conn
+        .query_row(
+            "SELECT client_message_id FROM chat_messages WHERE account_id = 1 AND room_id = 3 AND server_message_id = 11",
+            [],
+            |row| row.get(0),
+        )
+        .expect("preferred merged chat row should exist");
+
+    assert_eq!(encrypted_columns, 1, "v6 should add client_message_id to encrypted cache");
+    assert_eq!(migrated_client_message_id, "server:11");
+    assert_eq!(message_count, 1, "v6 should collapse duplicate server rows");
+    assert_eq!(preferred_row_client_id, "local:3:1776020000000");
 }

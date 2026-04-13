@@ -28,4 +28,7 @@ export interface ChatMessage {
     content: string;
     timestamp: string;
     isMe: boolean;
+    clientMessageId?: string;
+    deliveryStatus?: 'sent' | 'pending' | 'failed';
+    deliveryError?: string;
 }

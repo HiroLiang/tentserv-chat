@@ -1,9 +1,14 @@
+mod chat;
 mod commands;
 mod crypto;
 mod store;
 
 use commands::auth::{
     clear_auth_token, get_auth_token, get_auth_token_by_account, save_auth_token,
+};
+use commands::chat::{
+    chat_get_room_snapshot, chat_get_rooms_snapshot, chat_mark_room_read, chat_retry_message,
+    chat_runtime_start, chat_runtime_stop, chat_send_message, chat_set_active_room,
 };
 use commands::device::{clear_device_id, get_device_info, update_device_registration};
 use commands::e2ee::{
@@ -18,12 +23,14 @@ use commands::messages::{
     get_decrypted_messages, get_encrypted_messages, store_decrypted_message,
     store_encrypted_message,
 };
+use chat::runtime::ChatRuntimeManager;
 use log::LevelFilter;
 use tauri_plugin_log::{Builder, Target, TargetKind, TimezoneStrategy};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(ChatRuntimeManager::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             Builder::new()
@@ -76,6 +83,15 @@ pub fn run() {
             consume_sender_key_distribution,
             encrypt_with_sender_key,
             decrypt_with_sender_key,
+            // Chat runtime
+            chat_runtime_start,
+            chat_runtime_stop,
+            chat_set_active_room,
+            chat_get_rooms_snapshot,
+            chat_get_room_snapshot,
+            chat_send_message,
+            chat_retry_message,
+            chat_mark_room_read,
             // Messages
             store_encrypted_message,
             get_encrypted_messages,

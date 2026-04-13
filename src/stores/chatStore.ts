@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Message, PendingInvitation, PresenceStatus, RoomDetail, RoomSummary } from '@/types/chat.ts';
 import { normalizeRoomSummaryPreview } from '@/utils/chatCopy.ts';
+import type { ChatSyncState } from '@/bridge/chat.ts';
 
 interface RoomsState {
     direct: RoomSummary[];
@@ -33,7 +34,6 @@ const updateRoomSummariesForMessage = (
     rooms: RoomsState,
     roomId: number,
     msg: Message,
-    isCurrentRoom: boolean,
 ): RoomsState => {
     const nextSections = ROOM_SECTION_KEYS.reduce((acc, key) => {
         const updated = rooms[key].map((room) => {
@@ -45,7 +45,7 @@ const updateRoomSummariesForMessage = (
                 latest_message: normalizeRoomSummaryPreview(room.room_type, msg.content),
                 latest_message_created_at: msg.created_at,
                 latest_message_sender_id: msg.sender_id,
-                unread_count: isCurrentRoom ? room.unread_count : room.unread_count + 1,
+                unread_count: room.unread_count,
             };
         });
         acc[key] = sortRoomSummaries(updated);
@@ -65,6 +65,9 @@ interface ChatState {
     loadingMessages: boolean;
     pendingInvitation: PendingInvitation | null;
     directKeyStatus: Record<number, DirectKeyStatus>;
+    syncState: ChatSyncState | null;
+    runtimeStatus: 'idle' | 'starting' | 'ready' | 'degraded' | 'failed';
+    runtimeError: string | null;
 
     setRooms: (rooms: RoomsState) => void;
     setCurrentRoomId: (id: number | null) => void;
@@ -72,15 +75,65 @@ interface ChatState {
     setMessages: (roomId: number, msgs: Message[], hasMore: boolean) => void;
     prependMessages: (roomId: number, msgs: Message[], hasMore: boolean) => void;
     appendMessage: (roomId: number, msg: Message) => void;
+    updateMessageDelivery: (
+        roomId: number,
+        clientMessageId: string,
+        deliveryStatus: Message['delivery_status'],
+        deliveryError?: string | null,
+        messageId?: number | null,
+    ) => void;
     clearUnreadCount: (roomId: number) => void;
     setLoadingRooms: (v: boolean) => void;
     setLoadingMessages: (v: boolean) => void;
     setPendingInvitation: (inv: PendingInvitation | null) => void;
     setDirectKeyStatus: (roomId: number, status: DirectKeyStatus) => void;
+    setSyncState: (syncState: ChatSyncState | null) => void;
+    setRuntimeStatus: (status: ChatState['runtimeStatus'], error?: string | null) => void;
     updateDirectRoomPresence: (peerUserId: number, status: PresenceStatus, lastSeenAt?: string) => void;
     markRoomDeleted: (roomId: number) => void;
     resetChat: () => void;
 }
+
+const messageIdentity = (message: Message): string => {
+    if (message.message_id !== undefined && message.message_id !== null) {
+        return `server:${message.message_id}`;
+    }
+    if (message.client_message_id) {
+        return `client:${message.client_message_id}`;
+    }
+    return `${message.sender_id}:${message.created_at}:${message.content}`;
+};
+
+const sortMessages = (messages: Message[]): Message[] =>
+    [...messages].sort((left, right) => {
+        if (left.sort_key === right.sort_key) {
+            return left.created_at.localeCompare(right.created_at);
+        }
+        return left.sort_key - right.sort_key;
+    });
+
+const mergeMessages = (existing: Message[], incoming: Message[]): Message[] => {
+    const merged = new Map<string, Message>();
+    for (const message of existing) {
+        merged.set(messageIdentity(message), message);
+    }
+    for (const message of incoming) {
+        merged.set(messageIdentity(message), message);
+    }
+    return sortMessages([...merged.values()]);
+};
+
+const normalizeMessages = (messages: Message[]): Message[] => mergeMessages([], messages);
+
+const collectDirectKeyStatuses = (rooms: RoomsState): Record<number, DirectKeyStatus> => {
+    const statuses: Record<number, DirectKeyStatus> = {};
+    for (const room of rooms.direct) {
+        if (room.direct_key_status) {
+            statuses[room.room_id] = room.direct_key_status;
+        }
+    }
+    return statuses;
+};
 
 // [EN] chatStore (Zustand): central chat state.
 //      rooms: categorized room lists (direct/group/channel/bot).
@@ -104,50 +157,124 @@ export const useChatStore = create<ChatState>((set) => ({
     loadingMessages: false,
     pendingInvitation: null,
     directKeyStatus: {},
+    syncState: null,
+    runtimeStatus: 'idle',
+    runtimeError: null,
 
-    setRooms: (rooms) => set({ rooms: sortRoomsState(rooms) }),
+    setRooms: (rooms) => set((state) => ({
+        rooms: sortRoomsState(rooms),
+        directKeyStatus: {
+            ...state.directKeyStatus,
+            ...collectDirectKeyStatuses(rooms),
+        },
+    })),
 
     setCurrentRoomId: (id) => set({ currentRoomId: id }),
 
-    setRoomDetail: (detail) => set({ currentRoomDetail: detail }),
+    setRoomDetail: (detail) => set((state) => ({
+        currentRoomDetail: detail,
+        pendingInvitation: detail?.pending_invitation ?? null,
+        directKeyStatus: detail
+            ? {
+                ...state.directKeyStatus,
+                [detail.room_id]: detail.direct_key_status ?? state.directKeyStatus[detail.room_id] ?? 'loading',
+            }
+            : state.directKeyStatus,
+    })),
 
     setMessages: (roomId, msgs, hasMore) =>
-        set((state) => ({
-            messages: {
-                ...state.messages,
-                [roomId]: [...msgs],
-            },
-            hasMore: {
-                ...state.hasMore,
-                [roomId]: hasMore,
-            },
-        })),
+        set((state) => {
+            const nextMessages = normalizeMessages(msgs);
+            return {
+                messages: {
+                    ...state.messages,
+                    [roomId]: nextMessages,
+                },
+                hasMore: {
+                    ...state.hasMore,
+                    [roomId]: hasMore,
+                },
+                currentRoomDetail: state.currentRoomDetail?.room_id === roomId
+                    ? {
+                        ...state.currentRoomDetail,
+                        messages: nextMessages,
+                        has_more: hasMore,
+                    }
+                    : state.currentRoomDetail,
+            };
+        }),
 
     prependMessages: (roomId, msgs, hasMore) =>
-        set((state) => ({
-            messages: {
-                ...state.messages,
-                [roomId]: [...msgs, ...(state.messages[roomId] ?? [])],
-            },
-            hasMore: {
-                ...state.hasMore,
-                [roomId]: hasMore,
-            },
-        })),
+        set((state) => {
+            const nextMessages = mergeMessages(state.messages[roomId] ?? [], msgs);
+            return {
+                messages: {
+                    ...state.messages,
+                    [roomId]: nextMessages,
+                },
+                hasMore: {
+                    ...state.hasMore,
+                    [roomId]: hasMore,
+                },
+                currentRoomDetail: state.currentRoomDetail?.room_id === roomId
+                    ? {
+                        ...state.currentRoomDetail,
+                        messages: nextMessages,
+                        has_more: hasMore,
+                    }
+                    : state.currentRoomDetail,
+            };
+        }),
 
     appendMessage: (roomId, msg) =>
-        set((state) => ({
-            messages: {
-                ...state.messages,
-                [roomId]: [...(state.messages[roomId] ?? []), msg],
-            },
-            rooms: updateRoomSummariesForMessage(
-                state.rooms,
-                roomId,
-                msg,
-                state.currentRoomId === roomId,
-            ),
-        })),
+        set((state) => {
+            const nextMessages = mergeMessages(state.messages[roomId] ?? [], [msg]);
+            return {
+                messages: {
+                    ...state.messages,
+                    [roomId]: nextMessages,
+                },
+                rooms: updateRoomSummariesForMessage(
+                    state.rooms,
+                    roomId,
+                    msg,
+                ),
+                currentRoomDetail: state.currentRoomDetail?.room_id === roomId
+                    ? {
+                        ...state.currentRoomDetail,
+                        messages: nextMessages,
+                    }
+                    : state.currentRoomDetail,
+            };
+        }),
+
+    updateMessageDelivery: (roomId, clientMessageId, deliveryStatus, deliveryError, messageId) =>
+        set((state) => {
+            const nextMessages = normalizeMessages((state.messages[roomId] ?? []).map((message) => (
+                message.client_message_id === clientMessageId
+                    ? {
+                        ...message,
+                        delivery_status: deliveryStatus,
+                        delivery_error: deliveryError ?? undefined,
+                        message_id: messageId ?? message.message_id,
+                        is_local_echo: deliveryStatus !== 'sent',
+                    }
+                    : message
+            )));
+
+            return {
+                messages: {
+                    ...state.messages,
+                    [roomId]: nextMessages,
+                },
+                currentRoomDetail: state.currentRoomDetail?.room_id === roomId
+                    ? {
+                        ...state.currentRoomDetail,
+                        messages: nextMessages,
+                    }
+                    : state.currentRoomDetail,
+            };
+        }),
 
     clearUnreadCount: (roomId) =>
         set((state) => {
@@ -173,6 +300,10 @@ export const useChatStore = create<ChatState>((set) => ({
         set((state) => ({
             directKeyStatus: { ...state.directKeyStatus, [roomId]: status },
         })),
+
+    setSyncState: (syncState) => set({ syncState }),
+
+    setRuntimeStatus: (runtimeStatus, runtimeError = null) => set({ runtimeStatus, runtimeError }),
 
     updateDirectRoomPresence: (peerUserId, status, lastSeenAt) =>
         set((state) => ({
@@ -232,5 +363,8 @@ export const useChatStore = create<ChatState>((set) => ({
         hasMore: {},
         pendingInvitation: null,
         directKeyStatus: {},
+        syncState: null,
+        runtimeStatus: 'idle',
+        runtimeError: null,
     }),
 }));

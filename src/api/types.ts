@@ -394,11 +394,6 @@ export interface SenderKeyDistributionAvailablePayload {
     sender_key_version: number;
 }
 
-export interface DirectKeyReadyPayload {
-    room_id: number;
-    provider_member_id: number;
-}
-
 export interface PresenceUserStatusChangedPayload {
     user_id: number;
     status: 'online' | 'offline';

@@ -2,25 +2,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { env } from "@/config/env.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { chatService } from "@/services/chatService.ts";
 import { userService } from "@/services/userService.ts";
-import { wsService } from "@/services/wsService.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { LoginPage } from "./LoginPage.tsx";
 
 vi.mock("@/components/layout/Navbar.tsx", () => ({
     Navbar: () => <div data-testid="navbar" />,
-}));
-
-vi.mock("@/config/env.ts", () => ({
-    env: {
-        API_BASE_URL: "http://api.test",
-        WS_BASE_URL: "ws://ws.test",
-        IS_DEV: false,
-    },
 }));
 
 vi.mock("@/services/userService.ts", () => ({
@@ -32,12 +22,6 @@ vi.mock("@/services/userService.ts", () => ({
 vi.mock("@/services/chatService.ts", () => ({
     chatService: {
         initialize: vi.fn(),
-    },
-}));
-
-vi.mock("@/services/wsService.ts", () => ({
-    wsService: {
-        connect: vi.fn(),
     },
 }));
 
@@ -116,13 +100,10 @@ describe("LoginPage", () => {
 
         await waitFor(() => expect(screen.getByText("Home Route")).toBeInTheDocument());
         expect(userService.login).toHaveBeenCalledWith("hiro@example.com", "correct-password");
-        expect(wsService.connect).toHaveBeenCalledWith(env.WS_BASE_URL, "token-login", "device-1");
         expect(chatService.initialize).toHaveBeenCalledTimes(1);
         expect(e2eeService.ensureSessionBootstrap).toHaveBeenCalledWith("device-1");
         expect(vi.mocked(chatService.initialize).mock.invocationCallOrder[0])
             .toBeGreaterThan(vi.mocked(e2eeService.ensureSessionBootstrap).mock.invocationCallOrder[0]);
-        expect(vi.mocked(wsService.connect).mock.invocationCallOrder[0])
-            .toBeGreaterThan(vi.mocked(chatService.initialize).mock.invocationCallOrder[0]);
     });
 
     it("submits an account identifier without requiring an email shape", async () => {
@@ -143,10 +124,10 @@ describe("LoginPage", () => {
         await user.click(screen.getByRole("button", { name: /sign in/i }));
 
         await waitFor(() => expect(userService.login).toHaveBeenCalledWith("hiro-account", "correct-password"));
-        expect(wsService.connect).toHaveBeenCalledWith(env.WS_BASE_URL, "token-account", "device-1");
+        expect(chatService.initialize).toHaveBeenCalledTimes(1);
     });
 
-    it("shows the login error and skips chat, websocket, and E2EE handoff on failure", async () => {
+    it("shows the login error and skips chat/runtime bootstrap on failure", async () => {
         vi.mocked(userService.login).mockRejectedValue(new Error("invalid credentials"));
         const user = userEvent.setup();
         renderLogin();
@@ -156,7 +137,6 @@ describe("LoginPage", () => {
         await user.click(screen.getByRole("button", { name: /sign in/i }));
 
         expect(await screen.findByText("invalid credentials")).toBeInTheDocument();
-        expect(wsService.connect).not.toHaveBeenCalled();
         expect(chatService.initialize).not.toHaveBeenCalled();
         expect(e2eeService.ensureSessionBootstrap).not.toHaveBeenCalled();
     });

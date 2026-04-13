@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chatRoomService } from "@/services/chatRoomService.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
 import { useUserStore } from "@/stores/userStore.ts";
+import {
+    CHAT_RUNTIME_DEGRADED_MESSAGE,
+    CHAT_RUNTIME_UNAVAILABLE_MESSAGE,
+} from "@/utils/chatCopy.ts";
 import { ChatPage } from "./ChatPage.tsx";
 
 vi.mock("@/components/layout/Navbar.tsx", () => ({
@@ -52,6 +56,8 @@ vi.mock("@/services/chatRoomService.ts", () => ({
         loadMessages: vi.fn(),
         markAsRead: vi.fn(),
         sendMessage: vi.fn(),
+        setActiveRoom: vi.fn(),
+        retryMessage: vi.fn(),
     },
 }));
 
@@ -66,6 +72,9 @@ const resetChatStore = () => {
         loadingMessages: false,
         pendingInvitation: null,
         directKeyStatus: {},
+        syncState: null,
+        runtimeStatus: "idle",
+        runtimeError: null,
     });
 };
 
@@ -89,8 +98,12 @@ describe("ChatPage room selection", () => {
             name: "Bell",
             members: [],
             messages: [],
+            direct_key_status: "unlocked",
+            member_count: 2,
         });
         vi.mocked(chatRoomService.loadMessages).mockResolvedValue(undefined);
+        vi.mocked(chatRoomService.setActiveRoom).mockResolvedValue(undefined);
+        vi.mocked(chatRoomService.retryMessage).mockResolvedValue(undefined);
         vi.mocked(chatRoomService.markAsRead).mockImplementation(async (roomId: number) => {
             useChatStore.getState().clearUnreadCount(roomId);
         });
@@ -173,12 +186,16 @@ describe("ChatPage room selection", () => {
             },
             messages: {
                 42: [{
+                    client_message_id: "local-9001",
                     message_id: 9001,
                     sender_id: 1002,
                     type: "text",
                     content: "hello",
                     is_edited: false,
+                    is_deleted: false,
                     created_at: "2026-01-01T00:00:00Z",
+                    sort_key: Date.parse("2026-01-01T00:00:00Z"),
+                    delivery_status: "sent",
                 }],
             },
         });
@@ -196,5 +213,37 @@ describe("ChatPage room selection", () => {
         expect(chatRoom).toHaveAttribute("data-last-seen-at", "2026-04-12T02:03:04Z");
         expect(chatRoom).toHaveAttribute("data-peer-user-id", "2");
         expect(screen.getByTestId("message-avatar-url")).toHaveTextContent("avatars/bell.png");
+    });
+
+    it("shows a chat unavailable message when the runtime failed to start", async () => {
+        useChatStore.setState({
+            runtimeStatus: "failed",
+            runtimeError: "Chat runtime is unavailable.",
+        });
+
+        render(
+            <MemoryRouter initialEntries={["/chat"]}>
+                <ChatPage />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByText(CHAT_RUNTIME_UNAVAILABLE_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText("Chat runtime is unavailable.")).not.toBeInTheDocument();
+    });
+
+    it("shows a friendly degraded realtime banner", async () => {
+        useChatStore.setState({
+            runtimeStatus: "degraded",
+            runtimeError: "raw internal details",
+        });
+
+        render(
+            <MemoryRouter initialEntries={["/chat"]}>
+                <ChatPage />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByText(CHAT_RUNTIME_DEGRADED_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText("raw internal details")).not.toBeInTheDocument();
     });
 });

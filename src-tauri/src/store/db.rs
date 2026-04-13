@@ -19,13 +19,14 @@
 //!      `reply_to_id`, `is_edited`, `is_deleted`
 //! - 3: `user_tokens` primary key column renamed from `user_id` to `account_id`
 //! - 4: `sender_keys` gains `sender_key_version` for sender-key state reconciliation
+//! - 5: add chat runtime read model tables for local-first rooms/messages sync
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use rand::RngExt;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -195,6 +196,116 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
         );
         CREATE INDEX IF NOT EXISTS idx_dec_msg_user_room_ts
             ON decrypted_messages(user_id, room_id, message_timestamp);
+
+        -- ── Chat runtime read model ──────────────────────────────
+        CREATE TABLE IF NOT EXISTS chat_rooms (
+            account_id                INTEGER NOT NULL,
+            room_id                   INTEGER NOT NULL,
+            room_type                 TEXT    NOT NULL,
+            display_name              TEXT    NOT NULL,
+            avatar_url                TEXT,
+            peer_user_id              INTEGER,
+            presence_status           TEXT,
+            last_seen_at              TEXT,
+            status                    TEXT    NOT NULL DEFAULT 'active',
+            latest_message            TEXT,
+            latest_message_created_at TEXT,
+            latest_message_sender_id  INTEGER,
+            unread_count              INTEGER NOT NULL DEFAULT 0,
+            blocked_by_peer           INTEGER NOT NULL DEFAULT 0,
+            blocked_by_me             INTEGER NOT NULL DEFAULT 0,
+            direct_key_status         TEXT,
+            member_count              INTEGER,
+            detail_name               TEXT,
+            detail_description        TEXT,
+            detail_avatar_url         TEXT,
+            sort_order                INTEGER NOT NULL DEFAULT 0,
+            updated_at                INTEGER NOT NULL,
+            PRIMARY KEY (account_id, room_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_rooms_account_type_sort
+            ON chat_rooms(account_id, room_type, sort_order DESC, room_id);
+
+        CREATE TABLE IF NOT EXISTS chat_room_members (
+            account_id     INTEGER NOT NULL,
+            room_id        INTEGER NOT NULL,
+            member_id      INTEGER NOT NULL,
+            participant_id INTEGER NOT NULL,
+            user_id        INTEGER,
+            display_name   TEXT    NOT NULL,
+            avatar_url     TEXT,
+            role           TEXT    NOT NULL,
+            last_read_at   TEXT,
+            joined_at      TEXT    NOT NULL,
+            PRIMARY KEY (account_id, room_id, member_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_room_members_account_room
+            ON chat_room_members(account_id, room_id, joined_at, member_id);
+
+        CREATE TABLE IF NOT EXISTS chat_invitations (
+            account_id      INTEGER NOT NULL,
+            room_id         INTEGER NOT NULL,
+            found           INTEGER NOT NULL DEFAULT 0,
+            invitation_id   INTEGER,
+            role            TEXT,
+            inviter_name    TEXT,
+            inviter_avatar  TEXT,
+            inviter_user_id INTEGER,
+            updated_at      INTEGER NOT NULL,
+            PRIMARY KEY (account_id, room_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages_encrypted (
+            account_id         INTEGER NOT NULL,
+            room_id            INTEGER NOT NULL,
+            client_message_id  TEXT    NOT NULL,
+            server_message_id  INTEGER,
+            sender_id          INTEGER NOT NULL,
+            encrypted_content  BLOB    NOT NULL,
+            message_type       TEXT    NOT NULL,
+            created_at         TEXT    NOT NULL,
+            received_at        INTEGER NOT NULL,
+            PRIMARY KEY (account_id, client_message_id),
+            UNIQUE (account_id, server_message_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_encrypted_room
+            ON chat_messages_encrypted(account_id, room_id, created_at DESC, client_message_id);
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            account_id        INTEGER NOT NULL,
+            room_id           INTEGER NOT NULL,
+            client_message_id TEXT    NOT NULL,
+            server_message_id INTEGER,
+            sender_id         INTEGER NOT NULL,
+            message_type      TEXT    NOT NULL,
+            content           TEXT    NOT NULL,
+            reply_to_id       INTEGER,
+            is_edited         INTEGER NOT NULL DEFAULT 0,
+            is_deleted        INTEGER NOT NULL DEFAULT 0,
+            created_at        TEXT    NOT NULL,
+            sort_key          INTEGER NOT NULL,
+            delivery_status   TEXT    NOT NULL DEFAULT 'sent',
+            delivery_error    TEXT,
+            is_local_echo     INTEGER NOT NULL DEFAULT 0,
+            updated_at        INTEGER NOT NULL,
+            PRIMARY KEY (account_id, client_message_id),
+            UNIQUE (account_id, server_message_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_account_room_sort
+            ON chat_messages(account_id, room_id, sort_key DESC, client_message_id);
+
+        CREATE TABLE IF NOT EXISTS chat_sync_state (
+            account_id                  INTEGER PRIMARY KEY,
+            active_participant_id       INTEGER,
+            active_room_id              INTEGER,
+            ws_status                   TEXT    NOT NULL DEFAULT 'idle',
+            last_rooms_sync_at          TEXT,
+            last_active_room_sync_at    TEXT,
+            self_sender_key_sync_status TEXT    NOT NULL DEFAULT 'idle',
+            self_sender_key_sync_error  TEXT,
+            error                       TEXT,
+            updated_at                  INTEGER NOT NULL
+        );
     "#,
     )
     .map_err(|e| format!("create schema failed: {e}"))
@@ -417,7 +528,115 @@ pub(crate) fn migrate_schema(conn: &Connection) -> Result<(), String> {
         }
     }
 
+    if version < 5 {
+        conn.execute_batch("PRAGMA user_version = 5;")
+            .map_err(|e| format!("set user_version=5 failed: {e}"))?;
+    }
+
+    if version < 6 {
+        let has_chat_messages = sqlite_table_exists(conn, "chat_messages")?;
+        let has_chat_messages_encrypted = sqlite_table_exists(conn, "chat_messages_encrypted")?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("migrate_schema (5→6) begin tx failed: {e}"))?;
+
+        tx.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS chat_messages_encrypted_new (
+                account_id         INTEGER NOT NULL,
+                room_id            INTEGER NOT NULL,
+                client_message_id  TEXT    NOT NULL,
+                server_message_id  INTEGER,
+                sender_id          INTEGER NOT NULL,
+                encrypted_content  BLOB    NOT NULL,
+                message_type       TEXT    NOT NULL,
+                created_at         TEXT    NOT NULL,
+                received_at        INTEGER NOT NULL,
+                PRIMARY KEY (account_id, client_message_id),
+                UNIQUE (account_id, server_message_id)
+            );
+            CREATE TABLE IF NOT EXISTS chat_messages_new (
+                account_id        INTEGER NOT NULL,
+                room_id           INTEGER NOT NULL,
+                client_message_id TEXT    NOT NULL,
+                server_message_id INTEGER,
+                sender_id         INTEGER NOT NULL,
+                message_type      TEXT    NOT NULL,
+                content           TEXT    NOT NULL,
+                reply_to_id       INTEGER,
+                is_edited         INTEGER NOT NULL DEFAULT 0,
+                is_deleted        INTEGER NOT NULL DEFAULT 0,
+                created_at        TEXT    NOT NULL,
+                sort_key          INTEGER NOT NULL,
+                delivery_status   TEXT    NOT NULL DEFAULT 'sent',
+                delivery_error    TEXT,
+                is_local_echo     INTEGER NOT NULL DEFAULT 0,
+                updated_at        INTEGER NOT NULL,
+                PRIMARY KEY (account_id, client_message_id),
+                UNIQUE (account_id, server_message_id)
+            );
+            "#,
+        )
+        .map_err(|e| format!("migrate_schema (5→6) create staging tables failed: {e}"))?;
+
+        if has_chat_messages_encrypted {
+            tx.execute_batch(
+                r#"
+                INSERT OR REPLACE INTO chat_messages_encrypted_new
+                    (account_id, room_id, client_message_id, server_message_id, sender_id, encrypted_content, message_type, created_at, received_at)
+                SELECT account_id, room_id, 'server:' || server_message_id, server_message_id, sender_id, encrypted_content, message_type, created_at, received_at
+                FROM chat_messages_encrypted;
+                DROP TABLE chat_messages_encrypted;
+                "#,
+            )
+            .map_err(|e| format!("migrate_schema (5→6) rebuild encrypted messages failed: {e}"))?;
+        }
+
+        if has_chat_messages {
+            tx.execute_batch(
+                r#"
+                INSERT OR REPLACE INTO chat_messages_new
+                    (account_id, room_id, client_message_id, server_message_id, sender_id, message_type, content, reply_to_id,
+                     is_edited, is_deleted, created_at, sort_key, delivery_status, delivery_error, is_local_echo, updated_at)
+                SELECT account_id, room_id, client_message_id, server_message_id, sender_id, message_type, content, reply_to_id,
+                       is_edited, is_deleted, created_at, sort_key, delivery_status, delivery_error, is_local_echo, updated_at
+                FROM chat_messages
+                ORDER BY CASE WHEN client_message_id LIKE 'server:%' THEN 0 ELSE 1 END, updated_at ASC;
+                DROP TABLE chat_messages;
+                "#,
+            )
+            .map_err(|e| format!("migrate_schema (5→6) rebuild chat messages failed: {e}"))?;
+        }
+
+        tx.execute_batch(
+            r#"
+            ALTER TABLE chat_messages_encrypted_new RENAME TO chat_messages_encrypted;
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_encrypted_room
+                ON chat_messages_encrypted(account_id, room_id, created_at DESC, client_message_id);
+            ALTER TABLE chat_messages_new RENAME TO chat_messages;
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_account_room_sort
+                ON chat_messages(account_id, room_id, sort_key DESC, client_message_id);
+            PRAGMA user_version = 6;
+            "#,
+        )
+        .map_err(|e| format!("migrate_schema (5→6) finalize rebuilt tables failed: {e}"))?;
+
+        tx.commit()
+            .map_err(|e| format!("migrate_schema (5→6) commit failed: {e}"))?;
+    }
+
     Ok(())
+}
+
+fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table_name],
+            |row| row.get(0),
+        )
+        .map_err(|err| format!("query sqlite_master for table {table_name} failed: {err}"))?;
+    Ok(count > 0)
 }
 
 // ── Key file validation ───────────────────────────────────────────

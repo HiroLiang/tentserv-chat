@@ -85,7 +85,7 @@ describe("ChatSidebar avatars", () => {
         expect(screen.queryByAltText("Deleted Contact avatar")).not.toBeInTheDocument();
     });
 
-    it("briefly marks a chat card as active when its latest activity changes", () => {
+    it("does not animate a chat card when latest activity changes without reordering", () => {
         vi.useFakeTimers();
 
         const { rerender } = render(
@@ -120,13 +120,79 @@ describe("ChatSidebar avatars", () => {
         );
 
         const activeCard = screen.getByText("Mina Park").closest('[data-chat-card-id="12"]');
-        expect(activeCard).toHaveAttribute("data-activity-state", "active");
+        expect(activeCard).toHaveAttribute("data-activity-state", "idle");
 
         act(() => {
             vi.advanceTimersByTime(421);
         });
 
         expect(screen.getByText("Mina Park").closest('[data-chat-card-id="12"]'))
+            .toHaveAttribute("data-activity-state", "idle");
+    });
+
+    it("briefly marks a chat card as active when its position changes", () => {
+        vi.useFakeTimers();
+
+        const { rerender } = render(
+            <ChatSidebar
+                chatGroups={{
+                    ...groups,
+                    direct: [
+                        groups.direct[0],
+                        {
+                            id: "13",
+                            type: "direct",
+                            name: "Aria West",
+                            avatarUrl: "avatars/aria.png",
+                            lastMessage: "Earlier",
+                            lastMessageTime: "10:20",
+                            lastActivityAt: "2026-04-12T10:20:00Z",
+                            unreadCount: 0,
+                            isOnline: false,
+                        },
+                    ],
+                }}
+                selectedChatId={null}
+                onSelectChat={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+            />,
+        );
+
+        rerender(
+            <ChatSidebar
+                chatGroups={{
+                    ...groups,
+                    direct: [
+                        {
+                            id: "13",
+                            type: "direct",
+                            name: "Aria West",
+                            avatarUrl: "avatars/aria.png",
+                            lastMessage: "Just now",
+                            lastMessageTime: "10:31",
+                            lastActivityAt: "2026-04-12T10:31:00Z",
+                            unreadCount: 1,
+                            isOnline: false,
+                        },
+                        groups.direct[0],
+                    ],
+                }}
+                selectedChatId={null}
+                onSelectChat={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByText("Aria West").closest('[data-chat-card-id="13"]'))
+            .toHaveAttribute("data-activity-state", "active");
+
+        act(() => {
+            vi.advanceTimersByTime(421);
+        });
+
+        expect(screen.getByText("Aria West").closest('[data-chat-card-id="13"]'))
             .toHaveAttribute("data-activity-state", "idle");
     });
 });

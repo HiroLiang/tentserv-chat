@@ -89,7 +89,7 @@ export function ChatSidebar({
     const [searchQuery, setSearchQuery] = useState('');
     const itemRefs = useRef(new Map<string, HTMLDivElement>());
     const previousRectsRef = useRef(new Map<string, DOMRect>());
-    const previousActivityRef = useRef(new Map<string, string | undefined>());
+    const previousOrderRef = useRef(new Map<string, number>());
     const activityTimeoutsRef = useRef(new Map<string, number>());
     const [activeChatIds, setActiveChatIds] = useState<string[]>([]);
     const [expanded, setExpanded] = useState<Record<ChatGroup['type'], boolean>>({
@@ -122,7 +122,7 @@ export function ChatSidebar({
     ), [allChats, collapsed, expanded, searchQuery, chatGroups]);
 
     const visibleSignature = visibleChats
-        .map((chat, index) => `${index}:${chat.id}:${chat.activityAt ?? ''}`)
+        .map((chat, index) => `${index}:${chat.id}`)
         .join('|');
 
     const registerItemRef = (chatId: string) => (node: HTMLDivElement | null) => {
@@ -175,18 +175,16 @@ export function ChatSidebar({
             }, 320);
         });
 
-        const bumpedChatIds = visibleChats
-            .filter((chat) => {
-                const previousActivityAt = previousActivityRef.current.get(chat.id);
-                return previousActivityAt !== undefined
-                    && chat.activityAt !== undefined
-                    && previousActivityAt !== chat.activityAt;
+        const reorderedChatIds = visibleChats
+            .filter((chat, index) => {
+                const previousIndex = previousOrderRef.current.get(chat.id);
+                return previousIndex !== undefined && previousIndex !== index;
             })
             .map((chat) => chat.id);
 
-        if (bumpedChatIds.length > 0) {
-            setActiveChatIds((currentIds) => Array.from(new Set([...currentIds, ...bumpedChatIds])));
-            bumpedChatIds.forEach((chatId) => {
+        if (reorderedChatIds.length > 0) {
+            setActiveChatIds((currentIds) => Array.from(new Set([...currentIds, ...reorderedChatIds])));
+            reorderedChatIds.forEach((chatId) => {
                 const existingTimeout = activityTimeoutsRef.current.get(chatId);
                 if (existingTimeout !== undefined) {
                     window.clearTimeout(existingTimeout);
@@ -200,8 +198,8 @@ export function ChatSidebar({
         }
 
         previousRectsRef.current = nextRects;
-        previousActivityRef.current = new Map(
-            visibleChats.map((chat) => [chat.id, chat.activityAt]),
+        previousOrderRef.current = new Map(
+            visibleChats.map((chat, index) => [chat.id, index]),
         );
     }, [visibleSignature]);
 

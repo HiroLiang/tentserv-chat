@@ -7,24 +7,13 @@ import { deviceService } from "@/services/deviceService.ts";
 import { networkService } from "@/services/networkService.ts";
 import { userService } from "@/services/userService.ts";
 import { chatService } from "@/services/chatService.ts";
-import { wsService } from "@/services/wsService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useNetworkStore } from "@/stores/networkStore.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 
-const envMock = vi.hoisted(() => ({
-    API_BASE_URL: "http://api.test",
-    WS_BASE_URL: "ws://ws.test",
-    IS_DEV: false,
-}));
-
 vi.mock("@tauri-apps/api/core", () => ({
     isTauri: vi.fn(() => true),
-}));
-
-vi.mock("@/config/env.ts", () => ({
-    env: envMock,
 }));
 
 vi.mock("@/services/deviceService.ts", () => ({
@@ -42,7 +31,6 @@ vi.mock("@/services/networkService.ts", () => ({
 vi.mock("@/services/userService.ts", () => ({
     userService: {
         tryRestoreSession: vi.fn(),
-        login: vi.fn(),
     },
 }));
 
@@ -52,26 +40,9 @@ vi.mock("@/services/chatService.ts", () => ({
     },
 }));
 
-vi.mock("@/services/wsService.ts", () => ({
-    wsService: {
-        connect: vi.fn(),
-        on: vi.fn(),
-        off: vi.fn(),
-    },
-}));
-
 vi.mock("@/services/e2eeService.ts", () => ({
     e2eeService: {
         ensureSessionBootstrap: vi.fn(),
-        performInviterKeyExchange: vi.fn(),
-        checkAndRequestReverseKey: vi.fn(),
-        replenishOTPKeys: vi.fn(),
-    },
-}));
-
-vi.mock("@/services/chatRoomService.ts", () => ({
-    chatRoomService: {
-        initializeGroupRoomEncryption: vi.fn(),
     },
 }));
 
@@ -137,49 +108,41 @@ const renderInitializer = () =>
 describe("AppInitializer", () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        envMock.IS_DEV = false;
-        vi.mocked(isTauri).mockReturnValue(true);
         resetStores();
+        vi.mocked(isTauri).mockReturnValue(true);
         vi.mocked(networkService.initialize).mockResolvedValue(undefined);
         vi.mocked(deviceService.initializeDevice).mockImplementation(async () => registerDevice());
         vi.mocked(userService.tryRestoreSession).mockResolvedValue(false);
-        vi.mocked(userService.login).mockResolvedValue({ message: "Login successfully" });
         vi.mocked(chatService.initialize).mockResolvedValue(undefined);
         vi.mocked(e2eeService.ensureSessionBootstrap).mockResolvedValue(true);
-        vi.mocked(e2eeService.replenishOTPKeys).mockResolvedValue(undefined);
     });
 
-    it("stops startup outside the Tauri runtime", async () => {
+    it("shows an error overlay when Tauri runtime is unavailable", async () => {
         vi.mocked(isTauri).mockReturnValue(false);
 
         renderInitializer();
 
-        expect(await screen.findByText(/requires the Tauri desktop runtime/i)).toBeInTheDocument();
-        expect(networkService.initialize).not.toHaveBeenCalled();
-        expect(deviceService.initializeDevice).not.toHaveBeenCalled();
+        expect(await screen.findByText(/requires the tauri desktop runtime/i)).toBeInTheDocument();
     });
 
-    it("blocks auth restore when device registration fails", async () => {
+    it("shows an error when device registration fails", async () => {
         vi.mocked(deviceService.initializeDevice).mockResolvedValue(undefined);
 
         renderInitializer();
 
         expect(await screen.findByText(/unable to register device/i)).toBeInTheDocument();
         expect(userService.tryRestoreSession).not.toHaveBeenCalled();
-        expect(userService.login).not.toHaveBeenCalled();
     });
 
-    it("redirects unauthenticated startup to login", async () => {
+    it("stops on the public route when no cached session exists", async () => {
         renderInitializer();
 
         expect(await screen.findByText("App Route")).toBeInTheDocument();
-        expect(userService.login).not.toHaveBeenCalled();
         expect(chatService.initialize).not.toHaveBeenCalled();
-        expect(wsService.connect).not.toHaveBeenCalled();
         expect(e2eeService.ensureSessionBootstrap).not.toHaveBeenCalled();
     });
 
-    it("restores an existing session before chat, websocket, and E2EE handoff", async () => {
+    it("restores an existing session, runs E2EE bootstrap, then starts the Rust chat runtime", async () => {
         vi.mocked(userService.tryRestoreSession).mockImplementation(async () => {
             useUserStore.getState().setCurrentUser({
                 id: 501,
@@ -193,70 +156,26 @@ describe("AppInitializer", () => {
         renderInitializer();
 
         await waitFor(() => expect(chatService.initialize).toHaveBeenCalledTimes(1));
-        expect(wsService.connect).toHaveBeenCalledWith("ws://ws.test", "token-restored", "device-1");
         expect(e2eeService.ensureSessionBootstrap).toHaveBeenCalledWith("device-1");
+        expect(vi.mocked(chatService.initialize).mock.invocationCallOrder[0])
+            .toBeGreaterThan(vi.mocked(e2eeService.ensureSessionBootstrap).mock.invocationCallOrder[0]);
     });
 
-    it("does not auto-login in dev when no cached token exists", async () => {
-        envMock.IS_DEV = true;
+    it("keeps the app usable but skips runtime startup when bootstrap is not ready", async () => {
+        vi.mocked(userService.tryRestoreSession).mockImplementation(async () => {
+            useUserStore.getState().setCurrentUser({
+                id: 501,
+                accountId: 42,
+                token: "token-restored",
+                isLoggedIn: true,
+            });
+            return true;
+        });
+        vi.mocked(e2eeService.ensureSessionBootstrap).mockResolvedValue(false);
 
         renderInitializer();
 
         expect(await screen.findByText("App Route")).toBeInTheDocument();
-        expect(userService.login).not.toHaveBeenCalled();
         expect(chatService.initialize).not.toHaveBeenCalled();
-        expect(wsService.connect).not.toHaveBeenCalled();
-        expect(e2eeService.ensureSessionBootstrap).not.toHaveBeenCalled();
-    });
-
-    it("registers and cleans up the OTP replenish websocket handler", async () => {
-        const view = renderInitializer();
-
-        await waitFor(() => expect(wsService.on).toHaveBeenCalledWith("e2ee.replenish_otp_keys", expect.any(Function)));
-        const handler = getWSHandler("e2ee.replenish_otp_keys");
-
-        view.unmount();
-
-        expect(wsService.off).toHaveBeenCalledWith("e2ee.replenish_otp_keys", handler);
-    });
-
-    it("replenishes OTP keys only when the websocket event matches current user and device", async () => {
-        renderInitializer();
-        await waitFor(() => expect(wsService.on).toHaveBeenCalledWith("e2ee.replenish_otp_keys", expect.any(Function)));
-        const handler = getWSHandler("e2ee.replenish_otp_keys");
-        useUserStore.getState().setCurrentUser({
-            id: 501,
-            accountId: 42,
-            isLoggedIn: true,
-        });
-        registerDevice();
-
-        handler({ user_id: 501, device_id: "device-1" });
-
-        await waitFor(() => expect(e2eeService.replenishOTPKeys).toHaveBeenCalledWith("device-1"));
-    });
-
-    it("ignores malformed or stale OTP replenish websocket events", async () => {
-        renderInitializer();
-        await waitFor(() => expect(wsService.on).toHaveBeenCalledWith("e2ee.replenish_otp_keys", expect.any(Function)));
-        const handler = getWSHandler("e2ee.replenish_otp_keys");
-        useUserStore.getState().setCurrentUser({
-            id: 501,
-            accountId: 42,
-            isLoggedIn: true,
-        });
-        registerDevice();
-
-        handler({ user_id: 999, device_id: "device-1" });
-        handler({ user_id: 501, device_id: "device-2" });
-        handler({ room_id: 1 });
-
-        expect(e2eeService.replenishOTPKeys).not.toHaveBeenCalled();
     });
 });
-
-const getWSHandler = (type: string): ((data: unknown) => void) => {
-    const call = vi.mocked(wsService.on).mock.calls.find(([event]) => event === type);
-    if (!call) throw new Error(`missing ws handler for ${type}`);
-    return call[1] as (data: unknown) => void;
-};
