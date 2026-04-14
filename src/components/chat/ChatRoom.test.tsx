@@ -225,7 +225,7 @@ describe("ChatRoom", () => {
 
         fireEvent.click(screen.getByRole("button", { name: /retry/i }));
         expect(onRetryMessage).toHaveBeenCalledWith("local-4");
-        expect(screen.getByText("network error")).toBeInTheDocument();
+        expect(screen.queryByText("network error")).not.toBeInTheDocument();
     });
 
     it("renders clearer locked copy and relative last-seen status for direct chats", () => {

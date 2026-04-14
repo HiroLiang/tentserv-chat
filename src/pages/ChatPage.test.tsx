@@ -117,14 +117,18 @@ describe("ChatPage room selection", () => {
             member_count: 2,
         });
         vi.mocked(chatRoomService.loadMessages).mockResolvedValue(undefined);
-        vi.mocked(chatRoomService.setActiveRoom).mockResolvedValue(undefined);
+        vi.mocked(chatRoomService.setActiveRoom).mockImplementation(async (roomId: number | null) => {
+            if (typeof roomId === "number") {
+                useChatStore.getState().clearUnreadCount(roomId);
+            }
+        });
         vi.mocked(chatRoomService.retryMessage).mockResolvedValue(undefined);
         vi.mocked(chatRoomService.markAsRead).mockImplementation(async (roomId: number) => {
             useChatStore.getState().clearUnreadCount(roomId);
         });
     });
 
-    it("does not reload the selected room when mark-as-read only changes unread count", async () => {
+    it("does not reload the selected room when activation clears unread count", async () => {
         useChatStore.setState({
             rooms: {
                 direct: [{
@@ -151,7 +155,8 @@ describe("ChatPage room selection", () => {
         expect(chatRoomService.loadRoomDetail).toHaveBeenCalledTimes(1);
         expect(chatRoomService.loadRoomDetail).toHaveBeenCalledWith(42, { persist: true, hydrateMessages: true });
         expect(chatRoomService.loadMessages).not.toHaveBeenCalled();
-        expect(chatRoomService.markAsRead).toHaveBeenCalledTimes(1);
+        expect(chatRoomService.markAsRead).not.toHaveBeenCalled();
+        expect(chatRoomService.setActiveRoom).toHaveBeenCalledWith(42);
     });
 
     it("maps blocked direct room status and member avatars into ChatRoom props", async () => {

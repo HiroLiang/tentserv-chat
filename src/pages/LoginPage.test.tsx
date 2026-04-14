@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -106,7 +106,7 @@ describe("LoginPage", () => {
         renderLogin();
 
         await user.type(screen.getByLabelText(/email or account/i), "hiro@example.com");
-        await user.type(screen.getByLabelText(/password/i), "correct-password");
+        await user.type(screen.getByLabelText(/^password$/i, { selector: "input" }), "correct-password");
         await user.click(screen.getByRole("button", { name: /sign in/i }));
 
         await waitFor(() => expect(screen.getByText("Home Route")).toBeInTheDocument());
@@ -157,7 +157,7 @@ describe("LoginPage", () => {
         renderLogin();
 
         await user.type(screen.getByLabelText(/email or account/i), "hiro-account");
-        await user.type(screen.getByLabelText(/password/i), "correct-password");
+        await user.type(screen.getByLabelText(/^password$/i, { selector: "input" }), "correct-password");
         await user.click(screen.getByRole("button", { name: /sign in/i }));
 
         await waitFor(() => expect(userService.login).toHaveBeenCalledWith("hiro-account", "correct-password"));
@@ -170,12 +170,31 @@ describe("LoginPage", () => {
         renderLogin();
 
         await user.type(screen.getByLabelText(/email or account/i), "hiro@example.com");
-        await user.type(screen.getByLabelText(/password/i), "wrong-password");
+        await user.type(screen.getByLabelText(/^password$/i, { selector: "input" }), "wrong-password");
         await user.click(screen.getByRole("button", { name: /sign in/i }));
 
         expect(await screen.findByText("invalid credentials")).toBeInTheDocument();
         expect(chatService.initialize).not.toHaveBeenCalled();
         expect(e2eeService.ensureSessionBootstrap).not.toHaveBeenCalled();
+    });
+
+    it("uses the shared password reveal control and shows the corrected sign-up copy", async () => {
+        const user = userEvent.setup();
+        renderLogin();
+
+        const passwordInput = screen.getByLabelText(/^password$/i);
+        const revealButton = screen.getByRole("button", { name: /show password while pressed/i });
+
+        expect(screen.getByText("Don't have an account?")).toBeInTheDocument();
+
+        await user.type(passwordInput, "correct-password");
+        expect(passwordInput).toHaveAttribute("type", "password");
+
+        fireEvent.pointerDown(revealButton);
+        expect(passwordInput).toHaveAttribute("type", "text");
+
+        fireEvent.pointerUp(revealButton);
+        expect(passwordInput).toHaveAttribute("type", "password");
     });
 
     it("opens device verification, completes the challenge, then continues bootstrap", async () => {
@@ -193,7 +212,7 @@ describe("LoginPage", () => {
         renderLogin();
 
         await user.type(screen.getByLabelText(/email or account/i), "hiro@example.com");
-        await user.type(screen.getByLabelText(/password/i), "correct-password");
+        await user.type(screen.getByLabelText(/^password$/i, { selector: "input" }), "correct-password");
         await user.click(screen.getByRole("button", { name: /sign in/i }));
 
         expect(await screen.findByRole("dialog")).toBeInTheDocument();
@@ -229,7 +248,7 @@ describe("LoginPage", () => {
         renderLogin();
 
         await user.type(screen.getByLabelText(/email or account/i), "hiro@example.com");
-        await user.type(screen.getByLabelText(/password/i), "correct-password");
+        await user.type(screen.getByLabelText(/^password$/i, { selector: "input" }), "correct-password");
         await user.click(screen.getByRole("button", { name: /sign in/i }));
 
         expect(await screen.findByRole("dialog")).toBeInTheDocument();

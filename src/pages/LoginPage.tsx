@@ -14,6 +14,7 @@ import {
     noteAuthFocusInteraction,
     resetAuthFocusInteraction,
 } from "@/utils/authFocus.ts";
+import { PasswordField } from "@/components/auth/PasswordField.tsx";
 import { VerificationCodeDialog } from "@/components/auth/VerificationCodeDialog.tsx";
 import type { PendingVerificationState } from "@/types/user.ts";
 
@@ -146,24 +147,16 @@ export const LoginPage = () => {
                                 </div>
 
                                 {/* Password */}
-                                <div className="space-y-2">
-                                    <label
-                                        htmlFor="password"
-                                        className="block text-sm font-medium text-card-foreground mb-2"
-                                    >
-                                        Password
-                                    </label>
-                                    <Input
-                                        id="password"
-                                        type="password"
-                                        placeholder="••••••••"
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        required
-                                        disabled={isLoading}
-                                        autoComplete="current-password"
-                                    />
-                                </div>
+                                <PasswordField
+                                    id="password"
+                                    label="Password"
+                                    placeholder="••••••••"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    required
+                                    disabled={isLoading}
+                                    autoComplete="current-password"
+                                />
 
                                 {/* Error Message */}
                                 {error && (
@@ -185,7 +178,7 @@ export const LoginPage = () => {
                             {/* Footer */}
                             <div className="mt-6 text-center flex justify-center items-center gap-2">
                                 <p className="text-muted-foreground text-sm">
-                                    Don't nave an account?{' '}
+                                    Don't have an account?{' '}
                                 </p>
                                 <p
                                     onClick={() => navigate('/register')}

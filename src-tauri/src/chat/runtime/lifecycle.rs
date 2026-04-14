@@ -444,16 +444,7 @@ impl SharedRuntime {
                     _ = room_interval.tick() => {
                         if let Ok(guard) = active_room_id.lock() {
                             if let Some(room_id) = *guard {
-                                let _ = queue.enqueue_sync(
-                                    format!("room:poll:{room_id}"),
-                                    RuntimeJob::SyncRoom {
-                                        key: format!("room:poll:{room_id}"),
-                                        room_id,
-                                        before_sort_key: None,
-                                        limit: None,
-                                        emit_room: true,
-                                    },
-                                );
+                                let _ = enqueue_active_room_poll_jobs(&queue, room_id);
                             }
                         }
                     }
@@ -510,9 +501,31 @@ fn apply_self_sender_key_sync_snapshot(
     }
 }
 
+fn enqueue_active_room_poll_jobs(
+    queue: &RuntimeQueue<RuntimeJob>,
+    room_id: i64,
+) -> Result<(), String> {
+    queue.enqueue_business(RuntimeJob::MarkRoomRead { room_id })?;
+    queue.enqueue_sync(
+        format!("room:poll:{room_id}"),
+        RuntimeJob::SyncRoom {
+            key: format!("room:poll:{room_id}"),
+            room_id,
+            before_sort_key: None,
+            limit: None,
+            emit_room: true,
+        },
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::apply_self_sender_key_sync_snapshot;
+    use tokio::sync::mpsc::error::TryRecvError;
+
+    use super::{apply_self_sender_key_sync_snapshot, enqueue_active_room_poll_jobs};
+    use crate::chat::queue::RuntimeQueue;
+    use crate::chat::runtime::manager::RuntimeJob;
     use crate::chat::{ChatSelfSenderKeySyncDevice, ChatSelfSenderKeySyncState, ChatSyncState};
 
     #[test]
@@ -554,5 +567,46 @@ mod tests {
                 .map(|value| value.requester_current_device),
             Some(true)
         );
+    }
+
+    #[test]
+    fn enqueue_active_room_poll_jobs_marks_read_before_syncing_room() {
+        let (queue, mut business_rx, mut sync_rx) = RuntimeQueue::new();
+
+        enqueue_active_room_poll_jobs(&queue, 42).expect("active room poll enqueue must succeed");
+
+        match business_rx.try_recv() {
+            Ok(RuntimeJob::MarkRoomRead { room_id }) => assert_eq!(room_id, 42),
+            other => panic!("expected MarkRoomRead job, got {:?}", other),
+        }
+        match sync_rx.try_recv() {
+            Ok(RuntimeJob::SyncRoom { room_id, emit_room, .. }) => {
+                assert_eq!(room_id, 42);
+                assert!(emit_room);
+            }
+            other => panic!("expected SyncRoom job, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn enqueue_active_room_poll_jobs_deduplicates_room_sync_but_keeps_read_refreshes() {
+        let (queue, mut business_rx, mut sync_rx) = RuntimeQueue::new();
+
+        enqueue_active_room_poll_jobs(&queue, 7).expect("first enqueue must succeed");
+        enqueue_active_room_poll_jobs(&queue, 7).expect("second enqueue must succeed");
+
+        match business_rx.try_recv() {
+            Ok(RuntimeJob::MarkRoomRead { room_id }) => assert_eq!(room_id, 7),
+            other => panic!("expected first MarkRoomRead job, got {:?}", other),
+        }
+        match business_rx.try_recv() {
+            Ok(RuntimeJob::MarkRoomRead { room_id }) => assert_eq!(room_id, 7),
+            other => panic!("expected second MarkRoomRead job, got {:?}", other),
+        }
+        match sync_rx.try_recv() {
+            Ok(RuntimeJob::SyncRoom { room_id, .. }) => assert_eq!(room_id, 7),
+            other => panic!("expected SyncRoom job, got {:?}", other),
+        }
+        assert!(matches!(sync_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 }

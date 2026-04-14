@@ -148,9 +148,6 @@ function MessageBubble({
                             <RotateCcw className="h-3 w-3"/> Retry
                         </button>
                     )}
-                    {message.isMe && isFailed && message.deliveryError && (
-                        <span className="text-destructive">{message.deliveryError}</span>
-                    )}
                 </div>
             </div>
 

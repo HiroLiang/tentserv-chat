@@ -116,6 +116,14 @@ class ChatRoomService {
             useChatStore.getState().setPendingInvitation(null);
         } else {
             await chatService.ensureRuntimeReady();
+            if (!this.isRoomDeleted(roomId)) {
+                useChatStore.getState().clearUnreadCount(roomId);
+                try {
+                    await chatMarkRoomRead(roomId);
+                } catch (error) {
+                    logger.warn(`Failed to mark room ${roomId} as read during activation`, error);
+                }
+            }
         }
         await chatSetActiveRoom(roomId);
     }

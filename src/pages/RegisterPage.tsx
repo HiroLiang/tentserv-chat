@@ -15,6 +15,7 @@ import {
 } from "@/utils/authFocus.ts";
 
 export const RegisterPage = () => {
+    const passwordMismatchError = 'Passwords do not match.';
     const navigate = useNavigate();
 
     const [email, setEmail] = useState('');
@@ -42,6 +43,18 @@ export const RegisterPage = () => {
         return () => window.clearTimeout(timeoutId);
     }, [isLoading, pendingVerification]);
 
+    useEffect(() => {
+        if (!password || !confirmPassword || password === confirmPassword) {
+            return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            setConfirmPasswordError(passwordMismatchError);
+        }, 400);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [confirmPassword, password]);
+
     const handleSubmit = async (e: SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         noteAuthFocusInteraction();
@@ -49,7 +62,7 @@ export const RegisterPage = () => {
         setConfirmPasswordError('');
 
         if (password !== confirmPassword) {
-            setConfirmPasswordError('Passwords do not match.');
+            setConfirmPasswordError(passwordMismatchError);
             return;
         }
 
@@ -74,7 +87,7 @@ export const RegisterPage = () => {
                 : null;
 
             if (errorCode === 'PASSWORD_CONFIRM_MISMATCH') {
-                setConfirmPasswordError('Passwords do not match.');
+                setConfirmPasswordError(passwordMismatchError);
                 return;
             }
             setError(err instanceof Error ? err.message : 'Registration failed');
@@ -161,7 +174,7 @@ export const RegisterPage = () => {
                                 value={password}
                                 onChange={(e) => {
                                     setPassword(e.target.value);
-                                    if (confirmPasswordError) {
+                                    if (confirmPasswordError === passwordMismatchError) {
                                         setConfirmPasswordError('');
                                     }
                                 }}
@@ -177,7 +190,7 @@ export const RegisterPage = () => {
                                 value={confirmPassword}
                                 onChange={(e) => {
                                     setConfirmPassword(e.target.value);
-                                    if (confirmPasswordError) {
+                                    if (confirmPasswordError === passwordMismatchError) {
                                         setConfirmPasswordError('');
                                     }
                                 }}

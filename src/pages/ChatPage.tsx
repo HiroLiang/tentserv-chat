@@ -190,7 +190,6 @@ const ChatPageContent = () => {
         if (selectedRoomStatus === 'deleted') return;
 
         chatRoomService.loadRoomDetail(roomId, { persist: true, hydrateMessages: true }).catch(() => {});
-        chatRoomService.markAsRead(roomId).catch(() => {});
     }, [selectedChatId, selectedRoomStatus]);
 
     useEffect(() => {

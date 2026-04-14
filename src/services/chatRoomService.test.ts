@@ -167,6 +167,8 @@ describe("chatRoomService", () => {
             return roomsSnapshot();
         });
         vi.mocked(chatService.ensureRuntimeReady).mockResolvedValue(undefined);
+        vi.mocked(chatMarkRoomRead).mockResolvedValue(undefined);
+        vi.mocked(chatSetActiveRoom).mockResolvedValue(undefined);
 
         vi.mocked(chatService.hydrateRoomSnapshot).mockImplementation((snapshot, options) => {
             if (options?.persistDetail !== false) {
@@ -401,12 +403,37 @@ describe("chatRoomService", () => {
         expect(chatService.refreshRooms).toHaveBeenCalledWith(true);
     });
 
-    it("notifies the runtime when the active room changes", async () => {
-        vi.mocked(chatSetActiveRoom).mockResolvedValue(undefined);
+    it("marks the room as read before notifying the runtime when the active room changes", async () => {
+        useChatStore.setState({
+            rooms: {
+                direct: [{
+                    room_id: 21,
+                    room_type: "direct",
+                    display_name: "Mina Park",
+                    unread_count: 3,
+                }],
+                group: [],
+                channel: [],
+                bot: [],
+            },
+        });
 
         await chatRoomService.setActiveRoom(21);
 
         expect(useChatStore.getState().currentRoomId).toBe(21);
+        expect(useChatStore.getState().rooms.direct[0]?.unread_count).toBe(0);
+        expect(chatMarkRoomRead).toHaveBeenCalledWith(21);
+        expect(chatSetActiveRoom).toHaveBeenCalledWith(21);
+        expect(vi.mocked(chatSetActiveRoom).mock.invocationCallOrder[0])
+            .toBeGreaterThan(vi.mocked(chatMarkRoomRead).mock.invocationCallOrder[0]);
+    });
+
+    it("still notifies the runtime when the activation mark-as-read request fails", async () => {
+        vi.mocked(chatMarkRoomRead).mockRejectedValueOnce(new Error("mark read failed"));
+
+        await expect(chatRoomService.setActiveRoom(21)).resolves.toBeUndefined();
+
+        expect(chatMarkRoomRead).toHaveBeenCalledWith(21);
         expect(chatSetActiveRoom).toHaveBeenCalledWith(21);
     });
 });

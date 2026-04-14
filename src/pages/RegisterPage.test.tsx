@@ -131,6 +131,30 @@ describe("RegisterPage verification flow", () => {
         expect(await screen.findByText("Passwords do not match.")).toBeInTheDocument();
     });
 
+    it("debounces local password mismatch validation and clears it once the fields match", async () => {
+        vi.useFakeTimers();
+        renderRegisterPage();
+
+        const passwordInput = screen.getByLabelText(/^password$/i);
+        const confirmPasswordInput = screen.getByLabelText(/^confirm password$/i, { selector: "input" });
+
+        fireEvent.change(passwordInput, { target: { value: "redacted-password" } });
+        fireEvent.change(confirmPasswordInput, { target: { value: "different-password" } });
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(399);
+        });
+        expect(screen.queryByText("Passwords do not match.")).not.toBeInTheDocument();
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(screen.getByText("Passwords do not match.")).toBeInTheDocument();
+
+        fireEvent.change(confirmPasswordInput, { target: { value: "redacted-password" } });
+        expect(screen.queryByText("Passwords do not match.")).not.toBeInTheDocument();
+    });
+
     it("maps backend password confirmation mismatch onto the confirm-password field", async () => {
         vi.mocked(userService.register).mockRejectedValue({
             code: "PASSWORD_CONFIRM_MISMATCH",
