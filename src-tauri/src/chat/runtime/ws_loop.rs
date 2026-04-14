@@ -68,9 +68,10 @@ impl SharedRuntime {
             }
             WsEvent::SenderKeyNeeded(payload) => {
                 log::info!(
-                    "chat runtime ws event: sender_key_needed room_id={} provider_member_id={} requester_member_id={} requester_device_id={:?}",
+                    "chat runtime ws event: sender_key_needed room_id={} sender_member_id={} provider_user_id={} requester_member_id={} requester_device_id={:?}",
                     payload.room_id,
-                    payload.provider_member_id,
+                    payload.sender_member_id,
+                    payload.provider_user_id,
                     payload.requester_member_id,
                     payload.requester_device_id
                 );

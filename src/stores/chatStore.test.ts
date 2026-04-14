@@ -274,6 +274,41 @@ describe("chatStore room activity ordering", () => {
         });
     });
 
+    it("collapses a later pending local echo into the existing sent snapshot for the same client message", () => {
+        const store = useChatStore.getState();
+        store.setMessages(17, [message({
+            client_message_id: "local:17:1",
+            message_id: 7001,
+            sender_id: 901,
+            sender_device_id: "device-bell-1",
+            sender_key_version: 1776091234999,
+            content: "Hi",
+            created_at: "2026-04-12T07:00:00Z",
+            delivery_status: "sent",
+            is_local_echo: false,
+        })], false);
+
+        store.appendMessage(17, message({
+            client_message_id: "local:17:1",
+            message_id: null,
+            sender_id: 901,
+            sender_device_id: "device-bell-1",
+            sender_key_version: 0,
+            content: "Hi",
+            created_at: "2026-04-12T07:00:00Z",
+            delivery_status: "pending",
+            is_local_echo: true,
+        }));
+
+        expect(useChatStore.getState().messages[17]).toHaveLength(1);
+        expect(useChatStore.getState().messages[17][0]).toMatchObject({
+            client_message_id: "local:17:1",
+            message_id: 7001,
+            delivery_status: "sent",
+            is_local_echo: false,
+        });
+    });
+
     it("keeps the previous direct room identity when a later snapshot is missing display fields", () => {
         const store = useChatStore.getState();
         store.setRooms({

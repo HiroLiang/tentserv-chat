@@ -188,6 +188,71 @@ const messageIdentity = (message: Message): string => {
     return `${message.sender_id}:${message.created_at}:${message.content}`;
 };
 
+const messageAliases = (message: Message): string[] => {
+    const aliases: string[] = [];
+    if (message.message_id !== undefined && message.message_id !== null) {
+        aliases.push(`server:${message.message_id}`);
+    }
+    if (message.client_message_id) {
+        aliases.push(`client:${message.client_message_id}`);
+    }
+    aliases.push(messageIdentity(message));
+    return aliases;
+};
+
+const matchesMessageAlias = (
+    message: Message,
+    clientMessageId?: string | null,
+    messageId?: number | null,
+): boolean => {
+    if (clientMessageId && message.client_message_id === clientMessageId) {
+        return true;
+    }
+    return messageId !== undefined
+        && messageId !== null
+        && message.message_id !== undefined
+        && message.message_id !== null
+        && message.message_id === messageId;
+};
+
+const messageAuthorityScore = (message: Message): number => {
+    const deliveryScore = message.delivery_status === 'sent'
+        ? 4
+        : message.delivery_status === 'failed'
+            ? 2
+            : 1;
+    return (
+        (message.message_id !== undefined && message.message_id !== null ? 8 : 0)
+        + deliveryScore
+        + (message.is_local_echo === false ? 1 : 0)
+    );
+};
+
+const mergeMessageRecord = (existing: Message, incoming: Message): Message => {
+    const incomingPreferred = messageAuthorityScore(incoming) >= messageAuthorityScore(existing);
+    const preferred = incomingPreferred ? incoming : existing;
+    const fallback = incomingPreferred ? existing : incoming;
+
+    return {
+        ...fallback,
+        ...preferred,
+        client_message_id: preferred.client_message_id || fallback.client_message_id,
+        message_id: preferred.message_id ?? fallback.message_id,
+        sender_device_id: preferred.sender_device_id || fallback.sender_device_id,
+        sender_key_version: preferred.sender_key_version ?? fallback.sender_key_version,
+        type: preferred.type || fallback.type,
+        content: preferred.content || fallback.content,
+        reply_to_id: preferred.reply_to_id ?? fallback.reply_to_id,
+        is_edited: preferred.is_edited ?? fallback.is_edited,
+        is_deleted: preferred.is_deleted ?? fallback.is_deleted,
+        created_at: preferred.created_at || fallback.created_at,
+        sort_key: preferred.sort_key ?? fallback.sort_key,
+        delivery_status: preferred.delivery_status || fallback.delivery_status,
+        delivery_error: preferred.delivery_error ?? fallback.delivery_error,
+        is_local_echo: preferred.is_local_echo ?? fallback.is_local_echo ?? (preferred.delivery_status !== 'sent'),
+    };
+};
+
 const sortMessages = (messages: Message[]): Message[] =>
     [...messages].sort((left, right) => {
         if (left.sort_key === right.sort_key) {
@@ -198,11 +263,49 @@ const sortMessages = (messages: Message[]): Message[] =>
 
 const mergeMessages = (existing: Message[], incoming: Message[]): Message[] => {
     const merged = new Map<string, Message>();
+    const aliasToIdentity = new Map<string, string>();
+
+    const upsert = (message: Message) => {
+        const aliases = messageAliases(message);
+        const matchedIdentities = [...new Set(
+            aliases
+                .map((alias) => aliasToIdentity.get(alias))
+                .filter((identity): identity is string => Boolean(identity)),
+        )];
+
+        if (matchedIdentities.length === 0) {
+            const identity = messageIdentity(message);
+            merged.set(identity, message);
+            for (const alias of aliases) {
+                aliasToIdentity.set(alias, identity);
+            }
+            return;
+        }
+
+        const identity = matchedIdentities[0];
+        let mergedMessage = merged.get(identity) ?? message;
+        for (const duplicateIdentity of matchedIdentities.slice(1)) {
+            const duplicate = merged.get(duplicateIdentity);
+            if (!duplicate) continue;
+            mergedMessage = mergeMessageRecord(mergedMessage, duplicate);
+            merged.delete(duplicateIdentity);
+        }
+        mergedMessage = mergeMessageRecord(mergedMessage, message);
+        merged.set(identity, mergedMessage);
+
+        for (const alias of messageAliases(mergedMessage)) {
+            aliasToIdentity.set(alias, identity);
+        }
+        for (const alias of aliases) {
+            aliasToIdentity.set(alias, identity);
+        }
+    };
+
     for (const message of existing) {
-        merged.set(messageIdentity(message), message);
+        upsert(message);
     }
     for (const message of incoming) {
-        merged.set(messageIdentity(message), message);
+        upsert(message);
     }
     return sortMessages([...merged.values()]);
 };
@@ -343,6 +446,9 @@ export const useChatStore = create<ChatState>((set) => ({
     appendMessage: (roomId, msg) =>
         set((state) => {
             const nextMessages = mergeMessages(state.messages[roomId] ?? [], [msg]);
+            const mergedMessage = nextMessages.find((message) =>
+                matchesMessageAlias(message, msg.client_message_id, msg.message_id),
+            ) ?? msg;
             return {
                 messages: {
                     ...state.messages,
@@ -351,7 +457,7 @@ export const useChatStore = create<ChatState>((set) => ({
                 rooms: updateRoomSummariesForMessage(
                     state.rooms,
                     roomId,
-                    msg,
+                    mergedMessage,
                 ),
                 currentRoomDetail: state.currentRoomDetail?.room_id === roomId
                     ? {
@@ -365,7 +471,7 @@ export const useChatStore = create<ChatState>((set) => ({
     updateMessageDelivery: (roomId, clientMessageId, deliveryStatus, deliveryError, messageId) =>
         set((state) => {
             const nextMessages = normalizeMessages((state.messages[roomId] ?? []).map((message) => (
-                message.client_message_id === clientMessageId
+                matchesMessageAlias(message, clientMessageId, messageId)
                     ? {
                         ...message,
                         delivery_status: deliveryStatus,

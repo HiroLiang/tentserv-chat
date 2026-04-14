@@ -359,7 +359,8 @@ export interface GetKeyBundleResponse {
 
 export interface UploadSenderKeyRequest {
     room_id: number;
-    receiver_member_id: number;
+    sender_member_id: number;
+    receiver_user_id: number;
     receiver_device_id?: string;
     sender_key_version: number;
     distribution_message: string; // base64
@@ -368,29 +369,31 @@ export interface UploadSenderKeyRequest {
 export interface GetSenderKeysResponse {
     keys: {
         chat_member_id: number;
-        sender_key_public: string;   // base64
-        distribution_message: string; // base64
+        provider_device_id: string;
+        sender_key_version: number;
     }[];
 }
 
-export interface SenderKeyDeviceRef {
+export interface SenderKeyRouteRef {
+    user_id: number;
     member_id: number;
     device_id: string;
 }
 
 export interface GetSenderKeyDistributionStatusResponse {
-    own_device_sender_key_exists: boolean;
-    requestable_sources: SenderKeyDeviceRef[];
-    available_from_sources: SenderKeyDeviceRef[];
-    available_to_targets: SenderKeyDeviceRef[];
-    pending_receivers: SenderKeyDeviceRef[];
-    pending_from_sources: SenderKeyDeviceRef[];
+    own_member_sender_key_exists: boolean;
+    requestable_sources: SenderKeyRouteRef[];
+    available_from_sources: SenderKeyRouteRef[];
+    available_to_targets: SenderKeyRouteRef[];
+    pending_receivers: SenderKeyRouteRef[];
+    pending_from_sources: SenderKeyRouteRef[];
 }
 
 export interface CreateSenderKeyRequestRequest {
     room_id: number;
-    provider_member_id: number;
+    provider_user_id: number;
     provider_device_id: string;
+    sender_member_id: number;
     requester_device_id?: string;
 }
 
@@ -447,7 +450,8 @@ export interface ConsumeSelfSenderKeySyncDistributionRequest {
 
 export interface SenderKeyNeededPayload {
     room_id: number;
-    provider_member_id: number;
+    sender_member_id: number;
+    provider_user_id: number;
     provider_device_id: string;
     requester_member_id: number;
     requester_user_id: number;
@@ -458,8 +462,10 @@ export interface SenderKeyDistributionAvailablePayload {
     room_id: number;
     distribution_id: number;
     sender_member_id: number;
+    sender_user_id: number;
     sender_device_id: string;
     receiver_member_id: number;
+    receiver_user_id: number;
     sender_key_version: number;
     receiver_device_id?: string;
 }

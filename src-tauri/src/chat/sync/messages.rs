@@ -13,6 +13,11 @@ use super::sender_keys::normal_sender_key_ops_allowed;
 
 pub const WAITING_FOR_SENDER_KEY_SENTINEL: &str = "__E2EE_WAITING_KEY__";
 
+pub(super) enum DecryptMessageContentOutcome {
+    Plaintext(String),
+    WaitingForSenderKey,
+}
+
 struct OutgoingMessageContent {
     encoded_content: String,
     cache_bytes: Vec<u8>,
@@ -235,7 +240,7 @@ pub(super) async fn decrypt_messages(
     Ok(out)
 }
 
-pub async fn decrypt_message_content(
+pub(super) async fn decrypt_message_content_outcome(
     app: &tauri::AppHandle,
     session: &ChatRuntimeSession,
     api: &ChatApiClient,
@@ -245,9 +250,9 @@ pub async fn decrypt_message_content(
     sender_key_version: i64,
     content: &str,
     request_on_missing: bool,
-) -> Result<String, String> {
+) -> Result<DecryptMessageContentOutcome, String> {
     if !content.starts_with("e2ee:v1:") {
-        return Ok(content.to_string());
+        return Ok(DecryptMessageContentOutcome::Plaintext(content.to_string()));
     }
 
     let combined = STANDARD
@@ -268,6 +273,7 @@ pub async fn decrypt_message_content(
     )? {
         crate::commands::core::SenderKeyDecryptResult::Ok { plaintext } => {
             String::from_utf8(plaintext)
+                .map(DecryptMessageContentOutcome::Plaintext)
                 .map_err(|err| format!("decode decrypted chat message utf8 failed: {err}"))
         }
         crate::commands::core::SenderKeyDecryptResult::MissingKey
@@ -278,14 +284,27 @@ pub async fn decrypt_message_content(
                     room_id,
                     sender_member_id
                 );
-                let _ = api
-                    .create_sender_key_request(&CreateSenderKeyRequestRequest {
-                        room_id,
-                        provider_member_id: sender_member_id,
-                        provider_device_id: sender_device_id.to_string(),
-                        requester_device_id: Some(session.device_id.clone()),
-                    })
-                    .await;
+                if let Ok(status) = api.get_sender_key_distribution_status(room_id).await {
+                    if let Some(source_ref) = status
+                        .requestable_sources
+                        .iter()
+                        .chain(status.pending_from_sources.iter())
+                        .find(|entry| {
+                            entry.member_id == sender_member_id
+                                && entry.device_id == sender_device_id
+                        })
+                    {
+                        let _ = api
+                            .create_sender_key_request(&CreateSenderKeyRequestRequest {
+                                room_id,
+                                provider_user_id: source_ref.user_id,
+                                provider_device_id: source_ref.device_id.clone(),
+                                sender_member_id,
+                                requester_device_id: Some(session.device_id.clone()),
+                            })
+                            .await;
+                    }
+                }
             } else {
                 log::info!(
                     "chat runtime sync: sender key missing or stale but normal sender key ops are blocked room_id={} sender_member_id={}",
@@ -293,6 +312,37 @@ pub async fn decrypt_message_content(
                     sender_member_id
                 );
             }
+            Ok(DecryptMessageContentOutcome::WaitingForSenderKey)
+        }
+    }
+}
+
+pub async fn decrypt_message_content(
+    app: &tauri::AppHandle,
+    session: &ChatRuntimeSession,
+    api: &ChatApiClient,
+    room_id: i64,
+    sender_member_id: i64,
+    sender_device_id: &str,
+    sender_key_version: i64,
+    content: &str,
+    request_on_missing: bool,
+) -> Result<String, String> {
+    match decrypt_message_content_outcome(
+        app,
+        session,
+        api,
+        room_id,
+        sender_member_id,
+        sender_device_id,
+        sender_key_version,
+        content,
+        request_on_missing,
+    )
+    .await?
+    {
+        DecryptMessageContentOutcome::Plaintext(content) => Ok(content),
+        DecryptMessageContentOutcome::WaitingForSenderKey => {
             Ok(WAITING_FOR_SENDER_KEY_SENTINEL.to_string())
         }
     }

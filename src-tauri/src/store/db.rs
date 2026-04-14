@@ -25,6 +25,7 @@
 //!      `sender_device_id` + `sender_key_version`
 //! - 8: chat room summaries persist latest-message metadata needed for
 //!      local preview decrypt (`latest_message_id`, sender device, sender key version)
+//! - 9: sender keys become member-scoped again for local canonical lookup
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -141,13 +142,11 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
         );
 
         -- ── Sender keys ────────────────────────────────────────────
-        -- Keyed by (user_id, member_id, device_id).  member_id is chat_members.id —
-        -- a globally unique sequence PK, and device_id is the sender device.
+        -- Keyed by (user_id, member_id). member_id is chat_members.id —
+        -- a globally unique sequence PK. Sender-device routing remains transport metadata
+        -- outside this table; local lookup is member-scoped.
         --
-        -- key_scope='own': current device's own sender key.  key_blob is AES-256-GCM
-        --                  encrypted with db_master_key_{user_id}; nonce is NOT NULL.
-        -- key_scope='peer': another device's sender key. key_blob is plaintext (32 bytes);
-        --                   nonce is NULL.
+        -- key_blob is AES-256-GCM encrypted with db_master_key_{user_id}; nonce is NOT NULL.
         --
         -- NOTE: this table is created by migrate_schema when upgrading from
         -- the old schema (user_version 0).  init_schema only creates it when
@@ -155,14 +154,11 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS sender_keys (
             user_id            TEXT    NOT NULL,
             member_id          TEXT    NOT NULL,
-            device_id          TEXT    NOT NULL,
-            key_scope          TEXT    NOT NULL,
             key_blob           BLOB    NOT NULL,
-            nonce              BLOB,
+            nonce              BLOB    NOT NULL,
             sender_key_version INTEGER NOT NULL DEFAULT 0,
             updated_at         INTEGER NOT NULL,
-            PRIMARY KEY (user_id, member_id, device_id),
-            CHECK (key_scope IN ('own', 'peer'))
+            PRIMARY KEY (user_id, member_id)
         );
 
         -- ── Cloud-pulled encrypted messages ───────────────────────
@@ -714,26 +710,59 @@ pub(crate) fn migrate_schema(conn: &Connection) -> Result<(), String> {
     if version < 8 {
         if sqlite_table_exists(conn, "chat_rooms")? {
             if !sqlite_column_exists(conn, "chat_rooms", "latest_message_id")? {
-                conn.execute("ALTER TABLE chat_rooms ADD COLUMN latest_message_id INTEGER", [])
-                    .map_err(|e| format!("migrate_schema (7→8) add latest_message_id failed: {e}"))?;
+                conn.execute(
+                    "ALTER TABLE chat_rooms ADD COLUMN latest_message_id INTEGER",
+                    [],
+                )
+                .map_err(|e| format!("migrate_schema (7→8) add latest_message_id failed: {e}"))?;
             }
             if !sqlite_column_exists(conn, "chat_rooms", "latest_message_sender_device_id")? {
                 conn.execute(
                     "ALTER TABLE chat_rooms ADD COLUMN latest_message_sender_device_id TEXT",
                     [],
                 )
-                .map_err(|e| format!("migrate_schema (7→8) add latest_message_sender_device_id failed: {e}"))?;
+                .map_err(|e| {
+                    format!("migrate_schema (7→8) add latest_message_sender_device_id failed: {e}")
+                })?;
             }
             if !sqlite_column_exists(conn, "chat_rooms", "latest_message_sender_key_version")? {
                 conn.execute(
                     "ALTER TABLE chat_rooms ADD COLUMN latest_message_sender_key_version INTEGER",
                     [],
                 )
-                .map_err(|e| format!("migrate_schema (7→8) add latest_message_sender_key_version failed: {e}"))?;
+                .map_err(|e| {
+                    format!(
+                        "migrate_schema (7→8) add latest_message_sender_key_version failed: {e}"
+                    )
+                })?;
             }
         }
         conn.execute_batch("PRAGMA user_version = 8;")
             .map_err(|e| format!("set user_version=8 failed: {e}"))?;
+    }
+
+    if version < 9 {
+        conn.execute_batch(
+            r#"
+            BEGIN;
+
+            DROP TABLE IF EXISTS sender_keys;
+            CREATE TABLE sender_keys (
+                user_id            TEXT    NOT NULL,
+                member_id          TEXT    NOT NULL,
+                key_blob           BLOB    NOT NULL,
+                nonce              BLOB    NOT NULL,
+                sender_key_version INTEGER NOT NULL DEFAULT 0,
+                updated_at         INTEGER NOT NULL,
+                PRIMARY KEY (user_id, member_id)
+            );
+
+            PRAGMA user_version = 9;
+
+            COMMIT;
+            "#,
+        )
+        .map_err(|e| format!("migrate_schema (8→9) failed: {e}"))?;
     }
 
     Ok(())
@@ -750,7 +779,11 @@ fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool, Stri
     Ok(count > 0)
 }
 
-fn sqlite_column_exists(conn: &Connection, table_name: &str, column_name: &str) -> Result<bool, String> {
+fn sqlite_column_exists(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+) -> Result<bool, String> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table_name})"))
         .map_err(|err| format!("prepare table_info for {table_name} failed: {err}"))?;

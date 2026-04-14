@@ -1,7 +1,7 @@
 //! Unit tests for `sender_key_store`.
 //!
-//! Validates the private/public key distinction and the removal of `room_id`
-//! from the primary key.  Each test scenario follows the Given/When/Then pattern.
+//! Validates member-scoped sender key storage and the removal of `room_id`
+//! from the primary key. Each test scenario follows the Given/When/Then pattern.
 
 use super::{
     delete_sender_keys_inner, has_sender_key_inner, load_own_sender_key_inner,
@@ -24,14 +24,14 @@ fn test_db() -> (TempDir, Connection) {
     (dir, conn)
 }
 
-// ── Scenario 1: Own key is encrypted at rest ───────────────────────
+// ── Scenario 1: Sender key is encrypted at rest ────────────────────
 
 #[test]
 fn scenario_own_key_encrypted_storage() {
-    // Given  alice's own sender key (member_id="m_alice", 32 bytes)
+    // Given  alice's sender key (member_id="m_alice", 32 bytes)
     // When   stored via store_own_sender_key_inner
     // Then   load_own_sender_key_inner returns the original bytes
-    // And    the DB row has is_private=1 and a non-NULL nonce
+    // And    the DB row persists a non-NULL nonce because all sender keys are encrypted locally
     let (_dir, conn) = test_db();
     let private_key: [u8; 32] = [0xAAu8; 32];
 
@@ -51,25 +51,27 @@ fn scenario_own_key_encrypted_storage() {
     assert_eq!(loaded, private_key);
 
     // Verify DB row internals
-    let (key_scope, nonce): (String, Option<Vec<u8>>) = conn
+    let nonce: Vec<u8> = conn
         .query_row(
-            "SELECT key_scope, nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_alice' AND device_id='device-alice'",
+            "SELECT nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_alice'",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(key_scope, "own", "own key must have key_scope='own'");
-    assert!(nonce.is_some(), "own key must have a non-NULL nonce");
+    assert!(
+        !nonce.is_empty(),
+        "sender key rows must keep a non-NULL nonce because key_blob is encrypted"
+    );
 }
 
-// ── Scenario 2: Peer key is stored as plaintext ────────────────────
+// ── Scenario 2: Imported member key is also encrypted at rest ──────
 
 #[test]
 fn scenario_peer_key_plaintext_storage() {
-    // Given  alice stores bob's public sender key (member_id="m_bob")
+    // Given  alice stores bob's member-scoped sender key (member_id="m_bob")
     // When   stored via store_peer_sender_key_inner
     // Then   load_peer_sender_key_inner returns the original bytes
-    // And    the DB row has is_private=0 and nonce IS NULL
+    // And    the DB row is still encrypted locally with a non-NULL nonce
     let (_dir, conn) = test_db();
     let public_key: [u8; 32] = [0xBBu8; 32];
 
@@ -80,15 +82,17 @@ fn scenario_peer_key_plaintext_storage() {
     assert_eq!(loaded, public_key);
 
     // Verify DB row internals
-    let (key_scope, nonce): (String, Option<Vec<u8>>) = conn
+    let nonce: Vec<u8> = conn
         .query_row(
-            "SELECT key_scope, nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_bob' AND device_id='device-bob'",
+            "SELECT nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_bob'",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(key_scope, "peer", "peer key must have key_scope='peer'");
-    assert!(nonce.is_none(), "peer key must have nonce IS NULL");
+    assert!(
+        !nonce.is_empty(),
+        "imported sender key rows must also keep a non-NULL nonce because key_blob is encrypted"
+    );
 }
 
 // ── Scenario 3: has_sender_key works for both types ────────────────
@@ -118,27 +122,26 @@ fn scenario_has_sender_key_both_types() {
     assert!(!has_sender_key_inner(&conn, "alice", "m_carol", "device-carol").unwrap());
 }
 
-// ── Scenario 4: API guard — loading wrong type returns Err ─────────
+// ── Scenario 4: Compatibility loaders resolve the same member row ──
 
 #[test]
 fn scenario_load_peer_via_own_api_returns_err() {
-    // Given  alice stores bob's peer key
+    // Given  alice stores bob's member-scoped sender key
     // When   load_own_sender_key_inner is called for the same member_id
-    // Then   it returns an error (is_private mismatch)
+    // Then   it resolves the same member-scoped row
     let (_dir, conn) = test_db();
     store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", DEVICE_BOB, &[0xCCu8; 32], 0)
         .unwrap();
 
-    let result = load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_bob", DEVICE_BOB);
-    assert!(result.is_err(), "must not load a peer key via own-key API");
-    assert!(result.unwrap_err().contains("peer key"));
+    let result = load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_bob", DEVICE_BOB).unwrap();
+    assert_eq!(result, [0xCCu8; 32]);
 }
 
 #[test]
 fn scenario_load_own_via_peer_api_returns_err() {
-    // Given  alice stores her own key
+    // Given  alice stores her sender key
     // When   load_peer_sender_key_inner is called for the same member_id
-    // Then   it returns an error (is_private mismatch)
+    // Then   it resolves the same member-scoped row
     let (_dir, conn) = test_db();
     store_own_sender_key_with_version_inner(
         &conn,
@@ -151,9 +154,8 @@ fn scenario_load_own_via_peer_api_returns_err() {
     )
     .unwrap();
 
-    let result = load_peer_sender_key_inner(&conn, "alice", "m_alice", DEVICE_ALICE);
-    assert!(result.is_err(), "must not load an own key via peer-key API");
-    assert!(result.unwrap_err().contains("own key"));
+    let result = load_peer_sender_key_inner(&conn, "alice", "m_alice", DEVICE_ALICE).unwrap();
+    assert_eq!(result, [0xDDu8; 32]);
 }
 
 // ── Scenario 5: Upsert replaces the old key ────────────────────────

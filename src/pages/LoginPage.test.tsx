@@ -117,6 +117,32 @@ describe("LoginPage", () => {
             .toBeGreaterThan(vi.mocked(e2eeService.ensureSessionBootstrap).mock.invocationCallOrder[0]);
     });
 
+    it("focuses the identifier field after a short delay instead of relying on native autofocus", async () => {
+        renderLogin();
+
+        const identifierInput = screen.getByLabelText(/email or account/i);
+        expect(identifierInput).not.toHaveAttribute("autofocus");
+        await new Promise((resolve) => window.setTimeout(resolve, 220));
+        expect(identifierInput).not.toHaveFocus();
+    });
+
+    it("still focuses the identifier field automatically on non-macos platforms", async () => {
+        useDeviceStore.setState({
+            deviceId: "device-1",
+            deviceName: "Workstation",
+            platform: "windows",
+            registered: true,
+            createdAt: 1000,
+            updatedAt: null,
+        });
+
+        renderLogin();
+
+        const identifierInput = screen.getByLabelText(/email or account/i);
+        expect(identifierInput).not.toHaveAttribute("autofocus");
+        await waitFor(() => expect(identifierInput).toHaveFocus());
+    });
+
     it("submits an account identifier without requiring an email shape", async () => {
         vi.mocked(userService.login).mockImplementation(async () => {
             useUserStore.getState().setCurrentUser({

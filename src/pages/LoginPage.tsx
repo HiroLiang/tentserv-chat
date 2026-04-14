@@ -1,5 +1,5 @@
 import { Navbar } from "@/components/layout/Navbar.tsx";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { toast } from "sonner";
@@ -9,6 +9,11 @@ import { chatService } from "@/services/chatService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { logger } from "@/utils/logger.ts";
+import {
+    focusAuthField,
+    noteAuthFocusInteraction,
+    resetAuthFocusInteraction,
+} from "@/utils/authFocus.ts";
 import { VerificationCodeDialog } from "@/components/auth/VerificationCodeDialog.tsx";
 import type { PendingVerificationState } from "@/types/user.ts";
 
@@ -20,6 +25,21 @@ export const LoginPage = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
     const [pendingVerification, setPendingVerification] = useState<PendingVerificationState | null>(null);
+    const identifierInputRef = useRef<HTMLInputElement | null>(null);
+
+    useEffect(() => {
+        resetAuthFocusInteraction();
+    }, []);
+
+    useEffect(() => {
+        if (isLoading || pendingVerification) {
+            return;
+        }
+        const timeoutId = window.setTimeout(() => {
+            focusAuthField(identifierInputRef.current);
+        }, 180);
+        return () => window.clearTimeout(timeoutId);
+    }, [isLoading, pendingVerification]);
 
     const completeAuthenticatedLogin = async () => {
         const deviceId = useDeviceStore.getState().deviceId ?? undefined;
@@ -57,6 +77,7 @@ export const LoginPage = () => {
 
     const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
+        noteAuthFocusInteraction();
         setIsLoading(true);
         setError('');
 
@@ -113,6 +134,7 @@ export const LoginPage = () => {
                                     </label>
                                     <Input
                                         id="identifier"
+                                        ref={identifierInputRef}
                                         type="text"
                                         placeholder="email or account name"
                                         value={identifier}
@@ -120,7 +142,6 @@ export const LoginPage = () => {
                                         required
                                         disabled={isLoading}
                                         autoComplete="username"
-                                        autoFocus
                                     />
                                 </div>
 

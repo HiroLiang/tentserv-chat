@@ -41,9 +41,6 @@ pub fn list_sender_key_states(
         .into_iter()
         .map(|state| SenderKeyStatePayload {
             member_id: state.member_id,
-            device_id: state.device_id,
-            key_scope: state.key_scope,
-            is_own_key: state.is_own_key,
             sender_key_version: state.sender_key_version,
             updated_at: state.updated_at,
         })

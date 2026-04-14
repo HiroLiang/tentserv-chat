@@ -6,14 +6,13 @@
 //! - **Identity keys** (`ik_dh` X25519, `ik_sign` Ed25519) — generated once per account
 //! - **Signed pre-key (SPK)** — X25519, signed by `ik_sign`, rotated periodically
 //! - **One-time pre-keys (OPK)** — batch X25519 keys consumed once per X3DH exchange
-//! - **Sender keys** — per-(local account, member_id, device_id) keys for room encryption
+//! - **Sender keys** — per-(local account, member_id) keys for room encryption
 //!
 //! ## Sender key semantics
-//! Sender keys are keyed by `(local account_id, member_id, device_id)`. `room_id` is not used
-//! because `member_id` (`chat_members.id`) is a globally unique sequence PK while `device_id`
-//! identifies the actual sender device.
-//! - **Own key** (`key_scope='own'`): the caller's current-device key, stored encrypted.
-//! - **Peer key** (`key_scope='peer'`): another device's sender key, stored plaintext.
+//! Sender keys are keyed by `(local account_id, member_id)`. `room_id` is not used because
+//! `member_id` (`chat_members.id`) is a globally unique sequence PK.
+//! `device_id` is still accepted by several commands as transport metadata, but local lookup is
+//! member-scoped in Phase 1.
 
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -70,9 +69,6 @@ pub struct SenderKeyEncryptedMessage {
 #[derive(Serialize, Deserialize)]
 pub struct SenderKeyStatePayload {
     pub member_id: String,
-    pub device_id: String,
-    pub key_scope: String,
-    pub is_own_key: bool,
     pub sender_key_version: i64,
     pub updated_at: i64,
 }
@@ -274,9 +270,6 @@ pub fn get_sender_key_states(
         .into_iter()
         .map(|state| SenderKeyStatePayload {
             member_id: state.member_id,
-            device_id: state.device_id,
-            key_scope: state.key_scope,
-            is_own_key: state.is_own_key,
             sender_key_version: state.sender_key_version,
             updated_at: state.updated_at,
         })
@@ -294,9 +287,9 @@ pub fn delete_sender_keys(
     Ok(())
 }
 
-/// Store a peer's sender key received after X3DH decryption.
-/// `key_bytes` must be exactly 32 bytes.  The key is stored as plaintext
-/// (it is a public sender key — no encryption needed).
+/// Store a member-scoped sender key received after X3DH decryption.
+/// `device_id` is accepted for compatibility with existing callers but local storage
+/// is keyed by `(account_id, member_id)` and encrypted with the local master key.
 #[tauri::command]
 pub async fn store_member_sender_key(
     app: tauri::AppHandle,
@@ -306,7 +299,8 @@ pub async fn store_member_sender_key(
     key_bytes: Vec<u8>,
 ) -> Result<(), String> {
     let conn = open_db(&app)?;
-    store_member_sender_key_core(&conn, &account_id, &member_id, &device_id, key_bytes)
+    let key = get_or_create_master_key(&app, &account_id)?;
+    store_member_sender_key_core(&conn, &key, &account_id, &member_id, &device_id, key_bytes)
 }
 
 #[tauri::command]

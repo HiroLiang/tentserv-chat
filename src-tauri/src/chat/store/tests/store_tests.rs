@@ -160,7 +160,8 @@ fn resolve_preferred_client_message_id_prefers_local_encrypted_row_over_server_a
 }
 
 #[test]
-fn upsert_chat_message_updates_room_latest_message_metadata_with_sort_order_and_sender_key_version() {
+fn upsert_chat_message_updates_room_latest_message_metadata_with_sort_order_and_sender_key_version()
+{
     let conn = open_test_conn();
     let account_id = 1;
     let room_id = 8;
@@ -194,8 +195,7 @@ fn upsert_chat_message_updates_room_latest_message_metadata_with_sort_order_and_
         is_local_echo: false,
     };
 
-    upsert_chat_message(&conn, account_id, room_id, &message)
-        .expect("message upsert must succeed");
+    upsert_chat_message(&conn, account_id, room_id, &message).expect("message upsert must succeed");
 
     let row: (Option<i64>, Option<String>, Option<i64>, i64) = conn
         .query_row(

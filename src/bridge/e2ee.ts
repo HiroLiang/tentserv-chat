@@ -66,7 +66,7 @@ export const performX3dhReceive = (
 
 // sender keys are keyed by (local account_id, member_id) where member_id = chat_members.id.
 // room_id is not needed because chat_members.id is a globally unique sequence PK.
-// Device-scoped sender keys additionally require the concrete sender `device_id`.
+// Existing bridge signatures still accept device_id as transport metadata, but local lookup is member-scoped.
 
 export const generateSenderKey = (
     accountId: BridgeId,

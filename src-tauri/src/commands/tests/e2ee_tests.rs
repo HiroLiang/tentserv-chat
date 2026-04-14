@@ -4,7 +4,8 @@ use crate::commands::core::{
     encrypt_with_sender_key_core, generate_identity_keys_core, generate_sender_key_core,
     generate_signed_pre_key_core, get_auth_token_by_account_core, get_identity_keys_core,
     get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
-    perform_x3dh_receive_core, perform_x3dh_send_core, prepare_sender_key_distribution_core,
+    perform_x3dh_receive_core, perform_x3dh_send_core,
+    prepare_existing_sender_key_distribution_core, prepare_sender_key_distribution_core,
     replenish_otp_keys_core, save_auth_token_core, store_member_sender_key_core,
     validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
     ConsumeSenderKeyDistributionResult,
@@ -95,6 +96,24 @@ fn make_local_bundle(conn: &Connection, user_id: &str) -> PublicKeyBundle {
         one_time_pre_key: Some(otp.public_key),
         otpk_key_id: Some(otp.key_id),
     }
+}
+
+fn make_local_bundles(conn: &Connection, user_id: &str, otp_count: u32) -> Vec<PublicKeyBundle> {
+    let identity = setup_identity(conn, user_id);
+    let spk = generate_signed_pre_key_core(conn, &ZERO_KEY, user_id, 1).unwrap();
+    let otps = replenish_otp_keys_core(conn, &ZERO_KEY, user_id, otp_count).unwrap();
+
+    otps.into_iter()
+        .map(|otp| PublicKeyBundle {
+            identity_key_dh: identity.identity_key_dh_pub,
+            identity_key_sign: identity.identity_key_sign_pub,
+            signed_pre_key: spk.public_key,
+            spk_signature: spk.signature,
+            spk_key_id: spk.key_id,
+            one_time_pre_key: Some(otp.public_key),
+            otpk_key_id: Some(otp.key_id),
+        })
+        .collect()
 }
 
 // ── Identity key scenarios ───────────────────────────────────────────
@@ -711,7 +730,7 @@ fn store_member_sender_key_rejects_wrong_length() {
     let bad_key = vec![0u8; 31];
 
     // Then store_member_sender_key_core returns an error
-    let result = store_member_sender_key_core(&conn, ALICE, MEMBER_BOB, DEVICE_BOB, bad_key);
+    let result = store_member_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_BOB, DEVICE_BOB, bad_key);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("32 bytes"));
 }
@@ -767,6 +786,7 @@ fn consume_sender_key_distribution_returns_stale_when_local_version_is_newer() {
     let local_key = vec![9u8; 32];
     store_member_sender_key_core(
         &conn,
+        &ZERO_KEY,
         ACCOUNT_ALICE,
         MEMBER_BOB,
         DEVICE_BOB,
@@ -899,7 +919,7 @@ fn consume_self_sender_key_distribution_stores_a_peer_key_for_the_requesting_dev
     )
     .unwrap()
     .expect("historical sender key state should exist");
-    assert!(!state.is_own_key);
+    assert_eq!(state.sender_key_version, prepared.sender_key_version);
     let (_, stored_version) =
         crate::store::sender_key_store::load_peer_sender_key_with_version_inner(
             &requester_conn,
@@ -962,7 +982,221 @@ fn consume_self_sender_key_distribution_keeps_same_version_peer_rows_for_other_d
     )
     .unwrap()
     .expect("historical sender key state should exist");
-    assert!(!state.is_own_key);
+    assert_eq!(state.sender_key_version, prepared.sender_key_version);
+}
+
+#[test]
+fn prepare_existing_sender_key_distribution_roundtrips_peer_history_between_distinct_devices() {
+    // Given a trusted provider device already has a copied peer sender key locally
+    let (_provider_dir, provider_conn) = test_db();
+    let (_requester_dir, requester_conn) = test_db();
+    let requester_bundle = make_local_bundle(&requester_conn, ACCOUNT_ALICE);
+    setup_identity(&provider_conn, ACCOUNT_ALICE);
+    let copied_peer_key = [0x44; 32];
+    let copied_peer_key_version = 9_876_543_i64;
+    crate::store::sender_key_store::store_peer_sender_key_with_version_inner(
+        &provider_conn,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &copied_peer_key,
+        copied_peer_key_version,
+    )
+    .unwrap();
+
+    // When the provider rewraps that copied peer key for a different requester device
+    let prepared = prepare_existing_sender_key_distribution_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &requester_bundle,
+    )
+    .unwrap();
+    let result = consume_sender_key_distribution_core(
+        &requester_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &prepared.distribution_message,
+        prepared.sender_key_version,
+    )
+    .unwrap();
+
+    // Then the requester stores the same peer-history key material under the provider device
+    assert!(matches!(
+        result,
+        ConsumeSenderKeyDistributionResult::Consumed
+    ));
+    let (stored_key, stored_version) =
+        crate::store::sender_key_store::load_peer_sender_key_with_version_inner(
+            &requester_conn,
+            ACCOUNT_ALICE,
+            MEMBER_BOB,
+            DEVICE_BOB,
+        )
+        .unwrap();
+    assert_eq!(stored_key, copied_peer_key);
+    assert_eq!(stored_version, copied_peer_key_version);
+}
+
+#[test]
+fn reusing_one_requester_bundle_for_two_self_sync_copies_breaks_the_second_copy() {
+    // Given the provider has two sender-key materials but only one requester OTP bundle
+    let (_provider_dir, provider_conn) = test_db();
+    let (_requester_dir, requester_conn) = test_db();
+    let mut requester_bundles = make_local_bundles(&requester_conn, ACCOUNT_ALICE, 1);
+    let requester_bundle = requester_bundles.pop().unwrap();
+    setup_identity(&provider_conn, ACCOUNT_ALICE);
+    generate_sender_key_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+    )
+    .unwrap();
+    crate::store::sender_key_store::store_peer_sender_key_with_version_inner(
+        &provider_conn,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &[0x55; 32],
+        1_234_567,
+    )
+    .unwrap();
+
+    // When the provider incorrectly reuses that same bundle for two copied distributions
+    let first = prepare_existing_sender_key_distribution_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        &requester_bundle,
+    )
+    .unwrap();
+    let second = prepare_existing_sender_key_distribution_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &requester_bundle,
+    )
+    .unwrap();
+
+    let first_result = consume_sender_key_distribution_core(
+        &requester_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        &first.distribution_message,
+        first.sender_key_version,
+    )
+    .unwrap();
+    let second_result = consume_sender_key_distribution_core(
+        &requester_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &second.distribution_message,
+        second.sender_key_version,
+    )
+    .unwrap();
+
+    // Then only the first consume succeeds because the OTP is already spent
+    assert!(matches!(
+        first_result,
+        ConsumeSenderKeyDistributionResult::Consumed
+    ));
+    assert!(matches!(
+        second_result,
+        ConsumeSenderKeyDistributionResult::Failed
+    ));
+}
+
+#[test]
+fn fresh_requester_bundles_allow_multiple_self_sync_copies_to_roundtrip() {
+    // Given the provider has two sender-key materials and the requester has two OTP bundles
+    let (_provider_dir, provider_conn) = test_db();
+    let (_requester_dir, requester_conn) = test_db();
+    let mut requester_bundles = make_local_bundles(&requester_conn, ACCOUNT_ALICE, 2);
+    let first_bundle = requester_bundles.remove(0);
+    let second_bundle = requester_bundles.remove(0);
+    setup_identity(&provider_conn, ACCOUNT_ALICE);
+    generate_sender_key_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+    )
+    .unwrap();
+    crate::store::sender_key_store::store_peer_sender_key_with_version_inner(
+        &provider_conn,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &[0x66; 32],
+        2_345_678,
+    )
+    .unwrap();
+
+    // When the provider fetches a fresh requester bundle for each copied distribution
+    let first = prepare_existing_sender_key_distribution_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        &first_bundle,
+    )
+    .unwrap();
+    let second = prepare_existing_sender_key_distribution_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &second_bundle,
+    )
+    .unwrap();
+
+    let first_result = consume_sender_key_distribution_core(
+        &requester_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        &first.distribution_message,
+        first.sender_key_version,
+    )
+    .unwrap();
+    let second_result = consume_sender_key_distribution_core(
+        &requester_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        &second.distribution_message,
+        second.sender_key_version,
+    )
+    .unwrap();
+
+    // Then both copied distributions can be consumed on the requester device
+    assert!(matches!(
+        first_result,
+        ConsumeSenderKeyDistributionResult::Consumed
+    ));
+    assert!(matches!(
+        second_result,
+        ConsumeSenderKeyDistributionResult::Consumed
+    ));
 }
 
 #[test]
@@ -991,10 +1225,11 @@ fn delete_sender_keys_only_removes_requested_account_member_rows() {
     replenish_otp_keys_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, 1).unwrap();
     save_auth_token_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, "token-alice").unwrap();
     generate_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
-    store_member_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB, DEVICE_BOB, vec![0x22; 32])
+    store_member_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, MEMBER_BOB, DEVICE_BOB, vec![0x22; 32])
         .unwrap();
     store_member_sender_key_core(
         &conn,
+        &ZERO_KEY,
         ACCOUNT_ALICE,
         "member-keep",
         DEVICE_KEEP,

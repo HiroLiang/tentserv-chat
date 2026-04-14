@@ -47,14 +47,16 @@ export const e2eeApi = {
 
     uploadSenderKey: (
         room_id: number,
-        receiver_member_id: number,
+        sender_member_id: number,
+        receiver_user_id: number,
         receiver_device_id: string | undefined,
         sender_key_version: number,
         distribution_message: string,
     ): Promise<void> =>
         post('/api/e2ee/sender-key', {
             room_id,
-            receiver_member_id,
+            sender_member_id,
+            receiver_user_id,
             ...(receiver_device_id ? { receiver_device_id } : {}),
             sender_key_version,
             distribution_message,
@@ -74,14 +76,16 @@ export const e2eeApi = {
 
     createSenderKeyRequest: (
         room_id: number,
-        provider_member_id: number,
+        provider_user_id: number,
         provider_device_id: string,
+        sender_member_id: number,
         requester_device_id?: string,
     ): Promise<void> =>
         post('/api/e2ee/sender-key-request', {
             room_id,
-            provider_member_id,
+            provider_user_id,
             provider_device_id,
+            sender_member_id,
             ...(requester_device_id ? { requester_device_id } : {}),
         } as CreateSenderKeyRequestRequest),
 

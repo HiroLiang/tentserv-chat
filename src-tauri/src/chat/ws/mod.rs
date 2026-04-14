@@ -57,7 +57,8 @@ pub struct PresenceUserStatusChangedPayload {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SenderKeyNeededPayload {
     pub room_id: i64,
-    pub provider_member_id: i64,
+    pub sender_member_id: i64,
+    pub provider_user_id: i64,
     pub provider_device_id: String,
     pub requester_member_id: i64,
     pub requester_user_id: i64,

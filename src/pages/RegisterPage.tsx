@@ -1,5 +1,5 @@
 import { Navbar } from "@/components/layout/Navbar.tsx";
-import { type SubmitEvent, useState } from "react";
+import { type SubmitEvent, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { toast } from "sonner";
@@ -8,6 +8,11 @@ import { userService } from "@/services/userService.ts";
 import { VerificationCodeDialog } from "@/components/auth/VerificationCodeDialog.tsx";
 import type { PendingVerificationState } from "@/types/user.ts";
 import { PasswordField } from "@/components/auth/PasswordField.tsx";
+import {
+    focusAuthField,
+    noteAuthFocusInteraction,
+    resetAuthFocusInteraction,
+} from "@/utils/authFocus.ts";
 
 export const RegisterPage = () => {
     const navigate = useNavigate();
@@ -21,9 +26,25 @@ export const RegisterPage = () => {
     const [error, setError] = useState('');
     const [confirmPasswordError, setConfirmPasswordError] = useState('');
     const [pendingVerification, setPendingVerification] = useState<PendingVerificationState | null>(null);
+    const emailInputRef = useRef<HTMLInputElement | null>(null);
+
+    useEffect(() => {
+        resetAuthFocusInteraction();
+    }, []);
+
+    useEffect(() => {
+        if (isLoading || pendingVerification) {
+            return;
+        }
+        const timeoutId = window.setTimeout(() => {
+            focusAuthField(emailInputRef.current);
+        }, 180);
+        return () => window.clearTimeout(timeoutId);
+    }, [isLoading, pendingVerification]);
 
     const handleSubmit = async (e: SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
+        noteAuthFocusInteraction();
         setError('');
         setConfirmPasswordError('');
 
@@ -87,6 +108,7 @@ export const RegisterPage = () => {
                                 </label>
                                 <Input
                                     id="email"
+                                    ref={emailInputRef}
                                     type="email"
                                     placeholder="example@email.com"
                                     value={email}
@@ -94,7 +116,6 @@ export const RegisterPage = () => {
                                     required
                                     disabled={isLoading}
                                     autoComplete="email"
-                                    autoFocus
                                 />
                             </div>
 

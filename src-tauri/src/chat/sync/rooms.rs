@@ -6,12 +6,17 @@ use crate::chat::api::{
 };
 use crate::chat::store;
 use crate::chat::{
-    ChatInvitationSnapshot, ChatMemberSnapshot, ChatMessageSnapshot, ChatRoomSnapshot, ChatRoomSummarySnapshot,
-    ChatRoomsSections, ChatRuntimeSession,
+    ChatInvitationSnapshot, ChatMemberSnapshot, ChatMessageSnapshot, ChatRoomSnapshot,
+    ChatRoomSummarySnapshot, ChatRoomsSections, ChatRuntimeSession,
 };
 
-use super::messages::{decrypt_message_content, decrypt_messages, WAITING_FOR_SENDER_KEY_SENTINEL};
-use super::sender_keys::reconcile_room_sender_keys;
+use super::messages::{
+    decrypt_message_content_outcome, decrypt_messages, DecryptMessageContentOutcome,
+    WAITING_FOR_SENDER_KEY_SENTINEL,
+};
+use super::sender_keys::{reconcile_room_sender_keys, warm_up_sender_keys_for_room_summaries};
+
+const GENERIC_ENCRYPTED_MESSAGE_FALLBACK: &str = "New message";
 
 #[derive(Debug, Clone)]
 pub struct SyncRoomResult {
@@ -134,6 +139,16 @@ async fn build_rooms_sections(
     api: &ChatApiClient,
     rooms: GetUserRoomsResponse,
 ) -> Result<ChatRoomsSections, String> {
+    let room_ids = rooms
+        .direct
+        .iter()
+        .chain(rooms.group.iter())
+        .chain(rooms.channel.iter())
+        .chain(rooms.bot.iter())
+        .map(|room| room.room_id)
+        .collect::<Vec<_>>();
+    warm_up_sender_keys_for_room_summaries(app, session, api, &room_ids).await?;
+
     let direct = decrypt_room_summaries(app, session, api, rooms.direct).await?;
     let group = decrypt_room_summaries(app, session, api, rooms.group).await?;
     let channel = decrypt_room_summaries(app, session, api, rooms.channel).await?;
@@ -222,13 +237,13 @@ async fn resolve_room_summary_latest_message(
     }
 
     let Some(sender_member_id) = room.latest_message_sender_id else {
-        return Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()));
+        return Ok(Some(GENERIC_ENCRYPTED_MESSAGE_FALLBACK.to_string()));
     };
     let Some(sender_device_id) = room.latest_message_sender_device_id.as_deref() else {
-        return Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()));
+        return Ok(Some(GENERIC_ENCRYPTED_MESSAGE_FALLBACK.to_string()));
     };
     let Some(sender_key_version) = room.latest_message_sender_key_version else {
-        return Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()));
+        return Ok(Some(GENERIC_ENCRYPTED_MESSAGE_FALLBACK.to_string()));
     };
 
     if let Some(message_id) = room.latest_message_id {
@@ -253,7 +268,7 @@ async fn resolve_room_summary_latest_message(
         );
     }
 
-    match decrypt_message_content(
+    match decrypt_message_content_outcome(
         app,
         session,
         api,
@@ -266,9 +281,12 @@ async fn resolve_room_summary_latest_message(
     )
     .await
     {
-        Ok(content) => {
+        Ok(DecryptMessageContentOutcome::Plaintext(content)) => {
             cache_decrypted_room_summary_message(app, session, room, &content)?;
             Ok(Some(content))
+        }
+        Ok(DecryptMessageContentOutcome::WaitingForSenderKey) => {
+            Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()))
         }
         Err(error) => {
             log::warn!(
@@ -277,7 +295,7 @@ async fn resolve_room_summary_latest_message(
                 room.latest_message_id,
                 error
             );
-            Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()))
+            Ok(Some(GENERIC_ENCRYPTED_MESSAGE_FALLBACK.to_string()))
         }
     }
 }

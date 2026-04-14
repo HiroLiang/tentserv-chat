@@ -31,7 +31,7 @@ import type {
     GetPendingSenderKeyDistributionsResponse,
     GetSelfSenderKeySyncResponse,
     GetSenderKeyDistributionStatusResponse,
-    SenderKeyDeviceRef,
+    SenderKeyRouteRef,
 } from '@/api/types.ts';
 import type { RoomMember } from '@/types/chat.ts';
 
@@ -52,8 +52,8 @@ type KeyStatus = Awaited<ReturnType<typeof e2eeApi.checkKeyStatus>>;
 type KeyPolicy = Awaited<ReturnType<typeof e2eeApi.getKeyPolicy>>;
 type SenderKeyStateMap = Map<string, SenderKeyState>;
 
-const senderKeyStateKey = (memberId: number, deviceId: string): string => `${memberId}:${deviceId}`;
-const senderKeyDeviceRefKey = (ref: SenderKeyDeviceRef): string => senderKeyStateKey(ref.member_id, ref.device_id);
+const senderKeyStateKey = (memberId: number): string => `${memberId}`;
+const senderKeyRouteRefKey = (ref: SenderKeyRouteRef): string => senderKeyStateKey(ref.member_id);
 
 interface RoomSenderKeyReconciliationInput {
     roomId: number;
@@ -346,16 +346,16 @@ class E2eeService {
     private async getSenderKeyStateMap(accountId: number, memberIds: number[]): Promise<SenderKeyStateMap> {
         const states = await getSenderKeyStates(accountId, memberIds);
         return new Map(
-            states.map((state) => [senderKeyStateKey(Number(state.member_id), state.device_id), state]),
+            states.map((state) => [senderKeyStateKey(Number(state.member_id)), state]),
         );
     }
 
     private getSenderKeyState(
         localStates: SenderKeyStateMap,
         memberId: number,
-        deviceId: string,
+        _deviceId?: string,
     ): SenderKeyState | undefined {
-        return localStates.get(senderKeyStateKey(memberId, deviceId));
+        return localStates.get(senderKeyStateKey(memberId));
     }
 
     private listSenderKeyStatesForMember(
@@ -368,46 +368,48 @@ class E2eeService {
     private hasOwnCurrentDeviceSenderKey(
         localStates: SenderKeyStateMap,
         memberId: number,
-        deviceId: string,
+        _deviceId: string,
     ): boolean {
-        return this.getSenderKeyState(localStates, memberId, deviceId)?.is_own_key === true;
+        return this.getSenderKeyState(localStates, memberId) !== undefined;
     }
 
     private hasAnyPeerSenderKeyForMember(
         localStates: SenderKeyStateMap,
         memberId: number,
     ): boolean {
-        return this.listSenderKeyStatesForMember(localStates, memberId).some((state) => !state.is_own_key);
+        return this.listSenderKeyStatesForMember(localStates, memberId).length > 0;
     }
 
     private hasPeerSenderKeyForSource(
         localStates: SenderKeyStateMap,
         memberId: number,
-        deviceId: string,
+        _deviceId: string,
     ): boolean {
-        return this.getSenderKeyState(localStates, memberId, deviceId)?.is_own_key === false;
+        return this.getSenderKeyState(localStates, memberId) !== undefined;
     }
 
     private deviceRefsForMember(
-        refs: SenderKeyDeviceRef[] | undefined,
+        refs: SenderKeyRouteRef[] | undefined,
         memberId: number,
-    ): SenderKeyDeviceRef[] {
+    ): SenderKeyRouteRef[] {
         return (refs ?? []).filter((ref) => ref.member_id === memberId);
     }
 
     private hasDeviceRef(
-        refs: SenderKeyDeviceRef[] | undefined,
+        refs: SenderKeyRouteRef[] | undefined,
         memberId: number,
         deviceId: string,
     ): boolean {
         return (refs ?? []).some((ref) => ref.member_id === memberId && ref.device_id === deviceId);
     }
 
-    private collectUniqueSourceRefs(status: GetSenderKeyDistributionStatusResponse): SenderKeyDeviceRef[] {
+    private collectUniqueSourceRefs(status: GetSenderKeyDistributionStatusResponse): SenderKeyRouteRef[] {
         const refs = [...(status.requestable_sources ?? []), ...(status.pending_from_sources ?? [])];
-        const unique = new Map<string, SenderKeyDeviceRef>();
+        const unique = new Map<string, SenderKeyRouteRef>();
         for (const ref of refs) {
-            unique.set(senderKeyDeviceRefKey(ref), ref);
+            if (!unique.has(senderKeyRouteRefKey(ref))) {
+                unique.set(senderKeyRouteRefKey(ref), ref);
+            }
         }
         return [...unique.values()];
     }
@@ -428,7 +430,7 @@ class E2eeService {
         const requiredSources = [
             ...(options.status?.available_from_sources ?? []),
             ...this.collectUniqueSourceRefs(options.status ?? {
-                own_device_sender_key_exists: true,
+                own_member_sender_key_exists: true,
                 requestable_sources: [],
                 available_from_sources: [],
                 available_to_targets: [],
@@ -504,21 +506,28 @@ class E2eeService {
 
     private async createSenderKeyRequestOnce(
         roomId: number,
-        providerMemberId: number,
+        senderMemberId: number,
+        providerUserId: number,
         providerDeviceId: string,
     ): Promise<boolean> {
         const store = useE2eeStore.getState();
-        if (store.hasSenderKeyRequest(roomId, providerMemberId, providerDeviceId)) {
+        if (store.hasSenderKeyRequest(roomId, senderMemberId)) {
             return false;
         }
 
-        await e2eeApi.createSenderKeyRequest(roomId, providerMemberId, providerDeviceId, this.getCurrentDeviceId());
-        useE2eeStore.getState().addSenderKeyRequest(roomId, providerMemberId, providerDeviceId);
+        await e2eeApi.createSenderKeyRequest(
+            roomId,
+            providerUserId,
+            providerDeviceId,
+            senderMemberId,
+            this.getCurrentDeviceId(),
+        );
+        useE2eeStore.getState().addSenderKeyRequest(roomId, senderMemberId);
         return true;
     }
 
-    private clearSenderKeyRequest(roomId: number, providerMemberId: number, providerDeviceId: string): void {
-        useE2eeStore.getState().removeSenderKeyRequest(roomId, providerMemberId, providerDeviceId);
+    private clearSenderKeyRequest(roomId: number, senderMemberId: number): void {
+        useE2eeStore.getState().removeSenderKeyRequest(roomId, senderMemberId);
     }
 
     private async uploadOwnSenderKey(
@@ -539,7 +548,6 @@ class E2eeService {
             roomId,
             targetUserId,
             ownMemberId,
-            receiverMemberId,
             receiverDeviceId,
         );
         this._senderKeyUploadPromises.set(uploadKey, uploadPromise);
@@ -556,7 +564,6 @@ class E2eeService {
         roomId: number,
         targetUserId: number,
         ownMemberId: number,
-        receiverMemberId: number,
         receiverDeviceId?: string,
     ): Promise<void> {
         const accountId = this.getCurrentAccountId();
@@ -577,7 +584,8 @@ class E2eeService {
 
         await e2eeApi.uploadSenderKey(
             roomId,
-            receiverMemberId,
+            ownMemberId,
+            targetUserId,
             receiverDeviceId,
             prepared.sender_key_version,
             toBase64(prepared.distribution_message),
@@ -621,30 +629,31 @@ class E2eeService {
     private async requestMissingPeerSenderKeys(
         roomId: number,
         ownMemberId: number,
-        roomMembers: RoomMember[],
         localStates: SenderKeyStateMap,
         status: GetSenderKeyDistributionStatusResponse,
     ): Promise<void> {
-        const availableFromSources = new Set((status.available_from_sources ?? []).map(senderKeyDeviceRefKey));
+        const availableFromSources = new Set((status.available_from_sources ?? []).map(senderKeyRouteRefKey));
 
         for (const sourceRef of this.collectUniqueSourceRefs(status)) {
             if (sourceRef.member_id === ownMemberId) continue;
 
             const hasLocalPeerKey = this.hasPeerSenderKeyForSource(localStates, sourceRef.member_id, sourceRef.device_id);
             if (hasLocalPeerKey) {
-                this.clearSenderKeyRequest(roomId, sourceRef.member_id, sourceRef.device_id);
+                this.clearSenderKeyRequest(roomId, sourceRef.member_id);
                 continue;
             }
 
-            if (availableFromSources.has(senderKeyDeviceRefKey(sourceRef))) {
+            if (availableFromSources.has(senderKeyRouteRefKey(sourceRef))) {
                 continue;
             }
-
-            const member = roomMembers.find((candidate) => candidate.member_id === sourceRef.member_id);
-            if (!member) continue;
 
             try {
-                await this.createSenderKeyRequestOnce(roomId, sourceRef.member_id, sourceRef.device_id);
+                await this.createSenderKeyRequestOnce(
+                    roomId,
+                    sourceRef.member_id,
+                    sourceRef.user_id,
+                    sourceRef.device_id,
+                );
             } catch (err) {
                 logger.warn(`Failed to create sender key request for room ${roomId} and member ${sourceRef.member_id} device ${sourceRef.device_id}`, err);
             }
@@ -680,7 +689,6 @@ class E2eeService {
         await this.requestMissingPeerSenderKeys(
             input.roomId,
             currentMemberId,
-            input.roomMembers,
             localStates,
             status,
         );
@@ -820,7 +828,9 @@ class E2eeService {
         const lastRequested = this._decryptRequestDebounce.get(key);
         if (lastRequested !== undefined && now - lastRequested < DECRYPT_REQUEST_DEBOUNCE_MS) return;
         this._decryptRequestDebounce.set(key, now);
-        this.createSenderKeyRequestOnce(roomId, senderMemberId, senderDeviceId).catch(() => {});
+        const providerUserId = this.resolveMemberUserId(roomId, senderMemberId);
+        if (providerUserId === undefined) return;
+        this.createSenderKeyRequestOnce(roomId, senderMemberId, providerUserId, senderDeviceId).catch(() => {});
     }
 
     // Called when the inviter receives e2ee.sender_key_needed.
@@ -845,7 +855,7 @@ class E2eeService {
                 this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<string, SenderKeyState>()),
             ]);
             const shouldUpload = !this.hasOwnCurrentDeviceSenderKey(localStates, myMemberId, currentDeviceId)
-                || !status?.own_device_sender_key_exists
+                || !status?.own_member_sender_key_exists
                 || (requesterDeviceId !== undefined
                     ? this.hasDeviceRef(status?.pending_receivers, receiverMemberId, requesterDeviceId)
                     : this.deviceRefsForMember(status?.pending_receivers, receiverMemberId).length > 0);
@@ -880,7 +890,7 @@ class E2eeService {
             ? this.hasPeerSenderKeyForSource(localStates, targetMemberId, targetDeviceId)
             : this.hasAnyPeerSenderKeyForMember(localStates, targetMemberId);
         if (alreadyReady) {
-            if (targetDeviceId) this.clearSenderKeyRequest(roomId, targetMemberId, targetDeviceId);
+            if (targetDeviceId) this.clearSenderKeyRequest(roomId, targetMemberId);
             return;
         }
 
@@ -891,7 +901,7 @@ class E2eeService {
             ? this.hasPeerSenderKeyForSource(localStates, targetMemberId, targetDeviceId)
             : this.hasAnyPeerSenderKeyForMember(localStates, targetMemberId);
         if (readyAfterConsume) {
-            if (targetDeviceId) this.clearSenderKeyRequest(roomId, targetMemberId, targetDeviceId);
+            if (targetDeviceId) this.clearSenderKeyRequest(roomId, targetMemberId);
             return;
         }
 
@@ -905,7 +915,10 @@ class E2eeService {
 
         if (!status) {
             if (targetDeviceId) {
-                await this.createSenderKeyRequestOnce(roomId, targetMemberId, targetDeviceId).catch(() => {});
+                const providerUserId = this.resolveMemberUserId(roomId, targetMemberId);
+                if (providerUserId !== undefined) {
+                    await this.createSenderKeyRequestOnce(roomId, targetMemberId, providerUserId, targetDeviceId).catch(() => {});
+                }
             }
             return;
         }
@@ -915,7 +928,7 @@ class E2eeService {
             ? requestableRefs.filter((ref) => ref.member_id === targetMemberId && ref.device_id === targetDeviceId)
             : this.deviceRefsForMember(requestableRefs, targetMemberId);
         for (const target of targets) {
-            await this.createSenderKeyRequestOnce(roomId, target.member_id, target.device_id).catch(() => {});
+            await this.createSenderKeyRequestOnce(roomId, target.member_id, target.user_id, target.device_id).catch(() => {});
         }
     }
 
@@ -947,13 +960,21 @@ class E2eeService {
                 const status = result.status === 'failed' ? 'failed' : 'consumed';
                 await e2eeApi.consumeSenderKeyDistribution(item.distribution_id, status);
                 if (status === 'consumed') {
-                    this.clearSenderKeyRequest(roomId, item.sender_member_id, item.sender_device_id);
+                    this.clearSenderKeyRequest(roomId, item.sender_member_id);
                 }
             } catch (err) {
                 logger.warn(`Failed to resolve sender key distribution ${item.distribution_id}`, err);
                 await e2eeApi.consumeSenderKeyDistribution(item.distribution_id, 'failed').catch(() => {});
             }
         }
+    }
+
+    private resolveMemberUserId(roomId: number, memberId: number): number | undefined {
+        const currentRoomDetail = useChatStore.getState().currentRoomDetail;
+        if (currentRoomDetail?.room_id === roomId) {
+            return currentRoomDetail.members.find((member) => member.member_id === memberId)?.user_id;
+        }
+        return undefined;
     }
 
     async resolveDirectKey(

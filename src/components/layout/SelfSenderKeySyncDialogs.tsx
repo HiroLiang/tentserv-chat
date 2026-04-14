@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { formatSelfSenderKeySyncStatusLabel } from "@/utils/chatCopy.ts";
 
-const REQUESTER_BLOCKING_STATUSES = new Set(['pending_provider', 'syncing', 'uploaded', 'failed']);
+const REQUESTER_BLOCKING_STATUSES = new Set(['pending_provider', 'syncing', 'failed']);
 
 function formatRequestedAt(requestedAtMs?: number): string | null {
     if (!requestedAtMs) {
@@ -45,18 +45,14 @@ function RequesterBlockingDialog() {
 
     const title = sync.status === 'failed'
         ? 'Key sync needs attention'
-        : sync.status === 'uploaded'
-            ? 'Downloading your secure history'
-            : sync.status === 'syncing'
-                ? 'Syncing your secure keys'
-                : 'Use a trusted device to sync your secure keys';
+        : sync.status === 'syncing'
+            ? 'Syncing your secure keys'
+            : 'Use a trusted device to sync your secure keys';
     const description = sync.status === 'failed'
         ? sync.last_error || 'Please open one of your already-trusted devices and retry the key sync flow.'
-        : sync.status === 'uploaded'
-            ? 'A trusted device finished uploading your secure keys. This device is now downloading and decrypting your earlier chat history.'
-            : sync.status === 'syncing'
-                ? 'A trusted device is securely sending the sender keys needed to unlock your older chats. Chat stays blocked until that finishes.'
-                : 'Go back to one of your already signed-in devices and approve this key sync request. Until it finishes, this device cannot open older chats or decrypt message history.';
+        : sync.status === 'syncing'
+            ? 'A trusted device is securely sending the sender keys needed to unlock your older chats. Chat stays blocked until that finishes.'
+            : 'Go back to one of your already signed-in devices and approve this key sync request. Until it finishes, this device cannot open older chats or decrypt message history.';
 
     const handleLogout = async () => {
         setIsLoggingOut(true);
@@ -73,6 +69,7 @@ function RequesterBlockingDialog() {
     return (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-sm">
             <div
+                data-testid="self-sync-requester-blocker"
                 className="w-full max-w-xl rounded-2xl border border-border bg-card p-6 shadow-2xl sm:p-8"
                 role="dialog"
                 aria-modal="true"
@@ -129,6 +126,52 @@ function RequesterBlockingDialog() {
                         >
                             {isLoggingOut ? 'Logging out...' : 'Log out'}
                         </Button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function RequesterUploadedNotice() {
+    const sync = useChatStore((state) => state.syncState?.self_sender_key_sync ?? null);
+
+    if (!sync?.exists || !sync.requester_current_device || sync.status !== 'uploaded') {
+        return null;
+    }
+
+    return (
+        <div className="pointer-events-none fixed inset-x-4 top-20 z-[60] flex justify-center sm:inset-x-auto sm:right-4 sm:left-auto sm:justify-end">
+            <div
+                data-testid="self-sync-uploaded-notice"
+                className="pointer-events-auto w-full max-w-sm rounded-2xl border border-border/80 bg-card/95 p-4 shadow-xl backdrop-blur"
+                role="status"
+                aria-live="polite"
+            >
+                <div className="space-y-3">
+                    <div className="space-y-1.5">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+                            Secure Device Sync
+                        </p>
+                        <h2 className="text-lg font-semibold text-foreground">Downloading your secure history</h2>
+                        <p className="text-sm leading-6 text-muted-foreground">
+                            A trusted device already uploaded this account&apos;s secure history. This device is
+                            finishing local download and decryption in the background. If a specific chat still says
+                            waiting for peer key, that room is still repairing peer sender keys separately.
+                        </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                            {sync.requester_device?.device_name ?? 'This device'}
+                        </span>
+                        <span>{formatSelfSenderKeySyncStatusLabel(sync.status)}</span>
+                        {sync.provider_device?.device_name && (
+                            <span>Trusted device: {sync.provider_device.device_name}</span>
+                        )}
+                        {formatRequestedAt(sync.requested_at_ms) && (
+                            <span>Requested {formatRequestedAt(sync.requested_at_ms)}</span>
+                        )}
                     </div>
                 </div>
             </div>
@@ -259,6 +302,7 @@ export function SelfSenderKeySyncDialogs() {
     return (
         <>
             <RequesterBlockingDialog />
+            <RequesterUploadedNotice />
             <ProviderDecisionDialog />
         </>
     );

@@ -24,7 +24,7 @@ use super::rooms::{
     resolve_current_member_id, resolve_current_member_id_snapshot, sync_room, sync_rooms,
 };
 
-type LocalSenderKeyStateMap = HashMap<(i64, String), SenderKeyStatePayload>;
+type LocalSenderKeyStateMap = HashMap<i64, SenderKeyStatePayload>;
 
 struct SenderKeyUploadGuard {
     key: String,
@@ -47,9 +47,9 @@ pub async fn handle_sender_key_needed(
 ) -> Result<(), String> {
     if should_ignore_sender_key_room(payload.room_id) {
         log::warn!(
-            "chat runtime sync: ignore sender_key_needed for invalid room_id={} provider_member_id={} requester_member_id={}",
+            "chat runtime sync: ignore sender_key_needed for invalid room_id={} sender_member_id={} requester_member_id={}",
             payload.room_id,
-            payload.provider_member_id,
+            payload.sender_member_id,
             payload.requester_member_id
         );
         return Ok(());
@@ -61,7 +61,7 @@ pub async fn handle_sender_key_needed(
         .as_ref()
         .and_then(|room| resolve_current_member_id_snapshot(participant_id, &room.members));
     if let Some(current_member_id) = local_current_member_id {
-        if current_member_id != payload.provider_member_id {
+        if current_member_id != payload.sender_member_id {
             return Ok(());
         }
     }
@@ -75,9 +75,9 @@ pub async fn handle_sender_key_needed(
         payload.requester_device_id.as_deref(),
     ) {
         log::info!(
-            "chat runtime sync: skip sender key upload because requester already has an available distribution room_id={} provider_member_id={} requester_member_id={}",
+            "chat runtime sync: skip sender key upload because requester already has an available distribution room_id={} sender_member_id={} requester_member_id={}",
             payload.room_id,
-            payload.provider_member_id,
+            payload.sender_member_id,
             payload.requester_member_id
         );
         return Ok(());
@@ -88,9 +88,9 @@ pub async fn handle_sender_key_needed(
         payload.requester_device_id.as_deref(),
     ) {
         log::info!(
-            "chat runtime sync: skip sender key upload because requester is no longer pending room_id={} provider_member_id={} requester_member_id={}",
+            "chat runtime sync: skip sender key upload because requester is no longer pending room_id={} sender_member_id={} requester_member_id={}",
             payload.room_id,
-            payload.provider_member_id,
+            payload.sender_member_id,
             payload.requester_member_id
         );
         return Ok(());
@@ -98,15 +98,15 @@ pub async fn handle_sender_key_needed(
 
     let upload_key = sender_key_upload_key(
         payload.room_id,
-        payload.provider_member_id,
+        payload.sender_member_id,
         payload.requester_member_id,
         payload.requester_device_id.as_deref(),
     );
     let Some(_guard) = try_begin_sender_key_upload(upload_key)? else {
         log::info!(
-            "chat runtime sync: skip duplicate in-flight sender key upload room_id={} provider_member_id={} requester_member_id={} requester_device_id={:?}",
+            "chat runtime sync: skip duplicate in-flight sender key upload room_id={} sender_member_id={} requester_member_id={} requester_device_id={:?}",
             payload.room_id,
-            payload.provider_member_id,
+            payload.sender_member_id,
             payload.requester_member_id,
             payload.requester_device_id
         );
@@ -127,7 +127,7 @@ pub async fn handle_sender_key_needed(
             let detail = api.get_room_detail(payload.room_id).await?;
             let current_member_id = resolve_current_member_id(participant_id, &detail.members);
             if let Some(current_member_id) = current_member_id {
-                if current_member_id != payload.provider_member_id {
+                if current_member_id != payload.sender_member_id {
                     return Ok(());
                 }
             }
@@ -157,7 +157,7 @@ pub async fn handle_sender_key_needed(
             session,
             api,
             payload.room_id,
-            payload.provider_member_id,
+            payload.sender_member_id,
             target_member.member_id,
             target_user_id,
             payload.requester_device_id.as_deref(),
@@ -276,6 +276,27 @@ enum SelfSenderKeySyncFollowUp {
     RequesterConsume,
 }
 
+#[derive(Debug, Clone)]
+struct JoinedRoomContext {
+    member_ids: Vec<i64>,
+    current_member_ids: HashSet<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelfSenderKeySyncCopyScope {
+    OwnHistory,
+    PeerHistory,
+}
+
+impl SelfSenderKeySyncCopyScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::OwnHistory => "own_history",
+            Self::PeerHistory => "peer_history",
+        }
+    }
+}
+
 fn self_sender_key_sync_follow_up(
     snapshot: &ChatSelfSenderKeySyncState,
 ) -> Option<SelfSenderKeySyncFollowUp> {
@@ -300,34 +321,95 @@ fn should_block_normal_sender_key_ops(snapshot: &ChatSelfSenderKeySyncState) -> 
         && is_active_self_sender_key_sync_status(snapshot.status.as_str())
 }
 
-pub(super) async fn normal_sender_key_ops_allowed(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SenderKeyReconcileMode {
+    Normal,
+    RequesterSelfSyncUploaded,
+    Blocked,
+}
+
+impl SenderKeyReconcileMode {
+    fn allows_normal_ops(self) -> bool {
+        matches!(self, Self::Normal)
+    }
+
+    fn allows_local_resolution(self) -> bool {
+        matches!(self, Self::Normal | Self::RequesterSelfSyncUploaded)
+    }
+}
+
+fn sender_key_reconcile_mode_from_snapshot(
+    snapshot: &ChatSelfSenderKeySyncState,
+) -> SenderKeyReconcileMode {
+    if snapshot.exists && snapshot.requester_current_device && snapshot.status == "uploaded" {
+        SenderKeyReconcileMode::RequesterSelfSyncUploaded
+    } else if should_block_normal_sender_key_ops(snapshot) {
+        SenderKeyReconcileMode::Blocked
+    } else {
+        SenderKeyReconcileMode::Normal
+    }
+}
+
+async fn load_sender_key_reconcile_mode(
     app: &tauri::AppHandle,
     session: &ChatRuntimeSession,
     api: &ChatApiClient,
-) -> bool {
+) -> SenderKeyReconcileMode {
     let local_status = store::load_rooms_snapshot(app, session.account_id)
         .ok()
         .map(|snapshot| snapshot.sync_state.self_sender_key_sync_status)
         .unwrap_or_else(|| "idle".to_string());
 
     if !is_active_self_sender_key_sync_status(local_status.as_str()) {
-        return true;
+        return SenderKeyReconcileMode::Normal;
     }
 
     match api.get_self_sender_key_sync().await {
         Ok(response) => {
             let latest = to_chat_self_sender_key_sync_state(response);
             let _ = persist_self_sender_key_sync_snapshot(app, session, &latest);
-            !should_block_normal_sender_key_ops(&latest)
+            sender_key_reconcile_mode_from_snapshot(&latest)
         }
         Err(error) => {
             log::warn!(
-                "chat runtime sync: self sender key sync refresh failed while checking normal sender key gate error={}",
+                "chat runtime sync: self sender key sync refresh failed while checking sender key mode error={}",
                 error
             );
-            false
+            SenderKeyReconcileMode::Blocked
         }
     }
+}
+
+pub(super) async fn normal_sender_key_ops_allowed(
+    app: &tauri::AppHandle,
+    session: &ChatRuntimeSession,
+    api: &ChatApiClient,
+) -> bool {
+    load_sender_key_reconcile_mode(app, session, api)
+        .await
+        .allows_normal_ops()
+}
+
+pub(super) async fn warm_up_sender_keys_for_room_summaries(
+    app: &tauri::AppHandle,
+    session: &ChatRuntimeSession,
+    api: &ChatApiClient,
+    room_ids: &[i64],
+) -> Result<(), String> {
+    let mode = load_sender_key_reconcile_mode(app, session, api).await;
+    if !mode.allows_local_resolution() {
+        return Ok(());
+    }
+
+    let mut seen = HashSet::new();
+    for room_id in room_ids {
+        if should_ignore_sender_key_room(*room_id) || !seen.insert(*room_id) {
+            continue;
+        }
+        resolve_member_sender_keys(app, session, api, *room_id).await?;
+    }
+
+    Ok(())
 }
 
 pub(super) async fn reconcile_room_sender_keys(
@@ -342,7 +424,8 @@ pub(super) async fn reconcile_room_sender_keys(
         return Ok("locked".to_string());
     };
 
-    if !normal_sender_key_ops_allowed(app, session, api).await {
+    let mode = load_sender_key_reconcile_mode(app, session, api).await;
+    if !mode.allows_local_resolution() {
         log::info!(
             "chat runtime sync: skip normal sender key reconcile because requester self sync is active room_id={} current_member_id={}",
             room_id,
@@ -362,35 +445,46 @@ pub(super) async fn reconcile_room_sender_keys(
         .iter()
         .map(|member| member.member_id)
         .collect::<Vec<_>>();
-    let local_states_before = local_sender_key_state_map(app, session.account_id, &member_ids)?;
-    let initial_status = api.get_sender_key_distribution_status(room_id).await?;
-    provide_own_sender_key_if_needed(
-        app,
-        session,
-        api,
-        room_id,
-        current_member_id,
-        members,
-        &local_states_before,
-        &initial_status,
-    )
-    .await?;
+    if mode.allows_normal_ops() {
+        let local_states_before = local_sender_key_state_map(app, session.account_id, &member_ids)?;
+        let initial_status = api.get_sender_key_distribution_status(room_id).await?;
+        provide_own_sender_key_if_needed(
+            app,
+            session,
+            api,
+            room_id,
+            current_member_id,
+            members,
+            &local_states_before,
+            &initial_status,
+        )
+        .await?;
+    } else {
+        log::info!(
+            "chat runtime sync: restrict sender key reconcile to local resolution only room_id={} current_member_id={} mode={:?}",
+            room_id,
+            current_member_id,
+            mode
+        );
+    }
 
     resolve_member_sender_keys(app, session, api, room_id).await?;
 
     let status = api.get_sender_key_distribution_status(room_id).await?;
     let local_states = local_sender_key_state_map(app, session.account_id, &member_ids)?;
-    request_missing_peer_sender_keys(
-        app,
-        session,
-        api,
-        room_id,
-        current_member_id,
-        members,
-        &local_states,
-        &status,
-    )
-    .await?;
+    if mode.allows_normal_ops() {
+        request_missing_peer_sender_keys(
+            app,
+            session,
+            api,
+            room_id,
+            current_member_id,
+            members,
+            &local_states,
+            &status,
+        )
+        .await?;
+    }
 
     let final_status = api
         .get_sender_key_distribution_status(room_id)
@@ -419,10 +513,7 @@ fn local_sender_key_state_map(
         let Ok(member_id) = state.member_id.parse::<i64>() else {
             continue;
         };
-        states.insert(
-            local_sender_key_state_key(member_id, &state.device_id),
-            state,
-        );
+        states.insert(local_sender_key_state_key(member_id), state);
     }
     Ok(states)
 }
@@ -439,7 +530,7 @@ async fn provide_own_sender_key_if_needed(
 ) -> Result<(), String> {
     let refresh_all =
         !local_has_own_current_sender_key(local_states, current_member_id, &session.device_id)
-            || !status.own_device_sender_key_exists;
+            || !status.own_member_sender_key_exists;
 
     for member in members {
         if member.member_id == current_member_id {
@@ -518,14 +609,16 @@ async fn request_missing_peer_sender_keys(
         .map(|member| (member.member_id, member))
         .collect::<HashMap<_, _>>();
 
-    for (provider_member_id, provider_device_id) in collect_request_sources(status) {
+    for source_ref in collect_request_sources(status) {
+        let provider_member_id = source_ref.member_id;
+        let provider_device_id = source_ref.device_id.as_str();
         if provider_member_id == current_member_id {
             continue;
         }
         if !members_by_id.contains_key(&provider_member_id) {
             continue;
         }
-        if local_has_sender_key(local_states, provider_member_id, &provider_device_id) {
+        if local_has_sender_key(local_states, provider_member_id, provider_device_id) {
             continue;
         }
 
@@ -538,8 +631,9 @@ async fn request_missing_peer_sender_keys(
         );
         api.create_sender_key_request(&CreateSenderKeyRequestRequest {
             room_id,
-            provider_member_id,
-            provider_device_id,
+            provider_user_id: source_ref.user_id,
+            provider_device_id: source_ref.device_id,
+            sender_member_id: provider_member_id,
             requester_device_id: Some(session.device_id.clone()),
         })
         .await?;
@@ -694,14 +788,15 @@ async fn upload_self_sender_keys_to_requester(
         return Ok(snapshot.clone());
     };
 
-    let result = async {
-        let requester_bundle = build_public_key_bundle(
-            api.get_key_bundle(session.user_id, Some(&requester_device_id))
-                .await?,
-        )?;
+    let result: Result<ChatSelfSenderKeySyncState, String> = async {
         let rooms = api.get_rooms().await?;
-        let member_ids = collect_joined_room_member_ids(app, session, api, participant_id, &rooms).await?;
-        let sender_key_materials = account_keys::list_sender_key_materials(app, session.account_id, &member_ids)?;
+        let joined_room_context =
+            collect_joined_room_context(app, session, api, participant_id, &rooms).await?;
+        let sender_key_materials = account_keys::list_sender_key_materials(
+            app,
+            session.account_id,
+            &joined_room_context.member_ids,
+        )?;
         let mut seen = HashSet::new();
         let mut items = Vec::new();
 
@@ -709,24 +804,25 @@ async fn upload_self_sender_keys_to_requester(
             let Ok(sender_member_id) = material.member_id.parse::<i64>() else {
                 continue;
             };
-            if material.device_id == requester_device_id {
-                continue;
-            }
-            if !seen.insert((sender_member_id, material.device_id.clone(), material.sender_key_version)) {
+            if !seen.insert((sender_member_id, material.sender_key_version)) {
                 continue;
             }
 
+            let requester_bundle = build_public_key_bundle(
+                api.get_key_bundle(session.user_id, Some(&requester_device_id))
+                    .await?,
+            )?;
             let prepared = account_keys::prepare_existing_sender_key_distribution(
                 app,
                 session.account_id,
                 sender_member_id,
-                &material.device_id,
+                &session.device_id,
                 &requester_bundle,
             )?;
 
             items.push(SelfSenderKeySyncDistributionItemRequest {
                 sender_member_id,
-                sender_device_id: material.device_id,
+                sender_device_id: session.device_id.clone(),
                 sender_key_version: prepared.sender_key_version,
                 distribution_message: STANDARD.encode(prepared.distribution_message),
             });
@@ -796,45 +892,71 @@ async fn consume_self_sender_keys_and_backfill(
         return Ok(snapshot.clone());
     };
 
-    let result = async {
+    let result: Result<ChatSelfSenderKeySyncState, String> = async {
         let pending_distributions = api.get_pending_self_sender_key_sync_distributions().await?;
+        let rooms = api.get_rooms().await?;
+        let joined_room_context =
+            collect_joined_room_context(app, session, api, participant_id, &rooms).await?;
         for distribution in pending_distributions.distributions {
+            let copy_scope = classify_self_sender_key_sync_copy_scope(
+                &joined_room_context.current_member_ids,
+                distribution.sender_member_id,
+            );
+            log::info!(
+                "chat runtime sync: consume self sender key sync distribution distribution_id={} sender_member_id={} sender_device_id={} sender_key_version={} copy_scope={}",
+                distribution.distribution_id,
+                distribution.sender_member_id,
+                distribution.sender_device_id,
+                distribution.sender_key_version,
+                copy_scope.as_str()
+            );
             let bytes = STANDARD
                 .decode(distribution.distribution_message.as_bytes())
                 .map_err(|err| format!("decode self sender key sync distribution failed: {err}"))?;
-            let status = match account_keys::consume_sender_key_distribution(
+            let consume_result = account_keys::consume_sender_key_distribution(
                 app,
                 session.account_id,
                 distribution.sender_member_id,
                 &distribution.sender_device_id,
                 &bytes,
                 distribution.sender_key_version,
-            )? {
+            )?;
+            let status = match consume_result {
                 ConsumeSenderKeyDistributionResult::Consumed
                 | ConsumeSenderKeyDistributionResult::Stale => "consumed",
                 ConsumeSenderKeyDistributionResult::Failed => "failed",
             };
             api.consume_self_sender_key_sync_distribution(distribution.distribution_id, status)
                 .await?;
+            if matches!(consume_result, ConsumeSenderKeyDistributionResult::Failed) {
+                return Err(format!(
+                    "self sender key sync distribution failed distribution_id={} sender_member_id={} sender_device_id={} sender_key_version={} copy_scope={}",
+                    distribution.distribution_id,
+                    distribution.sender_member_id,
+                    distribution.sender_device_id,
+                    distribution.sender_key_version,
+                    copy_scope.as_str()
+                ));
+            }
         }
 
-        let rooms = api.get_rooms().await?;
-        let mut all_rooms_unlocked = true;
-        for room_id in collect_room_ids_from_sections(&rooms) {
-            if should_ignore_sender_key_room(room_id) {
-                continue;
-            }
-            backfill_room_history(app, session, api, participant_id, room_id).await?;
-            let room = sync_room(app, session, api, participant_id, room_id, None, None).await?;
+        let room_ids = collect_room_ids_from_sections(&rooms)
+            .into_iter()
+            .filter(|room_id| !should_ignore_sender_key_room(*room_id))
+            .collect::<Vec<_>>();
+        for room_id in &room_ids {
+            backfill_room_history(app, session, api, participant_id, *room_id).await?;
+            let room = sync_room(app, session, api, participant_id, *room_id, None, None).await?;
             if room.snapshot.direct_key_status != "unlocked" {
-                all_rooms_unlocked = false;
+                log::info!(
+                    "chat runtime sync: requester self sync room remains locked before complete room_id={} status={}",
+                    room.snapshot.room_id,
+                    room.snapshot.direct_key_status
+                );
             }
         }
 
         let _ = sync_rooms(app, session, api, participant_id).await?;
-        if !all_rooms_unlocked {
-            return persist_self_sender_key_sync_snapshot(app, session, snapshot);
-        }
         let completed = match api.complete_self_sender_key_sync().await {
             Ok(response) => to_chat_self_sender_key_sync_state(response),
             Err(error) => {
@@ -845,7 +967,27 @@ async fn consume_self_sender_keys_and_backfill(
                 to_chat_self_sender_key_sync_state(api.get_self_sender_key_sync().await?)
             }
         };
-        persist_self_sender_key_sync_snapshot(app, session, &completed)
+        let completed = persist_self_sender_key_sync_snapshot(app, session, &completed)?;
+
+        if completed.status == "completed" {
+            for room_id in room_ids {
+                if let Err(error) = sync_room(app, session, api, participant_id, room_id, None, None).await {
+                    log::warn!(
+                        "chat runtime sync: post-complete room reconcile failed room_id={} error={}",
+                        room_id,
+                        error
+                    );
+                }
+            }
+            if let Err(error) = sync_rooms(app, session, api, participant_id).await {
+                log::warn!(
+                    "chat runtime sync: post-complete rooms sync failed error={}",
+                    error
+                );
+            }
+        }
+
+        Ok(completed)
     }
     .await;
 
@@ -916,14 +1058,15 @@ fn collect_room_ids_from_sections(rooms: &crate::chat::api::GetUserRoomsResponse
         .collect()
 }
 
-async fn collect_joined_room_member_ids(
+async fn collect_joined_room_context(
     app: &tauri::AppHandle,
     session: &ChatRuntimeSession,
     api: &ChatApiClient,
     participant_id: Option<i64>,
     rooms: &crate::chat::api::GetUserRoomsResponse,
-) -> Result<Vec<i64>, String> {
+) -> Result<JoinedRoomContext, String> {
     let mut member_ids = HashSet::new();
+    let mut current_member_ids = HashSet::new();
 
     for room_id in collect_room_ids_from_sections(rooms) {
         if should_ignore_sender_key_room(room_id) {
@@ -932,6 +1075,11 @@ async fn collect_joined_room_member_ids(
 
         if let Some(room) = store::load_room_snapshot(app, session.account_id, room_id, None, None)?
         {
+            if let Some(current_member_id) =
+                resolve_current_member_id_snapshot(participant_id, &room.members)
+            {
+                current_member_ids.insert(current_member_id);
+            }
             for member in room.members {
                 member_ids.insert(member.member_id);
             }
@@ -939,13 +1087,30 @@ async fn collect_joined_room_member_ids(
         }
 
         let detail = api.get_room_detail(room_id).await?;
-        let _ = resolve_current_member_id(participant_id, &detail.members);
+        if let Some(current_member_id) = resolve_current_member_id(participant_id, &detail.members)
+        {
+            current_member_ids.insert(current_member_id);
+        }
         for member in detail.members {
             member_ids.insert(member.member_id);
         }
     }
 
-    Ok(member_ids.into_iter().collect())
+    Ok(JoinedRoomContext {
+        member_ids: member_ids.into_iter().collect(),
+        current_member_ids,
+    })
+}
+
+fn classify_self_sender_key_sync_copy_scope(
+    current_member_ids: &HashSet<i64>,
+    sender_member_id: i64,
+) -> SelfSenderKeySyncCopyScope {
+    if current_member_ids.contains(&sender_member_id) {
+        SelfSenderKeySyncCopyScope::OwnHistory
+    } else {
+        SelfSenderKeySyncCopyScope::PeerHistory
+    }
 }
 
 fn requestable_peer_member_ids(status: &GetSenderKeyDistributionStatusResponse) -> HashSet<i64> {
@@ -962,30 +1127,24 @@ fn requestable_peer_member_ids(status: &GetSenderKeyDistributionStatusResponse) 
         .collect()
 }
 
-fn local_sender_key_state_key(member_id: i64, device_id: &str) -> (i64, String) {
-    (member_id, device_id.to_string())
+fn local_sender_key_state_key(member_id: i64) -> i64 {
+    member_id
 }
 
 fn local_has_sender_key(
     local_states: &LocalSenderKeyStateMap,
     member_id: i64,
-    device_id: &str,
+    _device_id: &str,
 ) -> bool {
-    local_states.contains_key(&local_sender_key_state_key(member_id, device_id))
+    local_states.contains_key(&local_sender_key_state_key(member_id))
 }
 
 fn local_has_own_current_sender_key(
     local_states: &LocalSenderKeyStateMap,
     current_member_id: i64,
-    current_device_id: &str,
+    _current_device_id: &str,
 ) -> bool {
-    local_states
-        .get(&local_sender_key_state_key(
-            current_member_id,
-            current_device_id,
-        ))
-        .map(|state| state.key_scope == "own")
-        .unwrap_or(false)
+    local_states.contains_key(&local_sender_key_state_key(current_member_id))
 }
 
 fn collect_missing_source_refs(
@@ -1002,13 +1161,19 @@ fn collect_missing_source_refs(
 
 fn collect_request_sources(
     status: &GetSenderKeyDistributionStatusResponse,
-) -> HashSet<(i64, String)> {
-    status
+) -> Vec<crate::chat::api::e2ee::SenderKeyRouteRefResponse> {
+    let mut seen = HashSet::new();
+    let mut refs = Vec::new();
+    for entry in status
         .requestable_sources
         .iter()
         .chain(status.pending_from_sources.iter())
-        .map(|entry| (entry.member_id, entry.device_id.clone()))
-        .collect()
+    {
+        if seen.insert(entry.member_id) {
+            refs.push(entry.clone());
+        }
+    }
+    refs
 }
 
 #[cfg(test)]
@@ -1264,7 +1429,8 @@ async fn upload_own_sender_key(
 
     api.upload_sender_key(&UploadSenderKeyRequest {
         room_id,
-        receiver_member_id,
+        sender_member_id: current_member_id,
+        receiver_user_id: target_user_id,
         sender_key_version: prepared.sender_key_version,
         distribution_message: STANDARD.encode(prepared.distribution_message),
         receiver_device_id: receiver_device_id.map(ToOwned::to_owned),
@@ -1307,20 +1473,24 @@ impl SnapshotMembersExt for ChatRoomSnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_active_self_sender_key_sync_status, requestable_peer_member_ids,
-        self_sender_key_sync_follow_up, sender_key_upload_key, should_block_normal_sender_key_ops,
-        should_ignore_sender_key_room, should_request_peer_sender_key, try_begin_sender_key_upload,
-        SelfSenderKeySyncFollowUp,
+        classify_self_sender_key_sync_copy_scope, is_active_self_sender_key_sync_status,
+        requestable_peer_member_ids, self_sender_key_sync_follow_up,
+        sender_key_reconcile_mode_from_snapshot, sender_key_upload_key,
+        should_block_normal_sender_key_ops, should_ignore_sender_key_room,
+        should_request_peer_sender_key, try_begin_sender_key_upload, SelfSenderKeySyncCopyScope,
+        SelfSenderKeySyncFollowUp, SenderKeyReconcileMode,
     };
     use crate::chat::{
-        api::e2ee::SenderKeyDeviceRefResponse, api::GetSenderKeyDistributionStatusResponse,
+        api::e2ee::SenderKeyRouteRefResponse, api::GetSenderKeyDistributionStatusResponse,
         ChatSelfSenderKeySyncState,
     };
+    use std::collections::HashSet;
 
     #[test]
     fn requestable_peer_member_ids_includes_explicit_requestable_members() {
         let status = GetSenderKeyDistributionStatusResponse {
-            requestable_sources: vec![SenderKeyDeviceRefResponse {
+            requestable_sources: vec![SenderKeyRouteRefResponse {
+                user_id: 1,
                 member_id: 41,
                 device_id: "device-41".to_string(),
             }],
@@ -1337,7 +1507,8 @@ mod tests {
     fn requestable_peer_member_ids_includes_pending_from_members() {
         let status = GetSenderKeyDistributionStatusResponse {
             requestable_sources: vec![],
-            pending_from_sources: vec![SenderKeyDeviceRefResponse {
+            pending_from_sources: vec![SenderKeyRouteRefResponse {
+                user_id: 2,
                 member_id: 42,
                 device_id: "device-42".to_string(),
             }],
@@ -1354,16 +1525,19 @@ mod tests {
     {
         let status = GetSenderKeyDistributionStatusResponse {
             requestable_sources: vec![
-                SenderKeyDeviceRefResponse {
+                SenderKeyRouteRefResponse {
+                    user_id: 3,
                     member_id: 43,
                     device_id: "device-43".to_string(),
                 },
-                SenderKeyDeviceRefResponse {
+                SenderKeyRouteRefResponse {
+                    user_id: 4,
                     member_id: 44,
                     device_id: "device-44".to_string(),
                 },
             ],
-            available_from_sources: vec![SenderKeyDeviceRefResponse {
+            available_from_sources: vec![SenderKeyRouteRefResponse {
+                user_id: 4,
                 member_id: 44,
                 device_id: "device-44".to_string(),
             }],
@@ -1468,5 +1642,64 @@ mod tests {
         };
 
         assert!(!should_block_normal_sender_key_ops(&snapshot));
+    }
+
+    #[test]
+    fn requester_uploaded_self_sync_allows_local_sender_key_resolution_without_normal_requests() {
+        let snapshot = ChatSelfSenderKeySyncState {
+            exists: true,
+            status: "uploaded".to_string(),
+            requester_current_device: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            sender_key_reconcile_mode_from_snapshot(&snapshot),
+            SenderKeyReconcileMode::RequesterSelfSyncUploaded
+        );
+    }
+
+    #[test]
+    fn requester_syncing_self_sync_keeps_sender_key_reconcile_blocked() {
+        let snapshot = ChatSelfSenderKeySyncState {
+            exists: true,
+            status: "syncing".to_string(),
+            requester_current_device: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            sender_key_reconcile_mode_from_snapshot(&snapshot),
+            SenderKeyReconcileMode::Blocked
+        );
+    }
+
+    #[test]
+    fn requester_pending_provider_self_sync_keeps_sender_key_reconcile_blocked() {
+        let snapshot = ChatSelfSenderKeySyncState {
+            exists: true,
+            status: "pending_provider".to_string(),
+            requester_current_device: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            sender_key_reconcile_mode_from_snapshot(&snapshot),
+            SenderKeyReconcileMode::Blocked
+        );
+    }
+
+    #[test]
+    fn self_sender_key_sync_copy_scope_detects_current_member_history() {
+        let current_member_ids = HashSet::from([41, 99]);
+
+        assert_eq!(
+            classify_self_sender_key_sync_copy_scope(&current_member_ids, 41),
+            SelfSenderKeySyncCopyScope::OwnHistory
+        );
+        assert_eq!(
+            classify_self_sender_key_sync_copy_scope(&current_member_ids, 77),
+            SelfSenderKeySyncCopyScope::PeerHistory
+        );
     }
 }

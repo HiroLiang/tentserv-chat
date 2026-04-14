@@ -135,26 +135,24 @@ const roomMembers: RoomMember[] = [
 
 const currentDeviceId = "device-1";
 const peerDeviceId = "device-peer-1";
+const peerUserId = 601;
 
 const senderState = (
     memberId: number,
-    deviceId: string,
-    keyScope: "own" | "peer",
+    _deviceId: string,
+    _keyScope: "own" | "peer",
     senderKeyVersion: number,
     updatedAt: number,
 ) => ({
     member_id: String(memberId),
-    device_id: deviceId,
-    key_scope: keyScope,
-    is_own_key: keyScope === "own",
     sender_key_version: senderKeyVersion,
     updated_at: updatedAt,
 });
 
-const deviceRef = (member_id: number, device_id: string) => ({ member_id, device_id });
+const deviceRef = (member_id: number, device_id: string, user_id = peerUserId) => ({ user_id, member_id, device_id });
 
 const distributionStatus = (overrides?: Partial<Awaited<ReturnType<typeof e2eeApi.getSenderKeyDistributionStatus>>>) => ({
-    own_device_sender_key_exists: true,
+    own_member_sender_key_exists: true,
     requestable_sources: [],
     available_from_sources: [],
     available_to_targets: [],
@@ -413,14 +411,14 @@ describe("e2eeService sender-key reconciliation", () => {
             ]);
         vi.mocked(e2eeApi.getSenderKeyDistributionStatus)
             .mockResolvedValueOnce(distributionStatus({
-                own_device_sender_key_exists: false,
+                own_member_sender_key_exists: false,
                 requestable_sources: [deviceRef(11, peerDeviceId)],
                 available_from_sources: [deviceRef(11, peerDeviceId)],
                 pending_receivers: [deviceRef(11, peerDeviceId)],
                 pending_from_sources: [deviceRef(11, peerDeviceId)],
             }))
             .mockResolvedValueOnce(distributionStatus({
-                own_device_sender_key_exists: true,
+                own_member_sender_key_exists: true,
                 available_to_targets: [deviceRef(11, peerDeviceId)],
             }));
         vi.mocked(e2eeApi.getPendingSenderKeyDistributions).mockResolvedValue({
@@ -448,7 +446,8 @@ describe("e2eeService sender-key reconciliation", () => {
         }));
         expect(e2eeApi.uploadSenderKey).toHaveBeenCalledWith(
             77,
-            11,
+            10,
+            601,
             peerDeviceId,
             preparedSenderKeyDistribution.sender_key_version,
             expect.any(String),
@@ -476,13 +475,13 @@ describe("e2eeService sender-key reconciliation", () => {
             .mockResolvedValueOnce([]);
         vi.mocked(e2eeApi.getSenderKeyDistributionStatus)
             .mockResolvedValueOnce(distributionStatus({
-                own_device_sender_key_exists: false,
+                own_member_sender_key_exists: false,
                 requestable_sources: [deviceRef(11, peerDeviceId)],
                 pending_receivers: [deviceRef(11, peerDeviceId)],
                 pending_from_sources: [deviceRef(11, peerDeviceId)],
             }))
             .mockResolvedValueOnce(distributionStatus({
-                own_device_sender_key_exists: false,
+                own_member_sender_key_exists: false,
                 requestable_sources: [deviceRef(11, peerDeviceId)],
                 pending_receivers: [deviceRef(11, peerDeviceId)],
                 pending_from_sources: [deviceRef(11, peerDeviceId)],
@@ -495,7 +494,7 @@ describe("e2eeService sender-key reconciliation", () => {
         });
 
         expect(e2eeApi.getKeyBundle).toHaveBeenCalledWith(601, peerDeviceId);
-        expect(e2eeApi.createSenderKeyRequest).toHaveBeenCalledWith(78, 11, peerDeviceId, currentDeviceId);
+        expect(e2eeApi.createSenderKeyRequest).toHaveBeenCalledWith(78, 601, peerDeviceId, 11, currentDeviceId);
     });
 
     it("treats a direct room as ready from local sender keys even when status still reports stale pending", async () => {
@@ -508,12 +507,12 @@ describe("e2eeService sender-key reconciliation", () => {
             .mockResolvedValueOnce(localStates);
         vi.mocked(e2eeApi.getSenderKeyDistributionStatus)
             .mockResolvedValueOnce(distributionStatus({
-                own_device_sender_key_exists: true,
+                own_member_sender_key_exists: true,
                 requestable_sources: [deviceRef(11, peerDeviceId)],
                 pending_from_sources: [deviceRef(11, peerDeviceId)],
             }))
             .mockResolvedValueOnce(distributionStatus({
-                own_device_sender_key_exists: true,
+                own_member_sender_key_exists: true,
                 requestable_sources: [deviceRef(11, peerDeviceId)],
                 pending_from_sources: [deviceRef(11, peerDeviceId)],
             }));
@@ -535,7 +534,7 @@ describe("e2eeService sender-key reconciliation", () => {
             senderState(10, currentDeviceId, "own", 1775758701055, 1),
         ]);
         vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue(distributionStatus({
-            own_device_sender_key_exists: true,
+            own_member_sender_key_exists: true,
             available_to_targets: [deviceRef(11, peerDeviceId)],
         }));
 
@@ -551,7 +550,7 @@ describe("e2eeService sender-key reconciliation", () => {
             senderState(10, currentDeviceId, "own", 1775758701055, 1),
         ]);
         vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue(distributionStatus({
-            own_device_sender_key_exists: true,
+            own_member_sender_key_exists: true,
             available_to_targets: [deviceRef(11, peerDeviceId)],
         }));
 
@@ -563,7 +562,8 @@ describe("e2eeService sender-key reconciliation", () => {
         expect(e2eeApi.getKeyBundle).toHaveBeenCalledWith(601, peerDeviceId);
         expect(e2eeApi.uploadSenderKey).toHaveBeenCalledWith(
             80,
-            11,
+            10,
+            601,
             peerDeviceId,
             preparedSenderKeyDistribution.sender_key_version,
             expect.any(String),
@@ -575,7 +575,7 @@ describe("e2eeService sender-key reconciliation", () => {
             senderState(10, currentDeviceId, "own", 1775758701055, 1),
         ]);
         vi.mocked(e2eeApi.getSenderKeyDistributionStatus).mockResolvedValue(distributionStatus({
-            own_device_sender_key_exists: true,
+            own_member_sender_key_exists: true,
             pending_receivers: [deviceRef(11, peerDeviceId)],
         }));
 
@@ -603,7 +603,8 @@ describe("e2eeService sender-key reconciliation", () => {
         expect(e2eeApi.uploadSenderKey).toHaveBeenCalledTimes(1);
         expect(e2eeApi.uploadSenderKey).toHaveBeenCalledWith(
             79,
-            11,
+            10,
+            601,
             peerDeviceId,
             preparedSenderKeyDistribution.sender_key_version,
             expect.any(String),

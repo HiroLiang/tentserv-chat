@@ -50,8 +50,6 @@ impl SharedRuntime {
             self_sender_key_sync: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
 
-        let sections =
-            sync::sync_rooms(&app, &runtime.session, &runtime.api, Some(participant.id)).await?;
         let self_sender_key_sync = sync::refresh_self_sender_key_sync_state(
             &app,
             &runtime.session,
@@ -60,6 +58,8 @@ impl SharedRuntime {
         )
         .await?;
         runtime.set_self_sender_key_sync_snapshot(Some(self_sender_key_sync.clone()))?;
+        let sections =
+            sync::sync_rooms(&app, &runtime.session, &runtime.api, Some(participant.id)).await?;
         let mut sync_state = store::save_sync_state(
             &app,
             runtime.session.account_id,

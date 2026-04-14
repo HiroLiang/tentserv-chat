@@ -8,6 +8,7 @@ import {
     getVerificationRemainingMs,
     warnOnSuspiciousVerificationExpiry,
 } from "@/utils/verificationExpiry.ts";
+import { focusAuthField, noteAuthFocusInteraction } from "@/utils/authFocus.ts";
 
 interface VerificationCodeDialogProps {
     session: PendingVerificationState | null;
@@ -64,7 +65,9 @@ export const VerificationCodeDialog = ({
     const remainingLabel = formatVerificationRemaining(remainingMs);
 
     const focusInput = (index: number) => {
-        window.setTimeout(() => inputRefs.current[index]?.focus(), 0);
+        window.setTimeout(() => {
+            focusAuthField(inputRefs.current[index], { requireUserInteraction: true });
+        }, 0);
     };
 
     const clearErrorState = () => {
@@ -151,6 +154,7 @@ export const VerificationCodeDialog = ({
     }
 
     const updateDigit = (index: number, rawValue: string) => {
+        noteAuthFocusInteraction();
         const nextValue = sanitizeDigit(rawValue);
         clearErrorState();
         setDigits((prev) => {
@@ -169,6 +173,7 @@ export const VerificationCodeDialog = ({
             return;
         }
 
+        noteAuthFocusInteraction();
         if (digits[index]) {
             clearErrorState();
             setDigits((prev) => {
@@ -195,6 +200,7 @@ export const VerificationCodeDialog = ({
             return;
         }
 
+        noteAuthFocusInteraction();
         event.preventDefault();
         clearErrorState();
         setDigits([
@@ -214,6 +220,7 @@ export const VerificationCodeDialog = ({
             return;
         }
 
+        noteAuthFocusInteraction();
         setIsResending(true);
         try {
             const response = await onResend(session.verificationToken);

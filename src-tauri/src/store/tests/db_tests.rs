@@ -165,8 +165,8 @@ fn aes_gcm_bad_nonce_length_returns_err() {
 
 // ── Schema migration ─────────────────────────────────────────────
 
-/// Fresh install: init_schema creates sender_keys with sender_key_version already present.
-/// migrate_schema must complete v0→v6 without hitting a nested transaction error.
+/// Fresh install: init_schema creates the latest sender_keys schema.
+/// migrate_schema must complete v0→v9 without hitting a nested transaction error.
 #[test]
 fn migration_v3_to_v5_fresh_install_no_nested_transaction() {
     let conn = Connection::open_in_memory().expect("in-memory db must open");
@@ -180,11 +180,11 @@ fn migration_v3_to_v5_fresh_install_no_nested_transaction() {
     let ver: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("user_version must be readable");
-    assert_eq!(ver, 6, "user_version must reach 6 after all migrations");
+    assert_eq!(ver, 9, "user_version must reach 9 after all migrations");
 }
 
-/// Existing user upgrading from v3: sender_keys lacks sender_key_version.
-/// migrate_schema must add the column, seed values from updated_at, and continue to v6.
+/// Existing user upgrading from v3: sender_keys still uses the legacy schema.
+/// The v9 big-bang migration rebuilds sender_keys as a clean member-scoped table.
 #[test]
 fn migration_v3_to_v5_upgrades_real_v3_db() {
     let conn = Connection::open_in_memory().expect("in-memory db must open");
@@ -216,18 +216,14 @@ fn migration_v3_to_v5_upgrades_real_v3_db() {
     let ver: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("user_version must be readable");
-    assert_eq!(ver, 6);
+    assert_eq!(ver, 9);
 
-    let skv: i64 = conn
-        .query_row(
-            "SELECT sender_key_version FROM sender_keys WHERE user_id='u1'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("sender_key_version must exist after migration");
+    let sender_key_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sender_keys", [], |r| r.get(0))
+        .expect("sender_keys row count must be readable");
     assert_eq!(
-        skv, 1700000000,
-        "sender_key_version must be seeded from updated_at"
+        sender_key_rows, 0,
+        "v9 big-bang rebuild intentionally clears legacy sender key rows"
     );
 }
 
@@ -297,7 +293,7 @@ fn migration_v7_rebuilds_chat_message_tables_with_device_scoped_sender_key_field
     )
     .expect("v6 fixture setup must succeed");
 
-    migrate_schema(&conn).expect("v6→v8 migration must succeed");
+    migrate_schema(&conn).expect("v6→v9 migration must succeed");
 
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -339,11 +335,11 @@ fn migration_v7_rebuilds_chat_message_tables_with_device_scoped_sender_key_field
         .query_row("SELECT COUNT(*) FROM chat_messages", [], |row| row.get(0))
         .expect("chat message row count should be readable");
 
-    assert_eq!(user_version, 8, "migration should advance schema to v8");
+    assert_eq!(user_version, 9, "migration should advance schema to v9");
     assert_eq!(encrypted_sender_device_columns, 1);
     assert_eq!(encrypted_sender_key_version_columns, 1);
     assert_eq!(message_sender_device_columns, 1);
-    assert_eq!(sender_key_device_columns, 1);
+    assert_eq!(sender_key_device_columns, 0);
     assert_eq!(
         encrypted_count, 0,
         "v7 rebuild intentionally drops encrypted cache rows"

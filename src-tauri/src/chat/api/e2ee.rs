@@ -92,9 +92,10 @@ impl ChatApiClient {
         request: &CreateSenderKeyRequestRequest,
     ) -> Result<(), String> {
         log::info!(
-            "chat runtime: create sender key request room_id={} provider_member_id={}",
+            "chat runtime: create sender key request room_id={} sender_member_id={} provider_user_id={}",
             request.room_id,
-            request.provider_member_id
+            request.sender_member_id,
+            request.provider_user_id,
         );
         self.client
             .post(self.url("/api/e2ee/sender-key-request"))
@@ -131,9 +132,10 @@ impl ChatApiClient {
 
     pub async fn upload_sender_key(&self, request: &UploadSenderKeyRequest) -> Result<(), String> {
         log::info!(
-            "chat runtime: upload sender key room_id={} receiver_member_id={} receiver_device_id={:?}",
+            "chat runtime: upload sender key room_id={} sender_member_id={} receiver_user_id={} receiver_device_id={:?}",
             request.room_id,
-            request.receiver_member_id,
+            request.sender_member_id,
+            request.receiver_user_id,
             request.receiver_device_id
         );
         self.client
@@ -342,7 +344,8 @@ pub struct GetKeyBundleResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct UploadSenderKeyRequest {
     pub room_id: i64,
-    pub receiver_member_id: i64,
+    pub sender_member_id: i64,
+    pub receiver_user_id: i64,
     pub sender_key_version: i64,
     pub distribution_message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -352,14 +355,16 @@ pub struct UploadSenderKeyRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateSenderKeyRequestRequest {
     pub room_id: i64,
-    pub provider_member_id: i64,
+    pub provider_user_id: i64,
     pub provider_device_id: String,
+    pub sender_member_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requester_device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq, Hash)]
-pub struct SenderKeyDeviceRefResponse {
+pub struct SenderKeyRouteRefResponse {
+    pub user_id: i64,
     pub member_id: i64,
     pub device_id: String,
 }
@@ -367,12 +372,12 @@ pub struct SenderKeyDeviceRefResponse {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct GetSenderKeyDistributionStatusResponse {
-    pub own_device_sender_key_exists: bool,
-    pub requestable_sources: Vec<SenderKeyDeviceRefResponse>,
-    pub available_from_sources: Vec<SenderKeyDeviceRefResponse>,
-    pub available_to_targets: Vec<SenderKeyDeviceRefResponse>,
-    pub pending_receivers: Vec<SenderKeyDeviceRefResponse>,
-    pub pending_from_sources: Vec<SenderKeyDeviceRefResponse>,
+    pub own_member_sender_key_exists: bool,
+    pub requestable_sources: Vec<SenderKeyRouteRefResponse>,
+    pub available_from_sources: Vec<SenderKeyRouteRefResponse>,
+    pub available_to_targets: Vec<SenderKeyRouteRefResponse>,
+    pub pending_receivers: Vec<SenderKeyRouteRefResponse>,
+    pub pending_from_sources: Vec<SenderKeyRouteRefResponse>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
