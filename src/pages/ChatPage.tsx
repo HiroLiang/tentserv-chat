@@ -13,6 +13,9 @@ import type { RoomSummary, Message, RoomMember } from '@/types/chat.ts';
 import {
     CHAT_RUNTIME_DEGRADED_MESSAGE,
     CHAT_RUNTIME_UNAVAILABLE_MESSAGE,
+    normalizeRoomSummaryPreview,
+    resolveRoomDisplayName,
+    WAITING_FOR_SENDER_KEY_SENTINEL,
 } from '@/utils/chatCopy.ts';
 import { logger } from '@/utils/logger.ts';
 import { MessageSquare } from 'lucide-react';
@@ -86,17 +89,34 @@ function formatTime(iso: string): string {
 function roomToGroup(room: RoomSummary, lastMsg?: Message): ChatGroup {
     const isDeleted = room.status === 'deleted';
     const lastActivityAt = lastMsg?.created_at ?? room.latest_message_created_at;
+    const localMessageMatchesLatest = Boolean(
+        lastMsg
+        && (
+            room.latest_message_id === undefined
+            || lastMsg.message_id === room.latest_message_id
+        ),
+    );
+    const previewSource = localMessageMatchesLatest
+        ? (
+            lastMsg?.content === WAITING_FOR_SENDER_KEY_SENTINEL
+                ? room.latest_message ?? lastMsg.content
+                : lastMsg?.content ?? room.latest_message
+        )
+        : room.latest_message;
+    const lastMessage = previewSource
+        ? normalizeRoomSummaryPreview(room.room_type, previewSource)
+        : undefined;
     return {
         id: String(room.room_id),
         type: room.room_type,
-        name: isDeleted ? 'Deleted Contact' : room.display_name,
+        name: isDeleted ? 'Deleted Contact' : resolveRoomDisplayName(room.room_type, room.display_name),
         avatarUrl: isDeleted ? undefined : room.avatar_url,
         peerUserId: room.peer_user_id,
         presenceStatus: room.presence_status,
         lastSeenAt: room.last_seen_at,
         status: room.status ?? 'active',
         unreadCount: isDeleted ? 0 : room.unread_count,
-        lastMessage: lastMsg?.content ?? room.latest_message,
+        lastMessage,
         lastMessageTime: lastActivityAt ? formatTime(lastActivityAt) : undefined,
         lastActivityAt,
         isOnline: room.room_type === 'direct' ? room.presence_status === 'online' : undefined,

@@ -5,7 +5,7 @@ use tokio::sync::watch;
 use crate::chat::api::ChatApiClient;
 use crate::chat::queue::RuntimeQueue;
 use crate::chat::ws::WsEvent;
-use crate::chat::ChatRuntimeSession;
+use crate::chat::{ChatRuntimeSession, ChatSelfSenderKeySyncState};
 
 #[derive(Default)]
 pub struct ChatRuntimeManager {
@@ -56,6 +56,7 @@ pub struct SharedRuntime {
     pub(super) stop_tx: watch::Sender<bool>,
     pub(super) active_room_id: Arc<Mutex<Option<i64>>>,
     pub(super) participant_id: Arc<Mutex<Option<i64>>>,
+    pub(super) self_sender_key_sync: Arc<Mutex<Option<ChatSelfSenderKeySyncState>>>,
 }
 
 #[derive(Debug, Clone)]

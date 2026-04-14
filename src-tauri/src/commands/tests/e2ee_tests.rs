@@ -1,8 +1,9 @@
 use crate::commands::core::{
     bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, consume_sender_key_distribution_core,
-    delete_sender_keys_core, encrypt_with_sender_key_core, generate_identity_keys_core,
-    generate_sender_key_core, generate_signed_pre_key_core, get_auth_token_by_account_core,
-    get_identity_keys_core, get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
+    consume_sender_key_distribution_for_member_core, delete_sender_keys_core,
+    encrypt_with_sender_key_core, generate_identity_keys_core, generate_sender_key_core,
+    generate_signed_pre_key_core, get_auth_token_by_account_core, get_identity_keys_core,
+    get_signed_pre_key_core, has_identity_keys_core, has_sender_key_core,
     perform_x3dh_receive_core, perform_x3dh_send_core, prepare_sender_key_distribution_core,
     replenish_otp_keys_core, save_auth_token_core, store_member_sender_key_core,
     validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
@@ -30,6 +31,10 @@ const LEGACY_USER_ID: &str = "501";
 /// Input: replace with any member ID strings.
 const MEMBER_ALICE: &str = "member-alice";
 const MEMBER_BOB: &str = "member-bob";
+const DEVICE_ALICE: &str = "device-alice";
+const DEVICE_ALICE_2: &str = "device-alice-2";
+const DEVICE_BOB: &str = "device-bob";
+const DEVICE_KEEP: &str = "device-keep";
 
 /// Input: replace with any plaintext to test different message contents.
 const PLAINTEXT: &[u8] = b"Hello, E2EE!";
@@ -375,7 +380,7 @@ fn regenerating_identity_preserves_existing_spk_otp_and_sender_keys() {
     setup_identity(&conn, ALICE);
     generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
     replenish_otp_keys_core(&conn, &ZERO_KEY, ALICE, 2).unwrap();
-    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
 
     // When identity keys are generated again
     generate_identity_keys_core(&conn, &ZERO_KEY, ALICE).unwrap();
@@ -384,7 +389,7 @@ fn regenerating_identity_preserves_existing_spk_otp_and_sender_keys() {
     assert!(validate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap());
     assert!(crate::store::key_store::load_otp_key_inner(&conn, &ZERO_KEY, ALICE, 0).is_ok());
     assert!(crate::store::key_store::load_otp_key_inner(&conn, &ZERO_KEY, ALICE, 1).is_ok());
-    assert!(has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
+    assert!(has_sender_key_core(&conn, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap());
 }
 
 // ── OTP key scenarios ────────────────────────────────────────────────
@@ -650,7 +655,7 @@ fn has_sender_key_false_before_generate() {
     let (_dir, conn) = test_db();
 
     // Then has_sender_key returns false
-    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
+    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap());
 }
 
 #[test]
@@ -659,10 +664,10 @@ fn generate_sender_key_true_after() {
     let (_dir, conn) = test_db();
 
     // When a sender key is generated
-    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
 
     // Then has_sender_key returns true
-    assert!(has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
+    assert!(has_sender_key_core(&conn, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap());
 }
 
 #[test]
@@ -671,11 +676,18 @@ fn encrypt_with_sender_key_roundtrip() {
 
     // Given a sender key has been generated
     let (_dir, conn) = test_db();
-    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
 
     // When encrypting
-    let enc =
-        encrypt_with_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE, PLAINTEXT).unwrap();
+    let enc = encrypt_with_sender_key_core(
+        &conn,
+        &ZERO_KEY,
+        ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        PLAINTEXT,
+    )
+    .unwrap();
 
     // Then manually decrypting with the stored own key produces the original plaintext
     let sk_bytes = crate::store::sender_key_store::load_own_sender_key_inner(
@@ -683,6 +695,7 @@ fn encrypt_with_sender_key_roundtrip() {
         &ZERO_KEY,
         ALICE,
         MEMBER_ALICE,
+        DEVICE_ALICE,
     )
     .unwrap();
     let cipher = Aes256Gcm::new_from_slice(&sk_bytes).unwrap();
@@ -698,7 +711,7 @@ fn store_member_sender_key_rejects_wrong_length() {
     let bad_key = vec![0u8; 31];
 
     // Then store_member_sender_key_core returns an error
-    let result = store_member_sender_key_core(&conn, ALICE, MEMBER_BOB, bad_key);
+    let result = store_member_sender_key_core(&conn, ALICE, MEMBER_BOB, DEVICE_BOB, bad_key);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("32 bytes"));
 }
@@ -716,6 +729,7 @@ fn prepare_sender_key_distribution_reuses_existing_sender_key_version() {
         &ZERO_KEY,
         ACCOUNT_ALICE,
         MEMBER_ALICE,
+        DEVICE_ALICE,
         &bob_bundle,
     )
     .unwrap();
@@ -724,6 +738,7 @@ fn prepare_sender_key_distribution_reuses_existing_sender_key_version() {
         &ZERO_KEY,
         ACCOUNT_ALICE,
         MEMBER_ALICE,
+        DEVICE_ALICE,
         &bob_bundle,
     )
     .unwrap();
@@ -745,17 +760,26 @@ fn consume_sender_key_distribution_returns_stale_when_local_version_is_newer() {
         &ZERO_KEY,
         ACCOUNT_BOB,
         MEMBER_BOB,
+        DEVICE_BOB,
         &alice_bundle,
     )
     .unwrap();
     let local_key = vec![9u8; 32];
-    store_member_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB, local_key.clone()).unwrap();
+    store_member_sender_key_core(
+        &conn,
+        ACCOUNT_ALICE,
+        MEMBER_BOB,
+        DEVICE_BOB,
+        local_key.clone(),
+    )
+    .unwrap();
     let newer_version = prepared.sender_key_version + 1000;
     crate::store::sender_key_store::store_peer_sender_key_with_version_inner(
         &conn,
         ACCOUNT_ALICE,
         MEMBER_BOB,
-        &local_key.clone().try_into().unwrap(),
+        DEVICE_BOB,
+        &[9u8; 32],
         newer_version,
     )
     .unwrap();
@@ -766,6 +790,7 @@ fn consume_sender_key_distribution_returns_stale_when_local_version_is_newer() {
         &ZERO_KEY,
         ACCOUNT_ALICE,
         MEMBER_BOB,
+        DEVICE_BOB,
         &prepared.distribution_message,
         prepared.sender_key_version,
     )
@@ -778,6 +803,7 @@ fn consume_sender_key_distribution_returns_stale_when_local_version_is_newer() {
             &conn,
             ACCOUNT_ALICE,
             MEMBER_BOB,
+            DEVICE_BOB,
         )
         .unwrap();
     assert_eq!(stored_key.to_vec(), local_key);
@@ -795,6 +821,7 @@ fn consume_sender_key_distribution_returns_failed_when_x3dh_decrypt_breaks() {
         &ZERO_KEY,
         ACCOUNT_BOB,
         MEMBER_BOB,
+        DEVICE_BOB,
         &alice_bundle,
     )
     .unwrap();
@@ -809,6 +836,7 @@ fn consume_sender_key_distribution_returns_failed_when_x3dh_decrypt_breaks() {
         &ZERO_KEY,
         ACCOUNT_ALICE,
         MEMBER_BOB,
+        DEVICE_BOB,
         &corrupted_distribution,
         prepared.sender_key_version,
     )
@@ -819,27 +847,139 @@ fn consume_sender_key_distribution_returns_failed_when_x3dh_decrypt_breaks() {
     assert!(crate::store::sender_key_store::get_sender_key_state_inner(
         &conn,
         ACCOUNT_ALICE,
-        MEMBER_BOB
+        MEMBER_BOB,
+        DEVICE_BOB
     )
     .unwrap()
     .is_none());
 }
 
 #[test]
+fn consume_self_sender_key_distribution_stores_a_peer_key_for_the_requesting_device() {
+    // Given a provider device and a requester device for the same account member
+    let (_provider_dir, provider_conn) = test_db();
+    let (_requester_dir, requester_conn) = test_db();
+    let requester_bundle = make_local_bundle(&requester_conn, ACCOUNT_ALICE);
+    setup_identity(&provider_conn, ACCOUNT_ALICE);
+
+    let prepared = prepare_sender_key_distribution_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        &requester_bundle,
+    )
+    .unwrap();
+
+    // When the requester consumes a copied sender key from another device of the same member
+    let result = consume_sender_key_distribution_for_member_core(
+        &requester_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        Some(MEMBER_ALICE),
+        Some(DEVICE_ALICE_2),
+        &prepared.distribution_message,
+        prepared.sender_key_version,
+    )
+    .unwrap();
+
+    // Then the key is stored under the sender device as a peer-scoped historical key
+    assert!(matches!(
+        result,
+        ConsumeSenderKeyDistributionResult::Consumed
+    ));
+    let state = crate::store::sender_key_store::get_sender_key_state_inner(
+        &requester_conn,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+    )
+    .unwrap()
+    .expect("historical sender key state should exist");
+    assert!(!state.is_own_key);
+    let (_, stored_version) =
+        crate::store::sender_key_store::load_peer_sender_key_with_version_inner(
+            &requester_conn,
+            ACCOUNT_ALICE,
+            MEMBER_ALICE,
+            DEVICE_ALICE,
+        )
+        .unwrap();
+    assert_eq!(stored_version, prepared.sender_key_version);
+}
+
+#[test]
+fn consume_self_sender_key_distribution_keeps_same_version_peer_rows_for_other_devices() {
+    // Given the requester already copied the same historical sender-device key into a peer row
+    let (_provider_dir, provider_conn) = test_db();
+    let (_requester_dir, requester_conn) = test_db();
+    let requester_bundle = make_local_bundle(&requester_conn, ACCOUNT_ALICE);
+    setup_identity(&provider_conn, ACCOUNT_ALICE);
+
+    let prepared = prepare_sender_key_distribution_core(
+        &provider_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        &requester_bundle,
+    )
+    .unwrap();
+    crate::store::sender_key_store::store_peer_sender_key_with_version_inner(
+        &requester_conn,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        &[9u8; 32],
+        prepared.sender_key_version,
+    )
+    .unwrap();
+
+    // When runtime re-consumes the same-version self-distribution
+    let result = consume_sender_key_distribution_for_member_core(
+        &requester_conn,
+        &ZERO_KEY,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+        Some(MEMBER_ALICE),
+        Some(DEVICE_ALICE_2),
+        &prepared.distribution_message,
+        prepared.sender_key_version,
+    )
+    .unwrap();
+
+    // Then the already-copied peer row is treated as stale and preserved as-is
+    assert!(matches!(result, ConsumeSenderKeyDistributionResult::Stale));
+    let state = crate::store::sender_key_store::get_sender_key_state_inner(
+        &requester_conn,
+        ACCOUNT_ALICE,
+        MEMBER_ALICE,
+        DEVICE_ALICE,
+    )
+    .unwrap()
+    .expect("historical sender key state should exist");
+    assert!(!state.is_own_key);
+}
+
+#[test]
 fn sender_key_member_isolation() {
     // Given Alice has own sender keys for two different member IDs
     let (_dir, conn) = test_db();
-    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
-    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_BOB).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_BOB, DEVICE_BOB).unwrap();
 
     // Then each member's key is independently present
-    assert!(has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
-    assert!(has_sender_key_core(&conn, ALICE, MEMBER_BOB).unwrap());
+    assert!(has_sender_key_core(&conn, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap());
+    assert!(has_sender_key_core(&conn, ALICE, MEMBER_BOB, DEVICE_BOB).unwrap());
 
     // And clearing all E2EE keys removes both
     clear_e2ee_keys_core(&conn, ALICE).unwrap();
-    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
-    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_BOB).unwrap());
+    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap());
+    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_BOB, DEVICE_BOB).unwrap());
 }
 
 #[test]
@@ -850,12 +990,20 @@ fn delete_sender_keys_only_removes_requested_account_member_rows() {
     generate_signed_pre_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, 1).unwrap();
     replenish_otp_keys_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, 1).unwrap();
     save_auth_token_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, "token-alice").unwrap();
-    generate_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, MEMBER_ALICE).unwrap();
-    store_member_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB, vec![0x22; 32]).unwrap();
-    store_member_sender_key_core(&conn, ACCOUNT_ALICE, "member-keep", vec![0x33; 32]).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
+    store_member_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB, DEVICE_BOB, vec![0x22; 32])
+        .unwrap();
+    store_member_sender_key_core(
+        &conn,
+        ACCOUNT_ALICE,
+        "member-keep",
+        DEVICE_KEEP,
+        vec![0x33; 32],
+    )
+    .unwrap();
 
     // And another account has a sender key with an overlapping member id
-    generate_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_BOB, MEMBER_BOB).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ACCOUNT_BOB, MEMBER_BOB, DEVICE_BOB).unwrap();
 
     // When deleting Alice's obsolete direct-room member sender keys
     let deleted = delete_sender_keys_core(
@@ -867,10 +1015,10 @@ fn delete_sender_keys_only_removes_requested_account_member_rows() {
 
     // Then only those sender_keys rows are removed
     assert_eq!(deleted, 2);
-    assert!(!has_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_ALICE).unwrap());
-    assert!(!has_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB).unwrap());
-    assert!(has_sender_key_core(&conn, ACCOUNT_ALICE, "member-keep").unwrap());
-    assert!(has_sender_key_core(&conn, ACCOUNT_BOB, MEMBER_BOB).unwrap());
+    assert!(!has_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap());
+    assert!(!has_sender_key_core(&conn, ACCOUNT_ALICE, MEMBER_BOB, DEVICE_BOB).unwrap());
+    assert!(has_sender_key_core(&conn, ACCOUNT_ALICE, "member-keep", DEVICE_KEEP).unwrap());
+    assert!(has_sender_key_core(&conn, ACCOUNT_BOB, MEMBER_BOB, DEVICE_BOB).unwrap());
 
     // And non-sender-key E2EE/auth material remains intact
     assert!(has_identity_keys_core(&conn, ACCOUNT_ALICE).unwrap());
@@ -891,14 +1039,14 @@ fn clear_e2ee_keys_removes_all() {
     setup_identity(&conn, ALICE);
     generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
     replenish_otp_keys_core(&conn, &ZERO_KEY, ALICE, 3).unwrap();
-    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
 
     // When clearing all E2EE keys
     clear_e2ee_keys_core(&conn, ALICE).unwrap();
 
     // Then all keys are gone
     assert!(!has_identity_keys_core(&conn, ALICE).unwrap());
-    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap());
+    assert!(!has_sender_key_core(&conn, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap());
 }
 
 #[test]
@@ -1011,7 +1159,7 @@ fn bootstrap_preserves_otp_and_sender_keys_on_ik_recovery() {
     setup_identity(&conn, ALICE);
     generate_signed_pre_key_core(&conn, &ZERO_KEY, ALICE, 1).unwrap();
     replenish_otp_keys_core(&conn, &ZERO_KEY, ALICE, 3).unwrap();
-    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE).unwrap();
+    generate_sender_key_core(&conn, &ZERO_KEY, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap();
 
     // When: bootstrap with a different key (IK is corrupted → recovery path)
     let wrong_key = [2u8; 32];
@@ -1030,7 +1178,7 @@ fn bootstrap_preserves_otp_and_sender_keys_on_ik_recovery() {
         "OTP key_id=1 should survive bootstrap recovery"
     );
     assert!(
-        has_sender_key_core(&conn, ALICE, MEMBER_ALICE).unwrap(),
+        has_sender_key_core(&conn, ALICE, MEMBER_ALICE, DEVICE_ALICE).unwrap(),
         "Sender key should survive bootstrap recovery"
     );
 }

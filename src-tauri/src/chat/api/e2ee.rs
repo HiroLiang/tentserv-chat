@@ -21,7 +21,9 @@ impl ChatApiClient {
         device_id: &str,
     ) -> Result<CountOTPPreKeysResponse, String> {
         self.client
-            .get(self.url(&format!("/api/e2ee/otp-prekeys/count?device_id={device_id}")))
+            .get(self.url(&format!(
+                "/api/e2ee/otp-prekeys/count?device_id={device_id}"
+            )))
             .send()
             .await
             .map_err(|err| format!("request otp count failed: {err}"))?
@@ -169,6 +171,132 @@ impl ChatApiClient {
             .map_err(|err| format!("consume sender key distribution returned error: {err}"))?;
         Ok(())
     }
+
+    pub async fn get_self_sender_key_sync(&self) -> Result<GetSelfSenderKeySyncResponse, String> {
+        self.client
+            .get(self.url("/api/e2ee/self-sender-key-sync"))
+            .send()
+            .await
+            .map_err(|err| format!("request self sender key sync failed: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("self sender key sync returned error: {err}"))?
+            .json::<GetSelfSenderKeySyncResponse>()
+            .await
+            .map_err(|err| format!("decode self sender key sync failed: {err}"))
+    }
+
+    pub async fn mark_self_sender_key_sync_uploaded(
+        &self,
+    ) -> Result<GetSelfSenderKeySyncResponse, String> {
+        self.client
+            .post(self.url("/api/e2ee/self-sender-key-sync/uploaded"))
+            .send()
+            .await
+            .map_err(|err| format!("request uploaded self sender key sync failed: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("uploaded self sender key sync returned error: {err}"))?
+            .json::<GetSelfSenderKeySyncResponse>()
+            .await
+            .map_err(|err| format!("decode uploaded self sender key sync failed: {err}"))
+    }
+
+    pub async fn bulk_self_sender_key_sync_distributions(
+        &self,
+        request: &BulkSelfSenderKeySyncDistributionsRequest,
+    ) -> Result<BulkSelfSenderKeySyncDistributionsResponse, String> {
+        self.client
+            .post(self.url("/api/e2ee/self-sender-key-sync/distributions/bulk"))
+            .json(request)
+            .send()
+            .await
+            .map_err(|err| {
+                format!("request bulk self sender key sync distributions failed: {err}")
+            })?
+            .error_for_status()
+            .map_err(|err| {
+                format!("bulk self sender key sync distributions returned error: {err}")
+            })?
+            .json::<BulkSelfSenderKeySyncDistributionsResponse>()
+            .await
+            .map_err(|err| format!("decode bulk self sender key sync distributions failed: {err}"))
+    }
+
+    pub async fn get_pending_self_sender_key_sync_distributions(
+        &self,
+    ) -> Result<GetPendingSelfSenderKeySyncDistributionsResponse, String> {
+        self.client
+            .get(self.url("/api/e2ee/self-sender-key-sync/distributions/pending"))
+            .send()
+            .await
+            .map_err(|err| {
+                format!("request pending self sender key sync distributions failed: {err}")
+            })?
+            .error_for_status()
+            .map_err(|err| {
+                format!("pending self sender key sync distributions returned error: {err}")
+            })?
+            .json::<GetPendingSelfSenderKeySyncDistributionsResponse>()
+            .await
+            .map_err(|err| {
+                format!("decode pending self sender key sync distributions failed: {err}")
+            })
+    }
+
+    pub async fn consume_self_sender_key_sync_distribution(
+        &self,
+        distribution_id: i64,
+        status: &str,
+    ) -> Result<(), String> {
+        self.client
+            .post(self.url(&format!(
+                "/api/e2ee/self-sender-key-sync/distributions/{distribution_id}/consume"
+            )))
+            .json(&ConsumeSelfSenderKeySyncDistributionRequest {
+                status: status.to_string(),
+            })
+            .send()
+            .await
+            .map_err(|err| {
+                format!("request consume self sender key sync distribution failed: {err}")
+            })?
+            .error_for_status()
+            .map_err(|err| {
+                format!("consume self sender key sync distribution returned error: {err}")
+            })?;
+        Ok(())
+    }
+
+    pub async fn complete_self_sender_key_sync(
+        &self,
+    ) -> Result<GetSelfSenderKeySyncResponse, String> {
+        self.client
+            .post(self.url("/api/e2ee/self-sender-key-sync/complete"))
+            .send()
+            .await
+            .map_err(|err| format!("request complete self sender key sync failed: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("complete self sender key sync returned error: {err}"))?
+            .json::<GetSelfSenderKeySyncResponse>()
+            .await
+            .map_err(|err| format!("decode completed self sender key sync failed: {err}"))
+    }
+
+    pub async fn fail_self_sender_key_sync(
+        &self,
+        request: &FailSelfSenderKeySyncRequest,
+    ) -> Result<GetSelfSenderKeySyncResponse, String> {
+        self.client
+            .post(self.url("/api/e2ee/self-sender-key-sync/fail"))
+            .json(request)
+            .send()
+            .await
+            .map_err(|err| format!("request fail self sender key sync failed: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("fail self sender key sync returned error: {err}"))?
+            .json::<GetSelfSenderKeySyncResponse>()
+            .await
+            .map_err(|err| format!("decode failed self sender key sync failed: {err}"))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -225,19 +353,26 @@ pub struct UploadSenderKeyRequest {
 pub struct CreateSenderKeyRequestRequest {
     pub room_id: i64,
     pub provider_member_id: i64,
+    pub provider_device_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requester_device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq, Hash)]
+pub struct SenderKeyDeviceRefResponse {
+    pub member_id: i64,
+    pub device_id: String,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct GetSenderKeyDistributionStatusResponse {
-    pub own_sender_key_exists: bool,
-    pub requestable_member_ids: Vec<i64>,
-    pub available_from_member_ids: Vec<i64>,
-    pub available_to_member_ids: Vec<i64>,
-    pub pending_receivers: Vec<i64>,
-    pub pending_from_members: Vec<i64>,
+    pub own_device_sender_key_exists: bool,
+    pub requestable_sources: Vec<SenderKeyDeviceRefResponse>,
+    pub available_from_sources: Vec<SenderKeyDeviceRefResponse>,
+    pub available_to_targets: Vec<SenderKeyDeviceRefResponse>,
+    pub pending_receivers: Vec<SenderKeyDeviceRefResponse>,
+    pub pending_from_sources: Vec<SenderKeyDeviceRefResponse>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -250,13 +385,82 @@ pub struct GetPendingSenderKeyDistributionsResponse {
 pub struct PendingSenderKeyDistributionItemResponse {
     pub distribution_id: i64,
     pub sender_member_id: i64,
+    pub sender_device_id: String,
     pub receiver_member_id: i64,
+    pub receiver_device_id: String,
     pub sender_key_version: i64,
     pub distribution_message: String,
-    pub receiver_device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConsumeSenderKeyDistributionRequest {
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FailSelfSenderKeySyncRequest {
+    pub last_error: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SelfSenderKeySyncDistributionItemRequest {
+    pub sender_member_id: i64,
+    pub sender_device_id: String,
+    pub sender_key_version: i64,
+    pub distribution_message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BulkSelfSenderKeySyncDistributionsRequest {
+    pub items: Vec<SelfSenderKeySyncDistributionItemRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkSelfSenderKeySyncDistributionsResponse {
+    pub count: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PendingSelfSenderKeySyncDistributionItemResponse {
+    pub distribution_id: i64,
+    pub sender_member_id: i64,
+    pub sender_device_id: String,
+    pub sender_key_version: i64,
+    pub distribution_message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GetPendingSelfSenderKeySyncDistributionsResponse {
+    pub distributions: Vec<PendingSelfSenderKeySyncDistributionItemResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConsumeSelfSenderKeySyncDistributionRequest {
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct GetSelfSenderKeySyncResponse {
+    pub exists: bool,
+    pub status: String,
+    pub requester_device: Option<SelfSenderKeySyncDeviceResponse>,
+    pub provider_device: Option<SelfSenderKeySyncDeviceResponse>,
+    pub requester_current_device: bool,
+    pub provider_current_device: bool,
+    pub last_error: Option<String>,
+    pub requested_at_ms: Option<i64>,
+    pub provider_claimed_at_ms: Option<i64>,
+    pub uploaded_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+    pub failed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SelfSenderKeySyncDeviceResponse {
+    pub device_id: String,
+    pub device_name: String,
+    pub platform: String,
+    pub last_ip: Option<String>,
+    pub binding_status: Option<String>,
 }

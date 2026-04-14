@@ -9,12 +9,14 @@ use crate::chat::ws::IncomingChatMessagePayload;
 use crate::chat::{ChatMessageSnapshot, ChatRuntimeSession};
 
 use super::rooms::resolve_current_member_id_snapshot;
+use super::sender_keys::normal_sender_key_ops_allowed;
 
 pub const WAITING_FOR_SENDER_KEY_SENTINEL: &str = "__E2EE_WAITING_KEY__";
 
 struct OutgoingMessageContent {
     encoded_content: String,
     cache_bytes: Vec<u8>,
+    sender_key_version: i64,
 }
 
 pub async fn send_message(
@@ -34,6 +36,7 @@ pub async fn send_message(
         OutgoingMessageContent {
             encoded_content: content.to_string(),
             cache_bytes: content.as_bytes().to_vec(),
+            sender_key_version: 0,
         }
     };
 
@@ -45,6 +48,8 @@ pub async fn send_message(
             client_message_id: client_message_id.to_string(),
             server_message_id: None,
             sender_id: current_member_id,
+            sender_device_id: session.device_id.clone(),
+            sender_key_version: content.sender_key_version,
             encrypted_content: content.cache_bytes.clone(),
             message_type: message_type.to_string(),
             created_at: created_at.to_string(),
@@ -58,6 +63,7 @@ pub async fn send_message(
                 message_type: message_type.to_string(),
                 content: content.encoded_content,
                 reply_to_id: None,
+                sender_key_version: content.sender_key_version,
             },
         )
         .await?;
@@ -104,6 +110,8 @@ pub async fn handle_incoming_chat_message(
             client_message_id: client_message_id.clone(),
             server_message_id: Some(payload.message_id),
             sender_id: payload.sender_id,
+            sender_device_id: payload.sender_device_id.clone(),
+            sender_key_version: payload.sender_key_version,
             encrypted_content: encrypted_bytes,
             message_type: payload.message_type.clone(),
             created_at: payload.created_at.clone(),
@@ -116,7 +124,10 @@ pub async fn handle_incoming_chat_message(
         api,
         payload.room_id,
         payload.sender_id,
+        &payload.sender_device_id,
+        payload.sender_key_version,
         &payload.content,
+        true,
     )
     .await?;
 
@@ -124,6 +135,8 @@ pub async fn handle_incoming_chat_message(
         client_message_id,
         message_id: Some(payload.message_id),
         sender_id: payload.sender_id,
+        sender_device_id: payload.sender_device_id,
+        sender_key_version: payload.sender_key_version,
         r#type: payload.message_type,
         content,
         reply_to_id: payload.reply_to_id,
@@ -137,9 +150,15 @@ pub async fn handle_incoming_chat_message(
     };
     store::save_or_update_message(app, session.account_id, payload.room_id, &message)?;
 
-    let current_member_id = store::load_room_snapshot(app, session.account_id, payload.room_id, None, None)?
-        .and_then(|room| resolve_current_member_id_snapshot(participant_id, &room.members));
-    if should_increment_unread(current_member_id, active_room_id, payload.room_id, payload.sender_id) {
+    let current_member_id =
+        store::load_room_snapshot(app, session.account_id, payload.room_id, None, None)?
+            .and_then(|room| resolve_current_member_id_snapshot(participant_id, &room.members));
+    if should_increment_unread(
+        current_member_id,
+        active_room_id,
+        payload.room_id,
+        payload.sender_id,
+    ) {
         let snapshot = store::load_rooms_snapshot(app, session.account_id)?;
         let unread_count = snapshot
             .rooms
@@ -175,18 +194,32 @@ pub(super) async fn decrypt_messages(
                 client_message_id: client_message_id.clone(),
                 server_message_id: Some(message.message_id),
                 sender_id: message.sender_id,
+                sender_device_id: message.sender_device_id.clone(),
+                sender_key_version: message.sender_key_version,
                 encrypted_content: message.content.as_bytes().to_vec(),
                 message_type: message.message_type.clone(),
                 created_at: message.created_at.clone(),
             },
         )?;
-        let content = decrypt_message_content(app, session, api, room_id, message.sender_id, &message.content)
-            .await
-            .unwrap_or_else(|_| message.content.clone());
+        let content = decrypt_message_content(
+            app,
+            session,
+            api,
+            room_id,
+            message.sender_id,
+            &message.sender_device_id,
+            message.sender_key_version,
+            &message.content,
+            true,
+        )
+        .await
+        .unwrap_or_else(|_| message.content.clone());
         out.push(ChatMessageSnapshot {
             client_message_id,
             message_id: Some(message.message_id),
             sender_id: message.sender_id,
+            sender_device_id: message.sender_device_id,
+            sender_key_version: message.sender_key_version,
             r#type: message.message_type,
             content,
             reply_to_id: message.reply_to_id,
@@ -208,7 +241,10 @@ pub async fn decrypt_message_content(
     api: &ChatApiClient,
     room_id: i64,
     sender_member_id: i64,
+    sender_device_id: &str,
+    sender_key_version: i64,
     content: &str,
+    request_on_missing: bool,
 ) -> Result<String, String> {
     if !content.starts_with("e2ee:v1:") {
         return Ok(content.to_string());
@@ -225,25 +261,38 @@ pub async fn decrypt_message_content(
         app,
         session.account_id,
         sender_member_id,
+        sender_device_id,
+        sender_key_version,
         &combined[12..],
         &combined[..12],
     )? {
-        crate::commands::core::SenderKeyDecryptResult::Ok { plaintext } => String::from_utf8(plaintext)
-            .map_err(|err| format!("decode decrypted chat message utf8 failed: {err}")),
+        crate::commands::core::SenderKeyDecryptResult::Ok { plaintext } => {
+            String::from_utf8(plaintext)
+                .map_err(|err| format!("decode decrypted chat message utf8 failed: {err}"))
+        }
         crate::commands::core::SenderKeyDecryptResult::MissingKey
         | crate::commands::core::SenderKeyDecryptResult::StaleKey => {
-            log::warn!(
-                "chat runtime sync: sender key missing or stale room_id={} sender_member_id={}, creating request",
-                room_id,
-                sender_member_id
-            );
-            let _ = api
-                .create_sender_key_request(&CreateSenderKeyRequestRequest {
+            if request_on_missing && normal_sender_key_ops_allowed(app, session, api).await {
+                log::warn!(
+                    "chat runtime sync: sender key missing or stale room_id={} sender_member_id={}, creating request",
                     room_id,
-                    provider_member_id: sender_member_id,
-                    requester_device_id: None,
-                })
-                .await;
+                    sender_member_id
+                );
+                let _ = api
+                    .create_sender_key_request(&CreateSenderKeyRequestRequest {
+                        room_id,
+                        provider_member_id: sender_member_id,
+                        provider_device_id: sender_device_id.to_string(),
+                        requester_device_id: Some(session.device_id.clone()),
+                    })
+                    .await;
+            } else {
+                log::info!(
+                    "chat runtime sync: sender key missing or stale but normal sender key ops are blocked room_id={} sender_member_id={}",
+                    room_id,
+                    sender_member_id
+                );
+            }
             Ok(WAITING_FOR_SENDER_KEY_SENTINEL.to_string())
         }
     }
@@ -259,6 +308,7 @@ fn encrypt_message_content(
         app,
         session.account_id,
         current_member_id,
+        &session.device_id,
         plaintext.as_bytes(),
     )?;
 
@@ -268,6 +318,7 @@ fn encrypt_message_content(
     Ok(OutgoingMessageContent {
         cache_bytes: encoded_content.as_bytes().to_vec(),
         encoded_content,
+        sender_key_version: encrypted.sender_key_version,
     })
 }
 

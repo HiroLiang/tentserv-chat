@@ -1,7 +1,6 @@
 import { type ClipboardEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { cn } from "@/lib/utils.ts";
-import { userService } from "@/services/userService.ts";
 import { toast } from "sonner";
 import type { PendingVerificationState } from "@/types/user.ts";
 import {
@@ -13,8 +12,17 @@ import {
 interface VerificationCodeDialogProps {
     session: PendingVerificationState | null;
     onSessionChange: (session: PendingVerificationState) => void;
+    onSubmit: (payload: { token: string; code: string }) => Promise<unknown>;
+    onResend: (token: string) => Promise<{
+        verification_token: string;
+        verification_expires_at_ms: number;
+    }>;
     onVerified: () => void;
     onFailed: () => void;
+    title?: string;
+    description?: string;
+    resendSuccessMessage?: string;
+    exhaustedErrorMessage?: string;
 }
 
 function emptyDigits(): string[] {
@@ -32,8 +40,14 @@ function pastedDigits(text: string) {
 export const VerificationCodeDialog = ({
     session,
     onSessionChange,
+    onSubmit,
+    onResend,
     onVerified,
     onFailed,
+    title,
+    description,
+    resendSuccessMessage = "A new verification code has been sent.",
+    exhaustedErrorMessage = "Verification failed",
 }: VerificationCodeDialogProps) => {
     const [digits, setDigits] = useState<string[]>(emptyDigits);
     const [now, setNow] = useState(() => Date.now());
@@ -96,7 +110,7 @@ export const VerificationCodeDialog = ({
         void (async () => {
             setIsSubmitting(true);
             try {
-                await userService.verifyEmail({
+                await onSubmit({
                     token: session.verificationToken,
                     code: verificationCode,
                 });
@@ -113,12 +127,19 @@ export const VerificationCodeDialog = ({
                 }
 
                 if (err?.code === "VERIFY_ATTEMPTS_EXCEEDED") {
-                    toast.error("Registration failed");
+                    toast.error(exhaustedErrorMessage);
                     onFailed();
                     return;
                 }
 
-                setErrorMessage(err instanceof Error ? err.message : "Verification failed");
+                if (err?.code === "TOKEN_INVALID") {
+                    toast.error("Verification code expired. Please request a new code.");
+                    onFailed();
+                    return;
+                }
+
+                toast.error("Unable to verify this code right now. Please try again.");
+                setErrorMessage("Unable to verify this code right now. Please try again.");
             } finally {
                 setIsSubmitting(false);
             }
@@ -195,13 +216,13 @@ export const VerificationCodeDialog = ({
 
         setIsResending(true);
         try {
-            const response = await userService.resendVerifyEmail(session.verificationToken);
+            const response = await onResend(session.verificationToken);
             onSessionChange({
                 ...session,
                 verificationToken: response.verification_token,
                 verificationExpiresAtMs: response.verification_expires_at_ms,
             });
-            toast.success("A new verification code has been sent.");
+            toast.success(resendSuccessMessage);
         } catch {
             toast.error("Failed to resend verification code");
         } finally {
@@ -219,6 +240,17 @@ export const VerificationCodeDialog = ({
                 aria-label="Verification code"
             >
                 <div className="space-y-4">
+                    {(title || description) && (
+                        <div className="space-y-1 text-left">
+                            {title && (
+                                <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+                            )}
+                            {description && (
+                                <p className="text-sm text-muted-foreground">{description}</p>
+                            )}
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-6 gap-2 sm:gap-3">
                         {digits.map((digit, index) => (
                             <input

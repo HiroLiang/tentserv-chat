@@ -7,6 +7,6 @@ pub use rooms::{
     handle_presence_changed, resolve_current_member_id_snapshot, sync_room, sync_rooms,
 };
 pub use sender_keys::{
-    handle_sender_key_distribution_available, handle_sender_key_needed, refresh_self_sender_key_sync_state,
-    replenish_otp_if_needed,
+    handle_self_sender_key_sync_state_changed, handle_sender_key_distribution_available,
+    handle_sender_key_needed, refresh_self_sender_key_sync_state, replenish_otp_if_needed,
 };

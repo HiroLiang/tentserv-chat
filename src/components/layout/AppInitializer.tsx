@@ -12,6 +12,7 @@ import { userService } from "@/services/userService.ts";
 import { chatService } from "@/services/chatService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { toast } from "sonner";
+import { SelfSenderKeySyncDialogs } from "@/components/layout/SelfSenderKeySyncDialogs.tsx";
 
 type InitStatus = 'loading' | 'ready' | 'error';
 
@@ -103,7 +104,12 @@ export const AppInitializer = ({ children }: Props) => {
 
     return (
         <>
-            {status === 'ready' ? children : null}
+            {status === 'ready' ? (
+                <>
+                    {children}
+                    <SelfSenderKeySyncDialogs />
+                </>
+            ) : null}
             {status !== 'ready' && (
                 <Overlay
                     status={status}

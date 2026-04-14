@@ -5,7 +5,9 @@ export interface AuthLoginRequest {
 }
 
 export interface AuthLoginResponse {
-    message?: string;
+    login_status: 'authenticated' | 'device_verification_required';
+    verification_token?: string;
+    verification_expires_at_ms?: number;
 }
 
 export interface AuthRegisterRequest {
@@ -13,6 +15,7 @@ export interface AuthRegisterRequest {
     email: string;
     name: string;
     password: string;
+    confirm_password: string;
 }
 
 export interface AuthRegisterResponse {
@@ -30,6 +33,24 @@ export interface AuthVerifyEmailResponse {
 export interface AuthVerifyEmailRequest {
     token: string;
     code: string;
+}
+
+export interface AuthVerifyLoginDeviceRequest {
+    token: string;
+    code: string;
+}
+
+export interface AuthVerifyLoginDeviceResponse {
+    login_status: 'authenticated';
+}
+
+export interface AuthResendLoginDeviceVerificationRequest {
+    token: string;
+}
+
+export interface AuthResendLoginDeviceVerificationResponse {
+    verification_token: string;
+    verification_expires_at_ms: number;
 }
 
 export interface AuthResendVerifyEmailRequest {
@@ -216,6 +237,8 @@ export interface GetMessagesResponse {
 export interface MessageDto {
     message_id: number;
     sender_id: number;
+    sender_device_id: string;
+    sender_key_version: number;
     type: 'text' | 'image' | 'file';
     content: string;
     reply_to_id?: number;
@@ -232,6 +255,8 @@ export interface SendMessageRequest {
 export interface SendMessageResponse {
     message_id: number;
     sender_id: number;
+    sender_device_id: string;
+    sender_key_version: number;
     type: string;
     content: string;
     reply_to_id?: number;
@@ -335,6 +360,7 @@ export interface GetKeyBundleResponse {
 export interface UploadSenderKeyRequest {
     room_id: number;
     receiver_member_id: number;
+    receiver_device_id?: string;
     sender_key_version: number;
     distribution_message: string; // base64
 }
@@ -347,24 +373,33 @@ export interface GetSenderKeysResponse {
     }[];
 }
 
+export interface SenderKeyDeviceRef {
+    member_id: number;
+    device_id: string;
+}
+
 export interface GetSenderKeyDistributionStatusResponse {
-    own_sender_key_exists: boolean; // whether my latest sender key exists on the server
-    requestable_member_ids: number[];
-    available_from_member_ids: number[];
-    available_to_member_ids: number[];
-    pending_receivers: number[];    // member IDs who need a fresh upload of my latest key
-    pending_from_members: number[]; // member IDs whose key I haven't fetched yet
+    own_device_sender_key_exists: boolean;
+    requestable_sources: SenderKeyDeviceRef[];
+    available_from_sources: SenderKeyDeviceRef[];
+    available_to_targets: SenderKeyDeviceRef[];
+    pending_receivers: SenderKeyDeviceRef[];
+    pending_from_sources: SenderKeyDeviceRef[];
 }
 
 export interface CreateSenderKeyRequestRequest {
     room_id: number;
     provider_member_id: number;
+    provider_device_id: string;
+    requester_device_id?: string;
 }
 
 export interface PendingSenderKeyDistributionItem {
     distribution_id: number;
     sender_member_id: number;
+    sender_device_id: string;
     receiver_member_id: number;
+    receiver_device_id?: string;
     sender_key_version: number;
     distribution_message: string;
 }
@@ -377,21 +412,84 @@ export interface ConsumeSenderKeyDistributionRequest {
     status: 'consumed' | 'failed';
 }
 
+export interface SelfSenderKeySyncDistributionUploadItem {
+    sender_member_id: number;
+    sender_device_id: string;
+    sender_key_version: number;
+    distribution_message: string;
+}
+
+export interface BulkSelfSenderKeySyncDistributionsRequest {
+    items: SelfSenderKeySyncDistributionUploadItem[];
+}
+
+export interface BulkSelfSenderKeySyncDistributionsResponse {
+    count: number;
+}
+
+export interface PendingSelfSenderKeySyncDistributionItem {
+    distribution_id: number;
+    sender_member_id: number;
+    sender_device_id: string;
+    sender_key_version: number;
+    distribution_message: string;
+}
+
+export interface GetPendingSelfSenderKeySyncDistributionsResponse {
+    distributions: PendingSelfSenderKeySyncDistributionItem[];
+}
+
+export interface ConsumeSelfSenderKeySyncDistributionRequest {
+    status: 'consumed' | 'failed';
+}
+
 // ── E2EE WebSocket Payloads ────────────────────────────────────────────────────
 
 export interface SenderKeyNeededPayload {
     room_id: number;
     provider_member_id: number;
+    provider_device_id: string;
     requester_member_id: number;
     requester_user_id: number;
+    requester_device_id?: string;
 }
 
 export interface SenderKeyDistributionAvailablePayload {
     room_id: number;
     distribution_id: number;
     sender_member_id: number;
+    sender_device_id: string;
     receiver_member_id: number;
     sender_key_version: number;
+    receiver_device_id?: string;
+}
+
+export interface SelfSenderKeySyncDevice {
+    device_id: string;
+    device_name: string;
+    platform: string;
+    last_ip?: string;
+    binding_status?: string;
+}
+
+export interface GetSelfSenderKeySyncResponse {
+    exists: boolean;
+    status: 'idle' | 'pending_provider' | 'syncing' | 'uploaded' | 'completed' | 'failed';
+    requester_device?: SelfSenderKeySyncDevice;
+    provider_device?: SelfSenderKeySyncDevice;
+    requester_current_device: boolean;
+    provider_current_device: boolean;
+    last_error?: string;
+    requested_at_ms?: number;
+    provider_claimed_at_ms?: number;
+    uploaded_at_ms?: number;
+    completed_at_ms?: number;
+    failed_at_ms?: number;
+}
+
+export interface FailSelfSenderKeySyncRequest {
+    last_error: string;
+    retryable: boolean;
 }
 
 export interface PresenceUserStatusChangedPayload {

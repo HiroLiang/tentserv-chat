@@ -1,14 +1,16 @@
+use chrono::Utc;
+
 use crate::chat::api::{
     ChatApiClient, GetMyRoomInvitationResponse, GetUserRoomsResponse, RoomDetailResponse,
     RoomMemberResponse, RoomSummaryResponse,
 };
 use crate::chat::store;
 use crate::chat::{
-    ChatInvitationSnapshot, ChatMemberSnapshot, ChatMessageSnapshot, ChatRoomSnapshot,
-    ChatRoomSummarySnapshot, ChatRoomsSections, ChatRuntimeSession,
+    ChatInvitationSnapshot, ChatMemberSnapshot, ChatMessageSnapshot, ChatRoomSnapshot, ChatRoomSummarySnapshot,
+    ChatRoomsSections, ChatRuntimeSession,
 };
 
-use super::messages::{decrypt_message_content, decrypt_messages};
+use super::messages::{decrypt_message_content, decrypt_messages, WAITING_FOR_SENDER_KEY_SENTINEL};
 use super::sender_keys::reconcile_room_sender_keys;
 
 #[derive(Debug, Clone)]
@@ -152,15 +154,7 @@ async fn decrypt_room_summaries(
 ) -> Result<Vec<ChatRoomSummarySnapshot>, String> {
     let mut result = Vec::with_capacity(rooms.len());
     for room in rooms {
-        let latest_message = match (&room.latest_message, room.latest_message_sender_id) {
-            (Some(message), Some(sender_member_id)) => Some(
-                decrypt_message_content(app, session, api, room.room_id, sender_member_id, message)
-                    .await
-                    .unwrap_or_else(|_| message.clone()),
-            ),
-            (Some(message), None) => Some(message.clone()),
-            _ => None,
-        };
+        let latest_message = resolve_room_summary_latest_message(app, session, api, &room).await?;
 
         result.push(ChatRoomSummarySnapshot {
             room_id: room.room_id,
@@ -172,8 +166,11 @@ async fn decrypt_room_summaries(
             last_seen_at: room.last_seen_at,
             status: room.status,
             latest_message,
+            latest_message_id: room.latest_message_id,
             latest_message_created_at: room.latest_message_created_at,
             latest_message_sender_id: room.latest_message_sender_id,
+            latest_message_sender_device_id: room.latest_message_sender_device_id,
+            latest_message_sender_key_version: room.latest_message_sender_key_version,
             unread_count: room.unread_count,
             blocked_by_peer: room.blocked_by_peer.unwrap_or(false),
             blocked_by_me: room.blocked_by_me.unwrap_or(false),
@@ -195,6 +192,139 @@ async fn decrypt_room_summaries(
         right_key.cmp(&left_key)
     });
     Ok(result)
+}
+
+async fn resolve_room_summary_latest_message(
+    app: &tauri::AppHandle,
+    session: &ChatRuntimeSession,
+    api: &ChatApiClient,
+    room: &RoomSummaryResponse,
+) -> Result<Option<String>, String> {
+    let Some(latest_message) = room.latest_message.as_ref() else {
+        return Ok(None);
+    };
+
+    if !latest_message.starts_with("e2ee:v1:") {
+        return Ok(Some(latest_message.clone()));
+    }
+
+    if let Some(message_id) = room.latest_message_id {
+        if let Some(local_message) = store::load_room_message_by_server_message_id(
+            app,
+            session.account_id,
+            room.room_id,
+            message_id,
+        )? {
+            if local_message.content != WAITING_FOR_SENDER_KEY_SENTINEL {
+                return Ok(Some(local_message.content));
+            }
+        }
+    }
+
+    let Some(sender_member_id) = room.latest_message_sender_id else {
+        return Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()));
+    };
+    let Some(sender_device_id) = room.latest_message_sender_device_id.as_deref() else {
+        return Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()));
+    };
+    let Some(sender_key_version) = room.latest_message_sender_key_version else {
+        return Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()));
+    };
+
+    if let Some(message_id) = room.latest_message_id {
+        let created_at = room
+            .latest_message_created_at
+            .clone()
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+        let _ = store::save_encrypted_message(
+            app,
+            &store::EncryptedChatMessageRecord {
+                account_id: session.account_id,
+                room_id: room.room_id,
+                client_message_id: format!("server:{message_id}"),
+                server_message_id: Some(message_id),
+                sender_id: sender_member_id,
+                sender_device_id: sender_device_id.to_string(),
+                sender_key_version,
+                encrypted_content: latest_message.as_bytes().to_vec(),
+                message_type: "text".to_string(),
+                created_at,
+            },
+        );
+    }
+
+    match decrypt_message_content(
+        app,
+        session,
+        api,
+        room.room_id,
+        sender_member_id,
+        sender_device_id,
+        sender_key_version,
+        latest_message,
+        true,
+    )
+    .await
+    {
+        Ok(content) => {
+            cache_decrypted_room_summary_message(app, session, room, &content)?;
+            Ok(Some(content))
+        }
+        Err(error) => {
+            log::warn!(
+                "chat runtime sync: failed to decrypt room summary preview room_id={} message_id={:?} error={}",
+                room.room_id,
+                room.latest_message_id,
+                error
+            );
+            Ok(Some(WAITING_FOR_SENDER_KEY_SENTINEL.to_string()))
+        }
+    }
+}
+
+fn cache_decrypted_room_summary_message(
+    app: &tauri::AppHandle,
+    session: &ChatRuntimeSession,
+    room: &RoomSummaryResponse,
+    content: &str,
+) -> Result<(), String> {
+    let Some(message_id) = room.latest_message_id else {
+        return Ok(());
+    };
+    let Some(sender_member_id) = room.latest_message_sender_id else {
+        return Ok(());
+    };
+    let Some(sender_device_id) = room.latest_message_sender_device_id.as_ref() else {
+        return Ok(());
+    };
+
+    let created_at = room
+        .latest_message_created_at
+        .clone()
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+    store::save_or_update_message(
+        app,
+        session.account_id,
+        room.room_id,
+        &ChatMessageSnapshot {
+            client_message_id: format!("server:{message_id}"),
+            message_id: Some(message_id),
+            sender_id: sender_member_id,
+            sender_device_id: sender_device_id.clone(),
+            sender_key_version: room.latest_message_sender_key_version.unwrap_or_default(),
+            r#type: "text".to_string(),
+            content: content.to_string(),
+            reply_to_id: None,
+            is_edited: false,
+            is_deleted: false,
+            created_at: created_at.clone(),
+            sort_key: store::sort_key_from_created_at(&created_at),
+            delivery_status: "sent".to_string(),
+            delivery_error: None,
+            is_local_echo: false,
+        },
+    )
 }
 
 fn build_room_snapshot(

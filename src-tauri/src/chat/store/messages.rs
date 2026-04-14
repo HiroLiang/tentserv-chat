@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::chat::store::models::{DEFAULT_PAGE_LIMIT, EncryptedChatMessageRecord, RetryChatMessageRecord};
+use crate::chat::store::models::{
+    EncryptedChatMessageRecord, RetryChatMessageRecord, DEFAULT_PAGE_LIMIT,
+};
 use crate::chat::ChatMessageSnapshot;
 use crate::store::db::open_db;
 
@@ -13,7 +15,7 @@ pub fn load_retry_message(
     let conn = open_db(app)?;
     conn.query_row(
         r#"
-        SELECT client_message_id, server_message_id, sender_id, message_type, content,
+        SELECT client_message_id, server_message_id, sender_id, sender_device_id, sender_key_version, message_type, content,
                reply_to_id, is_edited, is_deleted, created_at, sort_key,
                delivery_status, delivery_error, is_local_echo, room_id
         FROM chat_messages
@@ -26,18 +28,20 @@ pub fn load_retry_message(
                     client_message_id: row.get(0)?,
                     message_id: row.get(1)?,
                     sender_id: row.get(2)?,
-                    r#type: row.get(3)?,
-                    content: row.get(4)?,
-                    reply_to_id: row.get(5)?,
-                    is_edited: row.get::<_, i64>(6)? != 0,
-                    is_deleted: row.get::<_, i64>(7)? != 0,
-                    created_at: row.get(8)?,
-                    sort_key: row.get(9)?,
-                    delivery_status: row.get(10)?,
-                    delivery_error: row.get(11)?,
-                    is_local_echo: row.get::<_, i64>(12)? != 0,
+                    sender_device_id: row.get(3)?,
+                    sender_key_version: row.get(4)?,
+                    r#type: row.get(5)?,
+                    content: row.get(6)?,
+                    reply_to_id: row.get(7)?,
+                    is_edited: row.get::<_, i64>(8)? != 0,
+                    is_deleted: row.get::<_, i64>(9)? != 0,
+                    created_at: row.get(10)?,
+                    sort_key: row.get(11)?,
+                    delivery_status: row.get(12)?,
+                    delivery_error: row.get(13)?,
+                    is_local_echo: row.get::<_, i64>(14)? != 0,
                 },
-                room_id: row.get::<_, i64>(13)?,
+                room_id: row.get::<_, i64>(15)?,
             })
         },
     )
@@ -71,14 +75,16 @@ pub fn save_encrypted_message(
     conn.execute(
         r#"
         INSERT INTO chat_messages_encrypted (
-            account_id, room_id, client_message_id, server_message_id, sender_id, encrypted_content,
-            message_type, created_at, received_at
+            account_id, room_id, client_message_id, server_message_id, sender_id, sender_device_id,
+            sender_key_version, encrypted_content, message_type, created_at, received_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch())
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())
         ON CONFLICT(account_id, client_message_id) DO UPDATE SET
             room_id = excluded.room_id,
             server_message_id = COALESCE(excluded.server_message_id, chat_messages_encrypted.server_message_id),
             sender_id = excluded.sender_id,
+            sender_device_id = excluded.sender_device_id,
+            sender_key_version = excluded.sender_key_version,
             encrypted_content = excluded.encrypted_content,
             message_type = excluded.message_type,
             created_at = excluded.created_at,
@@ -90,6 +96,8 @@ pub fn save_encrypted_message(
             target_client_message_id,
             record.server_message_id,
             record.sender_id,
+            record.sender_device_id,
+            record.sender_key_version,
             record.encrypted_content,
             record.message_type,
             record.created_at,
@@ -130,7 +138,12 @@ pub fn link_encrypted_message_server_id(
             received_at = unixepoch()
         WHERE account_id = ?1 AND room_id = ?2 AND client_message_id = ?3
         "#,
-        params![account_id, room_id, target_client_message_id, server_message_id],
+        params![
+            account_id,
+            room_id,
+            target_client_message_id,
+            server_message_id
+        ],
     )
     .map_err(|err| format!("link encrypted chat message failed: {err}"))?;
     Ok(())
@@ -144,6 +157,46 @@ pub fn save_or_update_message(
 ) -> Result<(), String> {
     let conn = open_db(app)?;
     upsert_chat_message(&conn, account_id, room_id, message)
+}
+
+pub fn load_room_message_by_server_message_id(
+    app: &tauri::AppHandle,
+    account_id: i64,
+    room_id: i64,
+    server_message_id: i64,
+) -> Result<Option<ChatMessageSnapshot>, String> {
+    let conn = open_db(app)?;
+    conn.query_row(
+        r#"
+        SELECT client_message_id, server_message_id, sender_id, sender_device_id, sender_key_version,
+               message_type, content, reply_to_id, is_edited, is_deleted, created_at, sort_key,
+               delivery_status, delivery_error, is_local_echo
+        FROM chat_messages
+        WHERE account_id = ?1 AND room_id = ?2 AND server_message_id = ?3
+        "#,
+        params![account_id, room_id, server_message_id],
+        |row| {
+            Ok(ChatMessageSnapshot {
+                client_message_id: row.get(0)?,
+                message_id: row.get(1)?,
+                sender_id: row.get(2)?,
+                sender_device_id: row.get(3)?,
+                sender_key_version: row.get(4)?,
+                r#type: row.get(5)?,
+                content: row.get(6)?,
+                reply_to_id: row.get(7)?,
+                is_edited: row.get::<_, i64>(8)? != 0,
+                is_deleted: row.get::<_, i64>(9)? != 0,
+                created_at: row.get(10)?,
+                sort_key: row.get(11)?,
+                delivery_status: row.get(12)?,
+                delivery_error: row.get(13)?,
+                is_local_echo: row.get::<_, i64>(14)? != 0,
+            })
+        },
+    )
+    .optional()
+    .map_err(|err| format!("query room message by server_message_id failed: {err}"))
 }
 
 pub fn update_message_delivery(
@@ -214,8 +267,9 @@ pub(super) fn load_room_messages(
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT client_message_id, server_message_id, sender_id, message_type, content, reply_to_id,
-                   is_edited, is_deleted, created_at, sort_key, delivery_status, delivery_error, is_local_echo
+            SELECT client_message_id, server_message_id, sender_id, sender_device_id, sender_key_version,
+                   message_type, content, reply_to_id, is_edited, is_deleted, created_at, sort_key,
+                   delivery_status, delivery_error, is_local_echo
             FROM chat_messages
             WHERE account_id = ?1 AND room_id = ?2 AND (?3 IS NULL OR sort_key < ?3)
             ORDER BY sort_key DESC
@@ -225,23 +279,28 @@ pub(super) fn load_room_messages(
         .map_err(|err| format!("prepare load room messages failed: {err}"))?;
 
     let rows = stmt
-        .query_map(params![account_id, room_id, before_sort_key, limit], |row| {
-            Ok(ChatMessageSnapshot {
-                client_message_id: row.get(0)?,
-                message_id: row.get(1)?,
-                sender_id: row.get(2)?,
-                r#type: row.get(3)?,
-                content: row.get(4)?,
-                reply_to_id: row.get(5)?,
-                is_edited: row.get::<_, i64>(6)? != 0,
-                is_deleted: row.get::<_, i64>(7)? != 0,
-                created_at: row.get(8)?,
-                sort_key: row.get(9)?,
-                delivery_status: row.get(10)?,
-                delivery_error: row.get(11)?,
-                is_local_echo: row.get::<_, i64>(12)? != 0,
-            })
-        })
+        .query_map(
+            params![account_id, room_id, before_sort_key, limit],
+            |row| {
+                Ok(ChatMessageSnapshot {
+                    client_message_id: row.get(0)?,
+                    message_id: row.get(1)?,
+                    sender_id: row.get(2)?,
+                    sender_device_id: row.get(3)?,
+                    sender_key_version: row.get(4)?,
+                    r#type: row.get(5)?,
+                    content: row.get(6)?,
+                    reply_to_id: row.get(7)?,
+                    is_edited: row.get::<_, i64>(8)? != 0,
+                    is_deleted: row.get::<_, i64>(9)? != 0,
+                    created_at: row.get(10)?,
+                    sort_key: row.get(11)?,
+                    delivery_status: row.get(12)?,
+                    delivery_error: row.get(13)?,
+                    is_local_echo: row.get::<_, i64>(14)? != 0,
+                })
+            },
+        )
         .map_err(|err| format!("query room messages failed: {err}"))?;
 
     let mut out = Vec::new();
@@ -308,14 +367,16 @@ pub(super) fn upsert_chat_message(
     conn.execute(
         r#"
         INSERT INTO chat_messages (
-            account_id, room_id, client_message_id, server_message_id, sender_id, message_type,
-            content, reply_to_id, is_edited, is_deleted, created_at, sort_key,
+            account_id, room_id, client_message_id, server_message_id, sender_id, sender_device_id,
+            sender_key_version, message_type, content, reply_to_id, is_edited, is_deleted, created_at, sort_key,
             delivery_status, delivery_error, is_local_echo, updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, unixepoch())
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, unixepoch())
         ON CONFLICT(account_id, client_message_id) DO UPDATE SET
             server_message_id = COALESCE(excluded.server_message_id, chat_messages.server_message_id),
             sender_id = excluded.sender_id,
+            sender_device_id = excluded.sender_device_id,
+            sender_key_version = excluded.sender_key_version,
             message_type = excluded.message_type,
             content = excluded.content,
             reply_to_id = excluded.reply_to_id,
@@ -334,6 +395,8 @@ pub(super) fn upsert_chat_message(
             target_client_message_id,
             message.message_id,
             message.sender_id,
+            message.sender_device_id,
+            message.sender_key_version,
             message.r#type,
             message.content,
             message.reply_to_id,
@@ -351,11 +414,14 @@ pub(super) fn upsert_chat_message(
     conn.execute(
         r#"
         UPDATE chat_rooms
-        SET latest_message = ?3,
-            latest_message_created_at = ?4,
-            latest_message_sender_id = ?5,
-            unread_count = CASE WHEN ?6 = 'sent' THEN unread_count ELSE unread_count END,
-            sort_order = MAX(sort_order, ?7),
+        SET latest_message = CASE WHEN sort_order <= ?8 OR latest_message_created_at IS NULL THEN ?3 ELSE latest_message END,
+            latest_message_id = CASE WHEN sort_order <= ?8 OR latest_message_created_at IS NULL THEN ?4 ELSE latest_message_id END,
+            latest_message_created_at = CASE WHEN sort_order <= ?8 OR latest_message_created_at IS NULL THEN ?5 ELSE latest_message_created_at END,
+            latest_message_sender_id = CASE WHEN sort_order <= ?8 OR latest_message_created_at IS NULL THEN ?6 ELSE latest_message_sender_id END,
+            latest_message_sender_device_id = CASE WHEN sort_order <= ?8 OR latest_message_created_at IS NULL THEN ?7 ELSE latest_message_sender_device_id END,
+            latest_message_sender_key_version = CASE WHEN sort_order <= ?8 OR latest_message_created_at IS NULL THEN ?9 ELSE latest_message_sender_key_version END,
+            unread_count = CASE WHEN ?10 = 'sent' THEN unread_count ELSE unread_count END,
+            sort_order = MAX(sort_order, ?8),
             updated_at = unixepoch()
         WHERE account_id = ?1 AND room_id = ?2
         "#,
@@ -363,10 +429,13 @@ pub(super) fn upsert_chat_message(
             account_id,
             room_id,
             message.content,
+            message.message_id,
             message.created_at,
             message.sender_id,
-            message.delivery_status,
+            message.sender_device_id,
             sort_key,
+            message.sender_key_version,
+            message.delivery_status,
         ],
     )
     .map_err(|err| format!("update latest message from chat message failed: {err}"))?;

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useChatStore } from "./chatStore.ts";
 import {
-    LATEST_MESSAGE_FALLBACK,
     WAITING_FOR_PEER_KEY_LABEL,
     WAITING_FOR_SENDER_KEY_SENTINEL,
 } from "@/utils/chatCopy.ts";
@@ -28,6 +27,8 @@ const message = (overrides: Partial<Message>): Message => ({
     client_message_id: overrides.client_message_id ?? `client-${overrides.message_id ?? overrides.sort_key ?? 1}`,
     message_id: overrides.message_id ?? null,
     sender_id: overrides.sender_id ?? 1,
+    sender_device_id: overrides.sender_device_id ?? "device-1",
+    sender_key_version: overrides.sender_key_version ?? 0,
     type: overrides.type ?? "text",
     content: overrides.content ?? "",
     reply_to_id: overrides.reply_to_id,
@@ -173,7 +174,7 @@ describe("chatStore room activity ordering", () => {
         });
     });
 
-    it("keeps non-direct waiting sender-key previews on the generic fallback", () => {
+    it("humanizes waiting sender-key previews for every room type", () => {
         useChatStore.getState().setRooms({
             direct: [],
             group: [
@@ -202,10 +203,113 @@ describe("chatStore room activity ordering", () => {
         const state = useChatStore.getState();
         expect(state.messages[13][0]?.content).toBe(WAITING_FOR_SENDER_KEY_SENTINEL);
         expect(state.rooms.group[0]).toMatchObject({
-            latest_message: LATEST_MESSAGE_FALLBACK,
+            latest_message: WAITING_FOR_PEER_KEY_LABEL,
             latest_message_sender_id: 203,
             latest_message_created_at: "2026-04-12T06:00:00Z",
             unread_count: 0,
+        });
+    });
+
+    it("normalizes waiting previews coming directly from snapshot updates", () => {
+        useChatStore.getState().setRooms({
+            direct: [{
+                room_id: 14,
+                room_type: "direct",
+                display_name: "Mizi Liang",
+                latest_message: WAITING_FOR_SENDER_KEY_SENTINEL,
+                latest_message_created_at: "2026-04-12T06:30:00Z",
+                unread_count: 0,
+            }],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+
+        expect(useChatStore.getState().rooms.direct[0]?.latest_message).toBe(WAITING_FOR_PEER_KEY_LABEL);
+    });
+
+    it("preserves a previously decrypted preview when a later snapshot regresses to waiting for the same message", () => {
+        const store = useChatStore.getState();
+        store.setRooms({
+            direct: [{
+                room_id: 16,
+                room_type: "direct",
+                display_name: "Bell",
+                latest_message: "Decrypted hello",
+                latest_message_id: 501,
+                latest_message_created_at: "2026-04-12T06:45:00Z",
+                latest_message_sender_id: 9001,
+                latest_message_sender_device_id: "device-bell-1",
+                latest_message_sender_key_version: 1776091234000,
+                unread_count: 0,
+            }],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+
+        store.setRooms({
+            direct: [{
+                room_id: 16,
+                room_type: "direct",
+                display_name: "Bell",
+                latest_message: WAITING_FOR_SENDER_KEY_SENTINEL,
+                latest_message_id: 501,
+                latest_message_created_at: "2026-04-12T06:45:00Z",
+                latest_message_sender_id: 9001,
+                latest_message_sender_device_id: "device-bell-1",
+                latest_message_sender_key_version: 1776091234000,
+                unread_count: 0,
+            }],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            latest_message: "Decrypted hello",
+            latest_message_id: 501,
+            latest_message_sender_device_id: "device-bell-1",
+            latest_message_sender_key_version: 1776091234000,
+        });
+    });
+
+    it("keeps the previous direct room identity when a later snapshot is missing display fields", () => {
+        const store = useChatStore.getState();
+        store.setRooms({
+            direct: [{
+                room_id: 15,
+                room_type: "direct",
+                display_name: "Mizi Liang",
+                avatar_url: "avatars/mizi.png",
+                latest_message: "hello",
+                latest_message_created_at: "2026-04-12T01:00:00Z",
+                unread_count: 0,
+            }],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+
+        store.setRooms({
+            direct: [{
+                room_id: 15,
+                room_type: "direct",
+                display_name: "",
+                latest_message: "",
+                latest_message_created_at: "2026-04-12T02:00:00Z",
+                unread_count: 1,
+            }],
+            group: [],
+            channel: [],
+            bot: [],
+        });
+
+        expect(useChatStore.getState().rooms.direct[0]).toMatchObject({
+            display_name: "Mizi Liang",
+            avatar_url: "avatars/mizi.png",
+            latest_message: "hello",
+            unread_count: 1,
         });
     });
 
@@ -233,6 +337,46 @@ describe("chatStore room activity ordering", () => {
         }));
 
         expect(useChatStore.getState().rooms.direct[0]?.unread_count).toBe(4);
+    });
+
+    it("preserves the structured self sender key sync snapshot when later sync-state updates only include status fields", () => {
+        const store = useChatStore.getState();
+        store.setSyncState({
+            ws_status: "idle",
+            pending_business_jobs: 0,
+            pending_sync_jobs: 0,
+            self_sender_key_sync_status: "pending_provider",
+            self_sender_key_sync_error: null,
+            self_sender_key_sync: {
+                exists: true,
+                status: "pending_provider",
+                requester_current_device: true,
+                provider_current_device: false,
+                requester_device: {
+                    device_id: "device-new",
+                    device_name: "Hiro's New Mac",
+                    platform: "macos",
+                },
+            },
+        });
+
+        store.setSyncState({
+            ws_status: "connected",
+            pending_business_jobs: 0,
+            pending_sync_jobs: 0,
+            self_sender_key_sync_status: "syncing",
+            self_sender_key_sync_error: null,
+            self_sender_key_sync: null,
+        });
+
+        expect(useChatStore.getState().syncState?.self_sender_key_sync).toMatchObject({
+            exists: true,
+            status: "syncing",
+            requester_current_device: true,
+            requester_device: {
+                device_id: "device-new",
+            },
+        });
     });
 
     it("deduplicates a pending local row with the later server-backed row using the server message id", () => {

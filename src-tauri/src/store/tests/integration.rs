@@ -24,6 +24,8 @@ use std::time::Instant;
 use tempfile::TempDir;
 
 const ZERO_KEY: [u8; 32] = [0u8; 32];
+const DEVICE_ALICE: &str = "device-alice";
+const DEVICE_BOB: &str = "device-bob";
 
 /// Open a fresh temp SQLite DB with the full production schema.
 fn test_db() -> (TempDir, Connection) {
@@ -190,20 +192,29 @@ fn scenario_4_sender_keys_own_and_peer_coexist() {
     let alice_key: [u8; 32] = [0x01u8; 32];
     let bob_key: [u8; 32] = [0x02u8; 32];
 
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &alice_key, 0)
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_alice",
+        DEVICE_ALICE,
+        &alice_key,
+        0,
+    )
+    .unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", DEVICE_BOB, &bob_key, 0)
         .unwrap();
-    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &bob_key, 0).unwrap();
 
-    assert!(has_sender_key_inner(&conn, "alice", "m_alice").unwrap());
-    assert!(has_sender_key_inner(&conn, "alice", "m_bob").unwrap());
-    assert!(!has_sender_key_inner(&conn, "alice", "m_carol").unwrap());
+    assert!(has_sender_key_inner(&conn, "alice", "m_alice", DEVICE_ALICE).unwrap());
+    assert!(has_sender_key_inner(&conn, "alice", "m_bob", DEVICE_BOB).unwrap());
+    assert!(!has_sender_key_inner(&conn, "alice", "m_carol", DEVICE_BOB).unwrap());
 
     assert_eq!(
-        load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice").unwrap(),
+        load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", DEVICE_ALICE).unwrap(),
         alice_key
     );
     assert_eq!(
-        load_peer_sender_key_inner(&conn, "alice", "m_bob").unwrap(),
+        load_peer_sender_key_inner(&conn, "alice", "m_bob", DEVICE_BOB).unwrap(),
         bob_key
     );
 }

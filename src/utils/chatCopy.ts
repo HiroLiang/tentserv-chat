@@ -1,17 +1,20 @@
 import type { PresenceStatus, RoomType } from '@/types/chat.ts';
 
 export const WAITING_FOR_SENDER_KEY_SENTINEL = '__E2EE_WAITING_KEY__';
+export const WAITING_FOR_SENDER_KEY_LABEL = 'Waiting for peer key';
 export const LATEST_MESSAGE_FALLBACK = 'New message';
-export const WAITING_FOR_PEER_KEY_LABEL = 'Waiting for the other person\'s key...';
-export const DIRECT_ROOM_WAITING_TITLE = 'Setting up secure chat...';
-export const DIRECT_ROOM_WAITING_HINT = 'This usually finishes automatically in a few moments.';
+export const WAITING_FOR_PEER_KEY_LABEL = WAITING_FOR_SENDER_KEY_LABEL;
+export const DIRECT_ROOM_WAITING_TITLE = 'Finishing secure setup...';
+export const DIRECT_ROOM_WAITING_HINT = 'You\'ll be able to chat as soon as your keys finish syncing.';
 export const CHAT_RUNTIME_DEGRADED_MESSAGE = 'Live updates are temporarily delayed. Chats will keep refreshing automatically.';
 export const CHAT_RUNTIME_UNAVAILABLE_MESSAGE = 'Chat is unavailable right now.';
 export const DIRECT_ROOM_ONLINE_LABEL = 'Online';
 export const DIRECT_ROOM_OFFLINE_LABEL = 'Offline';
 
 export function getWaitingForSenderKeyPreview(roomType: RoomType, fallback: string): string {
-    return roomType === 'direct' ? WAITING_FOR_PEER_KEY_LABEL : fallback;
+    void roomType;
+    void fallback;
+    return WAITING_FOR_SENDER_KEY_LABEL;
 }
 
 export function normalizeRoomSummaryPreview(roomType: RoomType, latestMessage: string): string {
@@ -19,6 +22,41 @@ export function normalizeRoomSummaryPreview(roomType: RoomType, latestMessage: s
         return latestMessage;
     }
     return getWaitingForSenderKeyPreview(roomType, LATEST_MESSAGE_FALLBACK);
+}
+
+export function resolveRoomDisplayName(roomType: RoomType, displayName?: string): string {
+    if (displayName && displayName.trim().length > 0) {
+        return displayName.trim();
+    }
+
+    switch (roomType) {
+        case 'direct':
+            return 'Direct chat';
+        case 'group':
+            return 'Group chat';
+        case 'channel':
+            return 'Channel';
+        case 'bot':
+        default:
+            return 'Assistant';
+    }
+}
+
+export function formatSelfSenderKeySyncStatusLabel(status?: string): string {
+    switch (status) {
+        case 'pending_provider':
+            return 'Waiting for a trusted device';
+        case 'syncing':
+            return 'Uploading secure keys';
+        case 'uploaded':
+            return 'Downloading secure history';
+        case 'completed':
+            return 'Ready';
+        case 'failed':
+            return 'Needs attention';
+        default:
+            return 'Checking secure sync';
+    }
 }
 
 export function formatDirectPresenceLabel(status?: PresenceStatus, lastSeenAt?: string, now = new Date()): string {

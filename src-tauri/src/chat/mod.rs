@@ -44,7 +44,33 @@ pub struct ChatSyncState {
     pub last_active_room_sync_at: Option<String>,
     pub self_sender_key_sync_status: String,
     pub self_sender_key_sync_error: Option<String>,
+    pub self_sender_key_sync: Option<ChatSelfSenderKeySyncState>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatSelfSenderKeySyncDevice {
+    pub device_id: String,
+    pub device_name: String,
+    pub platform: String,
+    pub last_ip: Option<String>,
+    pub binding_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatSelfSenderKeySyncState {
+    pub exists: bool,
+    pub status: String,
+    pub requester_device: Option<ChatSelfSenderKeySyncDevice>,
+    pub provider_device: Option<ChatSelfSenderKeySyncDevice>,
+    pub requester_current_device: bool,
+    pub provider_current_device: bool,
+    pub last_error: Option<String>,
+    pub requested_at_ms: Option<i64>,
+    pub provider_claimed_at_ms: Option<i64>,
+    pub uploaded_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+    pub failed_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -58,8 +84,11 @@ pub struct ChatRoomSummarySnapshot {
     pub last_seen_at: Option<String>,
     pub status: Option<String>,
     pub latest_message: Option<String>,
+    pub latest_message_id: Option<i64>,
     pub latest_message_created_at: Option<String>,
     pub latest_message_sender_id: Option<i64>,
+    pub latest_message_sender_device_id: Option<String>,
+    pub latest_message_sender_key_version: Option<i64>,
     pub unread_count: i64,
     pub blocked_by_peer: bool,
     pub blocked_by_me: bool,
@@ -94,6 +123,8 @@ pub struct ChatMessageSnapshot {
     pub client_message_id: String,
     pub message_id: Option<i64>,
     pub sender_id: i64,
+    pub sender_device_id: String,
+    pub sender_key_version: i64,
     pub r#type: String,
     pub content: String,
     pub reply_to_id: Option<i64>,

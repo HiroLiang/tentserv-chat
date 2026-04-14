@@ -47,6 +47,8 @@ export interface SenderKeyEncryptedMessage {
 
 export interface SenderKeyState {
     member_id: string;
+    device_id: string;
+    key_scope: 'own' | 'peer';
     is_own_key: boolean;
     sender_key_version: number;
     updated_at: number;

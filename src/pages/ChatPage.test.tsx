@@ -7,6 +7,8 @@ import { useUserStore } from "@/stores/userStore.ts";
 import {
     CHAT_RUNTIME_DEGRADED_MESSAGE,
     CHAT_RUNTIME_UNAVAILABLE_MESSAGE,
+    WAITING_FOR_PEER_KEY_LABEL,
+    WAITING_FOR_SENDER_KEY_SENTINEL,
 } from "@/utils/chatCopy.ts";
 import { ChatPage } from "./ChatPage.tsx";
 
@@ -15,7 +17,20 @@ vi.mock("@/components/layout/Navbar.tsx", () => ({
 }));
 
 vi.mock("@/components/chat/ChatSidebar.tsx", () => ({
-    ChatSidebar: () => <div data-testid="chat-sidebar" />,
+    ChatSidebar: ({
+        chatGroups,
+    }: {
+        chatGroups: Record<string, Array<{ id: string; name: string; lastMessage?: string }>>;
+    }) => (
+        <div data-testid="chat-sidebar">
+            {Object.values(chatGroups).flat().map((chat) => (
+                <div key={chat.id}>
+                    <span>{chat.name}</span>
+                    {chat.lastMessage && <span>{chat.lastMessage}</span>}
+                </div>
+            ))}
+        </div>
+    ),
 }));
 
 vi.mock("@/components/chat/ChatRoom.tsx", () => ({
@@ -189,6 +204,8 @@ describe("ChatPage room selection", () => {
                     client_message_id: "local-9001",
                     message_id: 9001,
                     sender_id: 1002,
+                    sender_device_id: "device-bell-1",
+                    sender_key_version: 1776090000000,
                     type: "text",
                     content: "hello",
                     is_edited: false,
@@ -213,6 +230,100 @@ describe("ChatPage room selection", () => {
         expect(chatRoom).toHaveAttribute("data-last-seen-at", "2026-04-12T02:03:04Z");
         expect(chatRoom).toHaveAttribute("data-peer-user-id", "2");
         expect(screen.getByTestId("message-avatar-url")).toHaveTextContent("avatars/bell.png");
+    });
+
+    it("keeps friendly direct room names and humanized waiting previews in the sidebar", async () => {
+        useChatStore.setState({
+            rooms: {
+                direct: [{
+                    room_id: 77,
+                    room_type: "direct",
+                    display_name: "Mizi Liang",
+                    latest_message: WAITING_FOR_SENDER_KEY_SENTINEL,
+                    latest_message_id: 92,
+                    latest_message_created_at: "2026-04-12T05:00:00Z",
+                    latest_message_sender_id: 202,
+                    latest_message_sender_device_id: "device-mizi-1",
+                    latest_message_sender_key_version: 1776090000092,
+                    unread_count: 0,
+                }],
+                group: [],
+                channel: [],
+                bot: [],
+            },
+            messages: {
+                77: [{
+                    client_message_id: "local:77:1",
+                    sender_id: 2001,
+                    sender_device_id: "device-mizi-1",
+                    sender_key_version: 1776090000092,
+                    type: "text",
+                    content: WAITING_FOR_SENDER_KEY_SENTINEL,
+                    is_edited: false,
+                    is_deleted: false,
+                    created_at: "2026-04-12T05:00:00Z",
+                    sort_key: Date.parse("2026-04-12T05:00:00Z"),
+                    delivery_status: "sent",
+                }],
+            },
+        });
+
+        render(
+            <MemoryRouter initialEntries={["/chat"]}>
+                <ChatPage />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByText("Mizi Liang")).toBeInTheDocument();
+        expect(screen.getByText(WAITING_FOR_PEER_KEY_LABEL)).toBeInTheDocument();
+    });
+
+    it("uses the locally decrypted latest message preview when it matches the summary message id", async () => {
+        useChatStore.setState({
+            rooms: {
+                direct: [{
+                    room_id: 78,
+                    room_type: "direct",
+                    display_name: "Bell",
+                    latest_message: WAITING_FOR_SENDER_KEY_SENTINEL,
+                    latest_message_id: 5001,
+                    latest_message_created_at: "2026-04-12T02:00:00Z",
+                    latest_message_sender_id: 2002,
+                    latest_message_sender_device_id: "device-bell-1",
+                    latest_message_sender_key_version: 1776090000500,
+                    unread_count: 0,
+                }],
+                group: [],
+                channel: [],
+                bot: [],
+            },
+            messages: {
+                78: [{
+                    client_message_id: "server:5001",
+                    message_id: 5001,
+                    sender_id: 2002,
+                    sender_device_id: "device-bell-1",
+                    sender_key_version: 1776090000500,
+                    type: "text",
+                    content: "Decrypted preview from local store",
+                    is_edited: false,
+                    is_deleted: false,
+                    created_at: "2026-04-12T02:00:00Z",
+                    sort_key: Date.parse("2026-04-12T02:00:00Z"),
+                    delivery_status: "sent",
+                }],
+            },
+        });
+
+        render(
+            <MemoryRouter initialEntries={["/chat"]}>
+                <ChatPage />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByText("Bell")).toBeInTheDocument();
+        expect(screen.getByText("Decrypted preview from local store")).toBeInTheDocument();
+        expect(screen.queryByText(WAITING_FOR_PEER_KEY_LABEL)).not.toBeInTheDocument();
     });
 
     it("shows a chat unavailable message when the runtime failed to start", async () => {

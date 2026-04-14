@@ -9,6 +9,8 @@ import { chatService } from "@/services/chatService.ts";
 import { e2eeService } from "@/services/e2eeService.ts";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { logger } from "@/utils/logger.ts";
+import { VerificationCodeDialog } from "@/components/auth/VerificationCodeDialog.tsx";
+import type { PendingVerificationState } from "@/types/user.ts";
 
 export const LoginPage = () => {
     const navigate = useNavigate();
@@ -17,6 +19,41 @@ export const LoginPage = () => {
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
+    const [pendingVerification, setPendingVerification] = useState<PendingVerificationState | null>(null);
+
+    const completeAuthenticatedLogin = async () => {
+        const deviceId = useDeviceStore.getState().deviceId ?? undefined;
+        const bootstrapReady = deviceId
+            ? await e2eeService.ensureSessionBootstrap(deviceId)
+            : false;
+
+        if (bootstrapReady) {
+            await chatService.initialize().catch(err => {
+                logger.warn('Chat runtime initialization failed on login', err);
+            });
+        }
+        navigate("/");
+    };
+
+    const finalizeVerifiedLogin = () => {
+        setPendingVerification(null);
+        setIsLoading(true);
+        setError('');
+
+        void (async () => {
+            try {
+                await userService.hydrateAuthenticatedSession();
+                toast.success("Device verified successfully.");
+                await completeAuthenticatedLogin();
+            } catch (err) {
+                logger.error('Device verification post-authentication flow failed', err);
+                setError('Failed to finish signing in on this device.');
+                toast.error("Device verified, but we couldn't finish signing you in.");
+            } finally {
+                setIsLoading(false);
+            }
+        })();
+    };
 
     const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -24,21 +61,19 @@ export const LoginPage = () => {
         setError('');
 
         try {
-            // Try to sign in
             const response = await userService.login(identifier, password);
-            toast.success(response.message ?? "Login successfully");
-
-            const deviceId = useDeviceStore.getState().deviceId ?? undefined;
-            const bootstrapReady = deviceId
-                ? await e2eeService.ensureSessionBootstrap(deviceId)
-                : false;
-
-            if (bootstrapReady) {
-                await chatService.initialize().catch(err => {
-                    logger.warn('Chat runtime initialization failed on login', err);
+            if (response.loginStatus === 'device_verification_required') {
+                toast.success("Verification code sent to your email.");
+                setPendingVerification({
+                    kind: 'device_login',
+                    verificationToken: response.verificationToken ?? '',
+                    verificationExpiresAtMs: response.verificationExpiresAtMs ?? 0,
                 });
+                return;
             }
-            navigate("/");
+
+            toast.success("Login successfully");
+            await completeAuthenticatedLogin();
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Login failed';
             setError(message);
@@ -142,6 +177,17 @@ export const LoginPage = () => {
                     </div>
                 </div>
             </div>
+            <VerificationCodeDialog
+                session={pendingVerification}
+                onSessionChange={setPendingVerification}
+                onSubmit={({ token, code }) => userService.verifyLoginDevice({ token, code })}
+                onResend={(token) => userService.resendLoginDeviceVerification(token)}
+                onVerified={finalizeVerifiedLogin}
+                onFailed={() => setPendingVerification(null)}
+                title="Verify this device"
+                description="Enter the 6-digit code from your login security email to finish signing in on this device."
+                exhaustedErrorMessage="Device verification failed"
+            />
         </>
     );
 }

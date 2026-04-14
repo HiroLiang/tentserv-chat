@@ -6,23 +6,25 @@
 //! - **Identity keys** (`ik_dh` X25519, `ik_sign` Ed25519) — generated once per account
 //! - **Signed pre-key (SPK)** — X25519, signed by `ik_sign`, rotated periodically
 //! - **One-time pre-keys (OPK)** — batch X25519 keys consumed once per X3DH exchange
-//! - **Sender keys** — per-(local account, member_id) keys for group message encryption
+//! - **Sender keys** — per-(local account, member_id, device_id) keys for room encryption
 //!
 //! ## Sender key semantics
-//! Sender keys are keyed by `(local account_id, member_id)`.  `room_id` is not used because
-//! `member_id` (`chat_members.id`) is a globally unique sequence PK.
-//! - **Own key** (`is_private=1`): the caller's key, stored encrypted.
-//! - **Peer key** (`is_private=0`): another participant's public key, stored plaintext.
+//! Sender keys are keyed by `(local account_id, member_id, device_id)`. `room_id` is not used
+//! because `member_id` (`chat_members.id`) is a globally unique sequence PK while `device_id`
+//! identifies the actual sender device.
+//! - **Own key** (`key_scope='own'`): the caller's current-device key, stored encrypted.
+//! - **Peer key** (`key_scope='peer'`): another device's sender key, stored plaintext.
 
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use crate::commands::core::{
     bootstrap_local_e2ee_keys_core, clear_e2ee_keys_core, consume_sender_key_distribution_core,
-    decrypt_with_sender_key_result_core, delete_sender_keys_core, encrypt_with_sender_key_core,
-    generate_identity_keys_core, generate_sender_key_core, generate_signed_pre_key_core,
-    get_identity_keys_core, get_sender_key_states_core, get_signed_pre_key_core,
-    has_identity_keys_core, has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
+    consume_sender_key_distribution_for_member_core, decrypt_with_sender_key_result_core,
+    delete_sender_keys_core, encrypt_with_sender_key_core, generate_identity_keys_core,
+    generate_sender_key_core, generate_signed_pre_key_core, get_identity_keys_core,
+    get_sender_key_states_core, get_signed_pre_key_core, has_identity_keys_core,
+    has_sender_key_core, perform_x3dh_receive_core, perform_x3dh_send_core,
     prepare_sender_key_distribution_core, replenish_otp_keys_core, store_member_sender_key_core,
     validate_e2ee_key_material_core, validate_identity_keys_core, validate_signed_pre_key_core,
     ConsumeSenderKeyDistributionResult, PreparedSenderKeyDistribution, SenderKeyDecryptResult,
@@ -62,11 +64,14 @@ pub struct SenderKeyBundle {
 pub struct SenderKeyEncryptedMessage {
     pub ciphertext: Vec<u8>,
     pub nonce: [u8; 12],
+    pub sender_key_version: i64,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct SenderKeyStatePayload {
     pub member_id: String,
+    pub device_id: String,
+    pub key_scope: String,
     pub is_own_key: bool,
     pub sender_key_version: i64,
     pub updated_at: i64,
@@ -238,21 +243,23 @@ pub async fn generate_sender_key(
     app: tauri::AppHandle,
     account_id: String,
     member_id: String,
+    device_id: String,
 ) -> Result<SenderKeyBundle, String> {
     let conn = open_db(&app)?;
     let key = get_or_create_master_key(&app, &account_id)?;
-    generate_sender_key_core(&conn, &key, &account_id, &member_id)
+    generate_sender_key_core(&conn, &key, &account_id, &member_id, &device_id)
 }
 
-/// Return `true` if a sender key exists for `(account_id, member_id)`.
+/// Return `true` if a sender key exists for `(account_id, member_id, device_id)`.
 #[tauri::command]
 pub fn has_sender_key(
     app: tauri::AppHandle,
     account_id: String,
     member_id: String,
+    device_id: String,
 ) -> Result<bool, String> {
     let conn = open_db(&app)?;
-    has_sender_key_core(&conn, &account_id, &member_id)
+    has_sender_key_core(&conn, &account_id, &member_id, &device_id)
 }
 
 #[tauri::command]
@@ -267,6 +274,8 @@ pub fn get_sender_key_states(
         .into_iter()
         .map(|state| SenderKeyStatePayload {
             member_id: state.member_id,
+            device_id: state.device_id,
+            key_scope: state.key_scope,
             is_own_key: state.is_own_key,
             sender_key_version: state.sender_key_version,
             updated_at: state.updated_at,
@@ -293,10 +302,11 @@ pub async fn store_member_sender_key(
     app: tauri::AppHandle,
     account_id: String,
     member_id: String,
+    device_id: String,
     key_bytes: Vec<u8>,
 ) -> Result<(), String> {
     let conn = open_db(&app)?;
-    store_member_sender_key_core(&conn, &account_id, &member_id, key_bytes)
+    store_member_sender_key_core(&conn, &account_id, &member_id, &device_id, key_bytes)
 }
 
 #[tauri::command]
@@ -304,6 +314,7 @@ pub async fn prepare_sender_key_distribution(
     app: tauri::AppHandle,
     account_id: String,
     own_member_id: String,
+    own_device_id: String,
     requester_bundle: PublicKeyBundle,
 ) -> Result<PreparedSenderKeyDistributionPayload, String> {
     let conn = open_db(&app)?;
@@ -313,6 +324,7 @@ pub async fn prepare_sender_key_distribution(
         &key,
         &account_id,
         &own_member_id,
+        &own_device_id,
         &requester_bundle,
     )?;
     Ok(PreparedSenderKeyDistributionPayload {
@@ -326,19 +338,36 @@ pub async fn consume_sender_key_distribution(
     app: tauri::AppHandle,
     account_id: String,
     sender_member_id: String,
+    sender_device_id: String,
+    receiver_member_id: Option<String>,
+    receiver_device_id: Option<String>,
     distribution_message: Vec<u8>,
     sender_key_version: i64,
 ) -> Result<ConsumeSenderKeyDistributionPayload, String> {
     let conn = open_db(&app)?;
     let key = get_or_create_master_key(&app, &account_id)?;
-    let result = consume_sender_key_distribution_core(
-        &conn,
-        &key,
-        &account_id,
-        &sender_member_id,
-        &distribution_message,
-        sender_key_version,
-    )?;
+    let result = match receiver_member_id.as_deref() {
+        Some(receiver_member_id) => consume_sender_key_distribution_for_member_core(
+            &conn,
+            &key,
+            &account_id,
+            &sender_member_id,
+            &sender_device_id,
+            Some(receiver_member_id),
+            receiver_device_id.as_deref(),
+            &distribution_message,
+            sender_key_version,
+        )?,
+        None => consume_sender_key_distribution_core(
+            &conn,
+            &key,
+            &account_id,
+            &sender_member_id,
+            &sender_device_id,
+            &distribution_message,
+            sender_key_version,
+        )?,
+    };
     let status = match result {
         ConsumeSenderKeyDistributionResult::Consumed => "consumed",
         ConsumeSenderKeyDistributionResult::Stale => "stale",
@@ -355,20 +384,22 @@ pub async fn encrypt_with_sender_key(
     app: tauri::AppHandle,
     account_id: String,
     member_id: String,
+    device_id: String,
     plaintext: Vec<u8>,
 ) -> Result<SenderKeyEncryptedMessage, String> {
     let conn = open_db(&app)?;
     let key = get_or_create_master_key(&app, &account_id)?;
-    encrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &plaintext)
+    encrypt_with_sender_key_core(&conn, &key, &account_id, &member_id, &device_id, &plaintext)
 }
 
-/// Decrypt `ciphertext` using the sender key for `member_id`.
-/// Handles both peer messages (`is_private=0`) and own messages returning from the server (`is_private=1`).
+/// Decrypt `ciphertext` using the sender key for `(member_id, device_id, sender_key_version)`.
 #[tauri::command]
 pub async fn decrypt_with_sender_key(
     app: tauri::AppHandle,
     account_id: String,
     member_id: String,
+    device_id: String,
+    sender_key_version: i64,
     ciphertext: Vec<u8>,
     nonce: Vec<u8>,
 ) -> Result<DecryptSenderKeyPayload, String> {
@@ -379,6 +410,8 @@ pub async fn decrypt_with_sender_key(
         &key,
         &account_id,
         &member_id,
+        &device_id,
+        sender_key_version,
         &ciphertext,
         &nonce,
     )?;

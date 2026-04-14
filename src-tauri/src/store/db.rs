@@ -20,6 +20,11 @@
 //! - 3: `user_tokens` primary key column renamed from `user_id` to `account_id`
 //! - 4: `sender_keys` gains `sender_key_version` for sender-key state reconciliation
 //! - 5: add chat runtime read model tables for local-first rooms/messages sync
+//! - 6: rebuild chat runtime message tables for stable local/server dedup
+//! - 7: sender keys become device-scoped and chat runtime messages persist
+//!      `sender_device_id` + `sender_key_version`
+//! - 8: chat room summaries persist latest-message metadata needed for
+//!      local preview decrypt (`latest_message_id`, sender device, sender key version)
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -136,26 +141,28 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
         );
 
         -- ── Sender keys ────────────────────────────────────────────
-        -- Keyed by (user_id, member_id).  member_id is chat_members.id —
-        -- a globally unique sequence PK, so room_id is not needed here.
+        -- Keyed by (user_id, member_id, device_id).  member_id is chat_members.id —
+        -- a globally unique sequence PK, and device_id is the sender device.
         --
-        -- is_private = 1: own key.  key_blob is AES-256-GCM encrypted with
-        --                 db_master_key_{user_id}; nonce is NOT NULL.
-        -- is_private = 0: peer's public key.  key_blob is plaintext (32 bytes);
-        --                 nonce is NULL.
+        -- key_scope='own': current device's own sender key.  key_blob is AES-256-GCM
+        --                  encrypted with db_master_key_{user_id}; nonce is NOT NULL.
+        -- key_scope='peer': another device's sender key. key_blob is plaintext (32 bytes);
+        --                   nonce is NULL.
         --
         -- NOTE: this table is created by migrate_schema when upgrading from
         -- the old schema (user_version 0).  init_schema only creates it when
         -- the DB is brand-new (user_version is already 1 after migration).
         CREATE TABLE IF NOT EXISTS sender_keys (
-            user_id    TEXT    NOT NULL,
-            member_id  TEXT    NOT NULL,
-            is_private INTEGER NOT NULL DEFAULT 0,
-            key_blob   BLOB    NOT NULL,
-            nonce      BLOB,
+            user_id            TEXT    NOT NULL,
+            member_id          TEXT    NOT NULL,
+            device_id          TEXT    NOT NULL,
+            key_scope          TEXT    NOT NULL,
+            key_blob           BLOB    NOT NULL,
+            nonce              BLOB,
             sender_key_version INTEGER NOT NULL DEFAULT 0,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (user_id, member_id)
+            updated_at         INTEGER NOT NULL,
+            PRIMARY KEY (user_id, member_id, device_id),
+            CHECK (key_scope IN ('own', 'peer'))
         );
 
         -- ── Cloud-pulled encrypted messages ───────────────────────
@@ -209,8 +216,11 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
             last_seen_at              TEXT,
             status                    TEXT    NOT NULL DEFAULT 'active',
             latest_message            TEXT,
+            latest_message_id         INTEGER,
             latest_message_created_at TEXT,
             latest_message_sender_id  INTEGER,
+            latest_message_sender_device_id TEXT,
+            latest_message_sender_key_version INTEGER,
             unread_count              INTEGER NOT NULL DEFAULT 0,
             blocked_by_peer           INTEGER NOT NULL DEFAULT 0,
             blocked_by_me             INTEGER NOT NULL DEFAULT 0,
@@ -261,6 +271,8 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
             client_message_id  TEXT    NOT NULL,
             server_message_id  INTEGER,
             sender_id          INTEGER NOT NULL,
+            sender_device_id   TEXT    NOT NULL,
+            sender_key_version INTEGER NOT NULL DEFAULT 0,
             encrypted_content  BLOB    NOT NULL,
             message_type       TEXT    NOT NULL,
             created_at         TEXT    NOT NULL,
@@ -277,6 +289,8 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
             client_message_id TEXT    NOT NULL,
             server_message_id INTEGER,
             sender_id         INTEGER NOT NULL,
+            sender_device_id  TEXT    NOT NULL,
+            sender_key_version INTEGER NOT NULL DEFAULT 0,
             message_type      TEXT    NOT NULL,
             content           TEXT    NOT NULL,
             reply_to_id       INTEGER,
@@ -625,6 +639,103 @@ pub(crate) fn migrate_schema(conn: &Connection) -> Result<(), String> {
             .map_err(|e| format!("migrate_schema (5→6) commit failed: {e}"))?;
     }
 
+    if version < 7 {
+        conn.execute_batch(
+            r#"
+            BEGIN;
+
+            DROP TABLE IF EXISTS sender_keys;
+            CREATE TABLE sender_keys (
+                user_id            TEXT    NOT NULL,
+                member_id          TEXT    NOT NULL,
+                device_id          TEXT    NOT NULL,
+                key_scope          TEXT    NOT NULL,
+                key_blob           BLOB    NOT NULL,
+                nonce              BLOB,
+                sender_key_version INTEGER NOT NULL DEFAULT 0,
+                updated_at         INTEGER NOT NULL,
+                PRIMARY KEY (user_id, member_id, device_id),
+                CHECK (key_scope IN ('own', 'peer'))
+            );
+
+            DROP TABLE IF EXISTS chat_messages_encrypted;
+            CREATE TABLE chat_messages_encrypted (
+                account_id         INTEGER NOT NULL,
+                room_id            INTEGER NOT NULL,
+                client_message_id  TEXT    NOT NULL,
+                server_message_id  INTEGER,
+                sender_id          INTEGER NOT NULL,
+                sender_device_id   TEXT    NOT NULL,
+                sender_key_version INTEGER NOT NULL DEFAULT 0,
+                encrypted_content  BLOB    NOT NULL,
+                message_type       TEXT    NOT NULL,
+                created_at         TEXT    NOT NULL,
+                received_at        INTEGER NOT NULL,
+                PRIMARY KEY (account_id, client_message_id),
+                UNIQUE (account_id, server_message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_encrypted_room
+                ON chat_messages_encrypted(account_id, room_id, created_at DESC, client_message_id);
+
+            DROP TABLE IF EXISTS chat_messages;
+            CREATE TABLE chat_messages (
+                account_id         INTEGER NOT NULL,
+                room_id            INTEGER NOT NULL,
+                client_message_id  TEXT    NOT NULL,
+                server_message_id  INTEGER,
+                sender_id          INTEGER NOT NULL,
+                sender_device_id   TEXT    NOT NULL,
+                sender_key_version INTEGER NOT NULL DEFAULT 0,
+                message_type       TEXT    NOT NULL,
+                content            TEXT    NOT NULL,
+                reply_to_id        INTEGER,
+                is_edited          INTEGER NOT NULL DEFAULT 0,
+                is_deleted         INTEGER NOT NULL DEFAULT 0,
+                created_at         TEXT    NOT NULL,
+                sort_key           INTEGER NOT NULL,
+                delivery_status    TEXT    NOT NULL DEFAULT 'sent',
+                delivery_error     TEXT,
+                is_local_echo      INTEGER NOT NULL DEFAULT 0,
+                updated_at         INTEGER NOT NULL,
+                PRIMARY KEY (account_id, client_message_id),
+                UNIQUE (account_id, server_message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_account_room_sort
+                ON chat_messages(account_id, room_id, sort_key DESC, client_message_id);
+
+            PRAGMA user_version = 7;
+
+            COMMIT;
+            "#,
+        )
+        .map_err(|e| format!("migrate_schema (6→7) failed: {e}"))?;
+    }
+
+    if version < 8 {
+        if sqlite_table_exists(conn, "chat_rooms")? {
+            if !sqlite_column_exists(conn, "chat_rooms", "latest_message_id")? {
+                conn.execute("ALTER TABLE chat_rooms ADD COLUMN latest_message_id INTEGER", [])
+                    .map_err(|e| format!("migrate_schema (7→8) add latest_message_id failed: {e}"))?;
+            }
+            if !sqlite_column_exists(conn, "chat_rooms", "latest_message_sender_device_id")? {
+                conn.execute(
+                    "ALTER TABLE chat_rooms ADD COLUMN latest_message_sender_device_id TEXT",
+                    [],
+                )
+                .map_err(|e| format!("migrate_schema (7→8) add latest_message_sender_device_id failed: {e}"))?;
+            }
+            if !sqlite_column_exists(conn, "chat_rooms", "latest_message_sender_key_version")? {
+                conn.execute(
+                    "ALTER TABLE chat_rooms ADD COLUMN latest_message_sender_key_version INTEGER",
+                    [],
+                )
+                .map_err(|e| format!("migrate_schema (7→8) add latest_message_sender_key_version failed: {e}"))?;
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 8;")
+            .map_err(|e| format!("set user_version=8 failed: {e}"))?;
+    }
+
     Ok(())
 }
 
@@ -637,6 +748,29 @@ fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool, Stri
         )
         .map_err(|err| format!("query sqlite_master for table {table_name} failed: {err}"))?;
     Ok(count > 0)
+}
+
+fn sqlite_column_exists(conn: &Connection, table_name: &str, column_name: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table_name})"))
+        .map_err(|err| format!("prepare table_info for {table_name} failed: {err}"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|err| format!("query table_info for {table_name} failed: {err}"))?;
+
+    while let Some(row) = rows
+        .next()
+        .map_err(|err| format!("scan table_info for {table_name} failed: {err}"))?
+    {
+        let current_name: String = row
+            .get(1)
+            .map_err(|err| format!("read table_info name for {table_name} failed: {err}"))?;
+        if current_name == column_name {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 // ── Key file validation ───────────────────────────────────────────

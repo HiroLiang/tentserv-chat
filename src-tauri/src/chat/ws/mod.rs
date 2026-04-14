@@ -8,6 +8,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
 use crate::chat::ChatRuntimeSession;
+use crate::chat::ChatSelfSenderKeySyncState;
 
 #[derive(Debug, Clone)]
 pub enum WsEvent {
@@ -21,6 +22,7 @@ pub enum WsEvent {
     SenderKeyDistributionAvailable {
         room_id: i64,
     },
+    SelfSenderKeySyncStateChanged(ChatSelfSenderKeySyncState),
     ReplenishOtp,
     MemberJoined {
         room_id: i64,
@@ -32,6 +34,8 @@ pub struct IncomingChatMessagePayload {
     pub message_id: i64,
     pub room_id: i64,
     pub sender_id: i64,
+    pub sender_device_id: String,
+    pub sender_key_version: i64,
     pub content: String,
     #[serde(rename = "type")]
     pub message_type: String,
@@ -54,6 +58,7 @@ pub struct PresenceUserStatusChangedPayload {
 pub struct SenderKeyNeededPayload {
     pub room_id: i64,
     pub provider_member_id: i64,
+    pub provider_device_id: String,
     pub requester_member_id: i64,
     pub requester_user_id: i64,
     pub requester_device_id: Option<String>,
@@ -96,7 +101,10 @@ pub fn spawn_ws_loop(
                 .append_pair("token", &session.token)
                 .append_pair("device_id", &session.device_id);
             let url = url.to_string();
-            log::info!("chat runtime ws: connect attempt url={}", session.ws_base_url);
+            log::info!(
+                "chat runtime ws: connect attempt url={}",
+                session.ws_base_url
+            );
             let _ = event_tx.send(WsEvent::StatusChanged {
                 status: "connecting".to_string(),
                 error: None,
@@ -188,30 +196,50 @@ pub fn spawn_ws_loop(
 fn handle_incoming_envelope(event_tx: &UnboundedSender<WsEvent>, envelope: IncomingEnvelope) {
     match envelope.message_type.as_str() {
         "chat.message" => {
-            if let Ok(payload) = serde_json::from_value::<IncomingChatMessagePayload>(envelope.payload) {
+            if let Ok(payload) =
+                serde_json::from_value::<IncomingChatMessagePayload>(envelope.payload)
+            {
                 let _ = event_tx.send(WsEvent::ChatMessage(payload));
             }
         }
         "presence.user_status_changed" => {
-            if let Ok(payload) = serde_json::from_value::<PresenceUserStatusChangedPayload>(envelope.payload) {
+            if let Ok(payload) =
+                serde_json::from_value::<PresenceUserStatusChangedPayload>(envelope.payload)
+            {
                 let _ = event_tx.send(WsEvent::PresenceChanged(payload));
             }
         }
         "e2ee.sender_key_needed" => {
-            if let Ok(payload) = serde_json::from_value::<SenderKeyNeededPayload>(envelope.payload) {
+            if let Ok(payload) = serde_json::from_value::<SenderKeyNeededPayload>(envelope.payload)
+            {
                 let _ = event_tx.send(WsEvent::SenderKeyNeeded(payload));
             }
         }
         "e2ee.sender_key_distribution_available" => {
-            if let Some(room_id) = envelope.payload.get("room_id").and_then(|value| value.as_i64()) {
+            if let Some(room_id) = envelope
+                .payload
+                .get("room_id")
+                .and_then(|value| value.as_i64())
+            {
                 let _ = event_tx.send(WsEvent::SenderKeyDistributionAvailable { room_id });
+            }
+        }
+        "e2ee.self_sender_key_sync_state_changed" => {
+            if let Ok(payload) =
+                serde_json::from_value::<ChatSelfSenderKeySyncState>(envelope.payload)
+            {
+                let _ = event_tx.send(WsEvent::SelfSenderKeySyncStateChanged(payload));
             }
         }
         "e2ee.replenish_otp_keys" => {
             let _ = event_tx.send(WsEvent::ReplenishOtp);
         }
         "chat.member_joined" => {
-            if let Some(room_id) = envelope.payload.get("room_id").and_then(|value| value.as_i64()) {
+            if let Some(room_id) = envelope
+                .payload
+                .get("room_id")
+                .and_then(|value| value.as_i64())
+            {
                 let _ = event_tx.send(WsEvent::MemberJoined { room_id });
             }
         }

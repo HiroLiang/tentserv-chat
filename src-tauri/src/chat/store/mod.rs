@@ -4,7 +4,7 @@ mod rooms;
 mod sync_state;
 
 pub use messages::{
-    link_encrypted_message_server_id, load_retry_message, save_encrypted_message,
+    link_encrypted_message_server_id, load_retry_message, load_room_message_by_server_message_id, save_encrypted_message,
     save_or_update_message, sort_key_from_created_at, update_message_delivery,
 };
 pub use models::EncryptedChatMessageRecord;

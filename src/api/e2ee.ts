@@ -1,5 +1,6 @@
 import { get, post } from '@/api/http.ts';
 import type {
+    FailSelfSenderKeySyncRequest,
     UploadIdentityKeyRequest,
     UploadIdentityKeyResponse,
     UploadSignedPreKeyRequest,
@@ -15,6 +16,11 @@ import type {
     CreateSenderKeyRequestRequest,
     GetPendingSenderKeyDistributionsResponse,
     ConsumeSenderKeyDistributionRequest,
+    GetSelfSenderKeySyncResponse,
+    BulkSelfSenderKeySyncDistributionsRequest,
+    BulkSelfSenderKeySyncDistributionsResponse,
+    GetPendingSelfSenderKeySyncDistributionsResponse,
+    ConsumeSelfSenderKeySyncDistributionRequest,
 } from '@/api/types.ts';
 
 export const e2eeApi = {
@@ -39,8 +45,20 @@ export const e2eeApi = {
     getKeyBundle: (user_id: number, device_id?: string): Promise<GetKeyBundleResponse> =>
         get(`/api/e2ee/key-bundle/${user_id}`, { params: device_id ? { device_id } : {} }),
 
-    uploadSenderKey: (room_id: number, receiver_member_id: number, sender_key_version: number, distribution_message: string): Promise<void> =>
-        post('/api/e2ee/sender-key', { room_id, receiver_member_id, sender_key_version, distribution_message } as UploadSenderKeyRequest),
+    uploadSenderKey: (
+        room_id: number,
+        receiver_member_id: number,
+        receiver_device_id: string | undefined,
+        sender_key_version: number,
+        distribution_message: string,
+    ): Promise<void> =>
+        post('/api/e2ee/sender-key', {
+            room_id,
+            receiver_member_id,
+            ...(receiver_device_id ? { receiver_device_id } : {}),
+            sender_key_version,
+            distribution_message,
+        } as UploadSenderKeyRequest),
 
     getSenderKeys: (room_id: number): Promise<GetSenderKeysResponse> =>
         get(`/api/e2ee/sender-keys/${room_id}`),
@@ -54,6 +72,45 @@ export const e2eeApi = {
     consumeSenderKeyDistribution: (distribution_id: number, status: 'consumed' | 'failed'): Promise<void> =>
         post(`/api/e2ee/sender-key-distributions/${distribution_id}/consume`, { status } as ConsumeSenderKeyDistributionRequest),
 
-    createSenderKeyRequest: (room_id: number, provider_member_id: number): Promise<void> =>
-        post('/api/e2ee/sender-key-request', { room_id, provider_member_id } as CreateSenderKeyRequestRequest),
+    createSenderKeyRequest: (
+        room_id: number,
+        provider_member_id: number,
+        provider_device_id: string,
+        requester_device_id?: string,
+    ): Promise<void> =>
+        post('/api/e2ee/sender-key-request', {
+            room_id,
+            provider_member_id,
+            provider_device_id,
+            ...(requester_device_id ? { requester_device_id } : {}),
+        } as CreateSenderKeyRequestRequest),
+
+    getSelfSenderKeySync: (): Promise<GetSelfSenderKeySyncResponse> =>
+        get('/api/e2ee/self-sender-key-sync'),
+
+    acceptSelfSenderKeySync: (): Promise<GetSelfSenderKeySyncResponse> =>
+        post('/api/e2ee/self-sender-key-sync/accept'),
+
+    markSelfSenderKeySyncUploaded: (): Promise<GetSelfSenderKeySyncResponse> =>
+        post('/api/e2ee/self-sender-key-sync/uploaded'),
+
+    bulkSelfSenderKeySyncDistributions: (
+        items: BulkSelfSenderKeySyncDistributionsRequest['items'],
+    ): Promise<BulkSelfSenderKeySyncDistributionsResponse> =>
+        post('/api/e2ee/self-sender-key-sync/distributions/bulk', { items } as BulkSelfSenderKeySyncDistributionsRequest),
+
+    getPendingSelfSenderKeySyncDistributions: (): Promise<GetPendingSelfSenderKeySyncDistributionsResponse> =>
+        get('/api/e2ee/self-sender-key-sync/distributions/pending'),
+
+    consumeSelfSenderKeySyncDistribution: (distribution_id: number, status: 'consumed' | 'failed'): Promise<void> =>
+        post(
+            `/api/e2ee/self-sender-key-sync/distributions/${distribution_id}/consume`,
+            { status } as ConsumeSelfSenderKeySyncDistributionRequest,
+        ),
+
+    completeSelfSenderKeySync: (): Promise<GetSelfSenderKeySyncResponse> =>
+        post('/api/e2ee/self-sender-key-sync/complete'),
+
+    failSelfSenderKeySync: (payload: FailSelfSenderKeySyncRequest): Promise<GetSelfSenderKeySyncResponse> =>
+        post('/api/e2ee/self-sender-key-sync/fail', payload),
 };

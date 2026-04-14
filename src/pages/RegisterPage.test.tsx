@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,11 +40,20 @@ const registerResponse = {
     verification_expires_at_ms: Date.now() + 180_000,
 };
 
-const fillRegisterForm = async (user: ReturnType<typeof userEvent.setup>) => {
+const fillRegisterForm = async (
+    user: ReturnType<typeof userEvent.setup>,
+    overrides?: { password?: string; confirmPassword?: string },
+) => {
+    const password = overrides?.password ?? "redacted-password";
+    const confirmPassword = overrides?.confirmPassword ?? password;
     await user.type(screen.getByLabelText(/email address/i), "new@example.com");
     await user.type(screen.getByLabelText(/account name/i), "new_account");
     await user.type(screen.getByLabelText(/display name/i), "New Display");
-    await user.type(screen.getByLabelText(/^password$/i), "redacted-password");
+    await user.type(screen.getByLabelText(/^password$/i), password);
+    await user.type(
+        screen.getByLabelText(/^confirm password$/i, { selector: "input" }),
+        confirmPassword,
+    );
 };
 
 const enterVerificationCode = async (user: ReturnType<typeof userEvent.setup>, code: string) => {
@@ -103,8 +112,55 @@ describe("RegisterPage verification flow", () => {
             email: "new@example.com",
             name: "New Display",
             password: "redacted-password",
+            confirmPassword: "redacted-password",
         });
         expect(toast.success).toHaveBeenCalledWith("Verification code sent to your email.");
+    });
+
+    it("blocks submit when password confirmation does not match", async () => {
+        const user = userEvent.setup();
+        renderRegisterPage();
+
+        await fillRegisterForm(user, {
+            password: "redacted-password",
+            confirmPassword: "different-password",
+        });
+        await user.click(screen.getByRole("button", { name: /sign up/i }));
+
+        expect(userService.register).not.toHaveBeenCalled();
+        expect(await screen.findByText("Passwords do not match.")).toBeInTheDocument();
+    });
+
+    it("maps backend password confirmation mismatch onto the confirm-password field", async () => {
+        vi.mocked(userService.register).mockRejectedValue({
+            code: "PASSWORD_CONFIRM_MISMATCH",
+            message: "Passwords do not match.",
+        });
+        const user = userEvent.setup();
+        renderRegisterPage();
+
+        await fillRegisterForm(user);
+        await user.click(screen.getByRole("button", { name: /sign up/i }));
+
+        expect(await screen.findByText("Passwords do not match.")).toBeInTheDocument();
+        expect(screen.queryByText("Registration failed")).not.toBeInTheDocument();
+    });
+
+    it("reveals the password only while the eye button is pressed", async () => {
+        const user = userEvent.setup();
+        renderRegisterPage();
+
+        const passwordInput = screen.getByLabelText(/^password$/i);
+        const revealButton = screen.getByRole("button", { name: /show password while pressed/i });
+
+        await user.type(passwordInput, "redacted-password");
+        expect(passwordInput).toHaveAttribute("type", "password");
+
+        fireEvent.pointerDown(revealButton);
+        expect(passwordInput).toHaveAttribute("type", "text");
+
+        fireEvent.pointerUp(revealButton);
+        expect(passwordInput).toHaveAttribute("type", "password");
     });
 
     it("formats suspiciously long countdowns as hours and logs a warning", async () => {

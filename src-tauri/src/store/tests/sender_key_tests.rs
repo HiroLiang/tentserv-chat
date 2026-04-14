@@ -13,6 +13,9 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 const ZERO_KEY: [u8; 32] = [0u8; 32];
+const DEVICE_ALICE: &str = "device-alice";
+const DEVICE_BOB: &str = "device-bob";
+const DEVICE_KEEP: &str = "device-keep";
 
 fn test_db() -> (TempDir, Connection) {
     let dir = TempDir::new().unwrap();
@@ -32,21 +35,30 @@ fn scenario_own_key_encrypted_storage() {
     let (_dir, conn) = test_db();
     let private_key: [u8; 32] = [0xAAu8; 32];
 
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &private_key, 0)
-        .unwrap();
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_alice",
+        DEVICE_ALICE,
+        &private_key,
+        0,
+    )
+    .unwrap();
 
-    let loaded = load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice").unwrap();
+    let loaded =
+        load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", DEVICE_ALICE).unwrap();
     assert_eq!(loaded, private_key);
 
     // Verify DB row internals
-    let (is_private, nonce): (i64, Option<Vec<u8>>) = conn
+    let (key_scope, nonce): (String, Option<Vec<u8>>) = conn
         .query_row(
-            "SELECT is_private, nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_alice'",
+            "SELECT key_scope, nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_alice' AND device_id='device-alice'",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(is_private, 1, "own key must have is_private=1");
+    assert_eq!(key_scope, "own", "own key must have key_scope='own'");
     assert!(nonce.is_some(), "own key must have a non-NULL nonce");
 }
 
@@ -61,20 +73,21 @@ fn scenario_peer_key_plaintext_storage() {
     let (_dir, conn) = test_db();
     let public_key: [u8; 32] = [0xBBu8; 32];
 
-    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &public_key, 0).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", DEVICE_BOB, &public_key, 0)
+        .unwrap();
 
-    let loaded = load_peer_sender_key_inner(&conn, "alice", "m_bob").unwrap();
+    let loaded = load_peer_sender_key_inner(&conn, "alice", "m_bob", DEVICE_BOB).unwrap();
     assert_eq!(loaded, public_key);
 
     // Verify DB row internals
-    let (is_private, nonce): (i64, Option<Vec<u8>>) = conn
+    let (key_scope, nonce): (String, Option<Vec<u8>>) = conn
         .query_row(
-            "SELECT is_private, nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_bob'",
+            "SELECT key_scope, nonce FROM sender_keys WHERE user_id='alice' AND member_id='m_bob' AND device_id='device-bob'",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(is_private, 0, "peer key must have is_private=0");
+    assert_eq!(key_scope, "peer", "peer key must have key_scope='peer'");
     assert!(nonce.is_none(), "peer key must have nonce IS NULL");
 }
 
@@ -87,13 +100,22 @@ fn scenario_has_sender_key_both_types() {
     // And    returns false for an unknown member
     let (_dir, conn) = test_db();
 
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32], 0)
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_alice",
+        DEVICE_ALICE,
+        &[0x01u8; 32],
+        0,
+    )
+    .unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", DEVICE_BOB, &[0x02u8; 32], 0)
         .unwrap();
-    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &[0x02u8; 32], 0).unwrap();
 
-    assert!(has_sender_key_inner(&conn, "alice", "m_alice").unwrap());
-    assert!(has_sender_key_inner(&conn, "alice", "m_bob").unwrap());
-    assert!(!has_sender_key_inner(&conn, "alice", "m_carol").unwrap());
+    assert!(has_sender_key_inner(&conn, "alice", "m_alice", DEVICE_ALICE).unwrap());
+    assert!(has_sender_key_inner(&conn, "alice", "m_bob", DEVICE_BOB).unwrap());
+    assert!(!has_sender_key_inner(&conn, "alice", "m_carol", "device-carol").unwrap());
 }
 
 // ── Scenario 4: API guard — loading wrong type returns Err ─────────
@@ -104,9 +126,10 @@ fn scenario_load_peer_via_own_api_returns_err() {
     // When   load_own_sender_key_inner is called for the same member_id
     // Then   it returns an error (is_private mismatch)
     let (_dir, conn) = test_db();
-    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &[0xCCu8; 32], 0).unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", DEVICE_BOB, &[0xCCu8; 32], 0)
+        .unwrap();
 
-    let result = load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_bob");
+    let result = load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_bob", DEVICE_BOB);
     assert!(result.is_err(), "must not load a peer key via own-key API");
     assert!(result.unwrap_err().contains("peer key"));
 }
@@ -117,10 +140,18 @@ fn scenario_load_own_via_peer_api_returns_err() {
     // When   load_peer_sender_key_inner is called for the same member_id
     // Then   it returns an error (is_private mismatch)
     let (_dir, conn) = test_db();
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0xDDu8; 32], 0)
-        .unwrap();
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_alice",
+        DEVICE_ALICE,
+        &[0xDDu8; 32],
+        0,
+    )
+    .unwrap();
 
-    let result = load_peer_sender_key_inner(&conn, "alice", "m_alice");
+    let result = load_peer_sender_key_inner(&conn, "alice", "m_alice", DEVICE_ALICE);
     assert!(result.is_err(), "must not load an own key via peer-key API");
     assert!(result.unwrap_err().contains("own key"));
 }
@@ -134,13 +165,29 @@ fn scenario_upsert_replaces_old_key() {
     // Then   loading returns [0x02;32]
     let (_dir, conn) = test_db();
 
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32], 0)
-        .unwrap();
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x02u8; 32], 1)
-        .unwrap();
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_alice",
+        DEVICE_ALICE,
+        &[0x01u8; 32],
+        0,
+    )
+    .unwrap();
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_alice",
+        DEVICE_ALICE,
+        &[0x02u8; 32],
+        1,
+    )
+    .unwrap();
 
     assert_eq!(
-        load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice").unwrap(),
+        load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_alice", DEVICE_ALICE).unwrap(),
         [0x02u8; 32]
     );
 }
@@ -156,16 +203,27 @@ fn scenario_user_isolation() {
     let alice_key: [u8; 32] = [0xAAu8; 32];
     let bob_key: [u8; 32] = [0xBBu8; 32];
 
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_x", &alice_key, 0)
-        .unwrap();
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "bob", "m_x", &bob_key, 0).unwrap();
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_x",
+        DEVICE_ALICE,
+        &alice_key,
+        0,
+    )
+    .unwrap();
+    store_own_sender_key_with_version_inner(
+        &conn, &ZERO_KEY, "bob", "m_x", DEVICE_BOB, &bob_key, 0,
+    )
+    .unwrap();
 
     assert_eq!(
-        load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_x").unwrap(),
+        load_own_sender_key_inner(&conn, &ZERO_KEY, "alice", "m_x", DEVICE_ALICE).unwrap(),
         alice_key
     );
     assert_eq!(
-        load_own_sender_key_inner(&conn, &ZERO_KEY, "bob", "m_x").unwrap(),
+        load_own_sender_key_inner(&conn, &ZERO_KEY, "bob", "m_x", DEVICE_BOB).unwrap(),
         bob_key
     );
 }
@@ -177,11 +235,29 @@ fn scenario_delete_sender_keys_scopes_by_user_and_member_ids() {
     println!("Given: alice and bob each have sender keys, including overlapping member ids");
     let (_dir, conn) = test_db();
 
-    store_own_sender_key_with_version_inner(&conn, &ZERO_KEY, "alice", "m_alice", &[0x01u8; 32], 0)
+    store_own_sender_key_with_version_inner(
+        &conn,
+        &ZERO_KEY,
+        "alice",
+        "m_alice",
+        DEVICE_ALICE,
+        &[0x01u8; 32],
+        0,
+    )
+    .unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", DEVICE_BOB, &[0x02u8; 32], 0)
         .unwrap();
-    store_peer_sender_key_with_version_inner(&conn, "alice", "m_bob", &[0x02u8; 32], 0).unwrap();
-    store_peer_sender_key_with_version_inner(&conn, "alice", "m_keep", &[0x03u8; 32], 0).unwrap();
-    store_peer_sender_key_with_version_inner(&conn, "bob", "m_bob", &[0x04u8; 32], 0).unwrap();
+    store_peer_sender_key_with_version_inner(
+        &conn,
+        "alice",
+        "m_keep",
+        DEVICE_KEEP,
+        &[0x03u8; 32],
+        0,
+    )
+    .unwrap();
+    store_peer_sender_key_with_version_inner(&conn, "bob", "m_bob", DEVICE_BOB, &[0x04u8; 32], 0)
+        .unwrap();
 
     println!("When: deleting alice sender keys for m_alice and m_bob");
     let deleted = delete_sender_keys_inner(
@@ -193,8 +269,8 @@ fn scenario_delete_sender_keys_scopes_by_user_and_member_ids() {
 
     println!("Then: only alice's requested sender key rows are removed");
     assert_eq!(deleted, 2);
-    assert!(!has_sender_key_inner(&conn, "alice", "m_alice").unwrap());
-    assert!(!has_sender_key_inner(&conn, "alice", "m_bob").unwrap());
-    assert!(has_sender_key_inner(&conn, "alice", "m_keep").unwrap());
-    assert!(has_sender_key_inner(&conn, "bob", "m_bob").unwrap());
+    assert!(!has_sender_key_inner(&conn, "alice", "m_alice", DEVICE_ALICE).unwrap());
+    assert!(!has_sender_key_inner(&conn, "alice", "m_bob", DEVICE_BOB).unwrap());
+    assert!(has_sender_key_inner(&conn, "alice", "m_keep", DEVICE_KEEP).unwrap());
+    assert!(has_sender_key_inner(&conn, "bob", "m_bob", DEVICE_BOB).unwrap());
 }

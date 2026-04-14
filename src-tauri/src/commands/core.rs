@@ -29,10 +29,10 @@ use crate::store::message_store::{
 };
 use crate::store::sender_key_store::{
     delete_sender_keys_inner, get_sender_key_state_inner, has_sender_key_inner,
-    list_sender_key_states_inner, load_own_sender_key_inner,
-    load_own_sender_key_with_version_inner, load_peer_sender_key_inner,
+    list_sender_key_materials_inner, list_sender_key_states_inner,
+    load_own_sender_key_with_version_inner, load_sender_key_material_with_version_inner,
     store_own_sender_key_with_version_inner, store_peer_sender_key_with_version_inner,
-    SenderKeyState,
+    SenderKeyMaterial, SenderKeyState, SENDER_KEY_SCOPE_OWN,
 };
 use crate::store::token_store::{delete_token_inner, load_token_inner, store_token_inner};
 
@@ -317,6 +317,7 @@ pub(crate) fn generate_sender_key_core(
     key: &[u8; 32],
     user_id: &str,
     member_id: &str,
+    device_id: &str,
 ) -> Result<SenderKeyBundle, String> {
     let sender_key = rand::random::<[u8; 32]>();
     let sender_key_version = Utc::now().timestamp_millis();
@@ -325,6 +326,7 @@ pub(crate) fn generate_sender_key_core(
         key,
         user_id,
         member_id,
+        device_id,
         &sender_key,
         sender_key_version,
     )?;
@@ -335,20 +337,23 @@ pub(crate) fn has_sender_key_core(
     conn: &Connection,
     user_id: &str,
     member_id: &str,
+    device_id: &str,
 ) -> Result<bool, String> {
-    has_sender_key_inner(conn, user_id, member_id)
+    has_sender_key_inner(conn, user_id, member_id, device_id)
 }
 
 pub(crate) fn store_member_sender_key_core(
     conn: &Connection,
     user_id: &str,
     member_id: &str,
+    device_id: &str,
     key_bytes: Vec<u8>,
 ) -> Result<(), String> {
     store_member_sender_key_with_version_core(
         conn,
         user_id,
         member_id,
+        device_id,
         key_bytes,
         Utc::now().timestamp_millis(),
     )
@@ -358,6 +363,7 @@ pub(crate) fn store_member_sender_key_with_version_core(
     conn: &Connection,
     user_id: &str,
     member_id: &str,
+    device_id: &str,
     key_bytes: Vec<u8>,
     sender_key_version: i64,
 ) -> Result<(), String> {
@@ -368,6 +374,42 @@ pub(crate) fn store_member_sender_key_with_version_core(
         conn,
         user_id,
         member_id,
+        device_id,
+        &sk_bytes,
+        sender_key_version,
+    )
+}
+
+fn store_sender_key_with_version_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+    member_id: &str,
+    device_id: &str,
+    key_bytes: Vec<u8>,
+    sender_key_version: i64,
+    store_as_own_key: bool,
+) -> Result<(), String> {
+    let sk_bytes: [u8; 32] = key_bytes
+        .try_into()
+        .map_err(|_| "sender key must be exactly 32 bytes".to_string())?;
+    if store_as_own_key {
+        return store_own_sender_key_with_version_inner(
+            conn,
+            key,
+            user_id,
+            member_id,
+            device_id,
+            &sk_bytes,
+            sender_key_version,
+        );
+    }
+
+    store_peer_sender_key_with_version_inner(
+        conn,
+        user_id,
+        member_id,
+        device_id,
         &sk_bytes,
         sender_key_version,
     )
@@ -378,11 +420,13 @@ pub(crate) fn encrypt_with_sender_key_core(
     key: &[u8; 32],
     user_id: &str,
     member_id: &str,
+    device_id: &str,
     plaintext: &[u8],
 ) -> Result<SenderKeyEncryptedMessage, String> {
     use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
 
-    let sk_bytes = load_own_sender_key_inner(conn, key, user_id, member_id)?;
+    let (sk_bytes, sender_key_version) =
+        load_own_sender_key_with_version_inner(conn, key, user_id, member_id, device_id)?;
     let cipher =
         Aes256Gcm::new_from_slice(&sk_bytes).map_err(|e| format!("invalid sender key: {e}"))?;
 
@@ -396,6 +440,7 @@ pub(crate) fn encrypt_with_sender_key_core(
     Ok(SenderKeyEncryptedMessage {
         ciphertext,
         nonce: nonce_bytes,
+        sender_key_version,
     })
 }
 
@@ -410,6 +455,8 @@ pub(crate) fn decrypt_with_sender_key_result_core(
     key: &[u8; 32],
     user_id: &str,
     member_id: &str,
+    device_id: &str,
+    sender_key_version: i64,
     ciphertext: &[u8],
     nonce: &[u8],
 ) -> Result<SenderKeyDecryptResult, String> {
@@ -419,21 +466,19 @@ pub(crate) fn decrypt_with_sender_key_result_core(
         .try_into()
         .map_err(|_| "nonce must be exactly 12 bytes".to_string())?;
 
-    // Peer key for others' messages (is_private=0, stored plaintext).
-    // Falls back to own key for own messages returning from the server (is_private=1, encrypted).
-    let (sk_bytes, has_local_state) = match load_peer_sender_key_inner(conn, user_id, member_id) {
-        Ok(bytes) => (bytes, true),
-        Err(_) => match load_own_sender_key_inner(conn, key, user_id, member_id) {
-            Ok(bytes) => (bytes, true),
-            Err(_) => ([0u8; 32], false),
-        },
-    };
-    if !has_local_state {
-        return Ok(SenderKeyDecryptResult::MissingKey);
+    let material =
+        match load_sender_key_material_with_version_inner(conn, key, user_id, member_id, device_id)
+        {
+            Ok(material) => material,
+            Err(_) => return Ok(SenderKeyDecryptResult::MissingKey),
+        };
+
+    if material.sender_key_version != sender_key_version {
+        return Ok(SenderKeyDecryptResult::StaleKey);
     }
 
-    let cipher =
-        Aes256Gcm::new_from_slice(&sk_bytes).map_err(|e| format!("invalid sender key: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(&material.key_bytes)
+        .map_err(|e| format!("invalid sender key: {e}"))?;
     let nonce_ref = aes_gcm::Nonce::from_slice(&nonce_arr);
     match cipher.decrypt(nonce_ref, ciphertext) {
         Ok(plaintext) => Ok(SenderKeyDecryptResult::Ok { plaintext }),
@@ -467,10 +512,11 @@ pub(crate) fn prepare_sender_key_distribution_core(
     key: &[u8; 32],
     user_id: &str,
     member_id: &str,
+    device_id: &str,
     bundle: &PublicKeyBundle,
 ) -> Result<PreparedSenderKeyDistribution, String> {
     let (sender_key_bytes, sender_key_version) =
-        match load_own_sender_key_with_version_inner(conn, key, user_id, member_id) {
+        match load_own_sender_key_with_version_inner(conn, key, user_id, member_id, device_id) {
             Ok(existing) => existing,
             Err(_) => {
                 let sender_key = rand::random::<[u8; 32]>();
@@ -480,6 +526,7 @@ pub(crate) fn prepare_sender_key_distribution_core(
                     key,
                     user_id,
                     member_id,
+                    device_id,
                     &sender_key,
                     sender_key_version,
                 )?;
@@ -497,6 +544,25 @@ pub(crate) fn prepare_sender_key_distribution_core(
     })
 }
 
+pub(crate) fn prepare_existing_sender_key_distribution_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+    member_id: &str,
+    device_id: &str,
+    bundle: &PublicKeyBundle,
+) -> Result<PreparedSenderKeyDistribution, String> {
+    let material =
+        load_sender_key_material_with_version_inner(conn, key, user_id, member_id, device_id)?;
+    let initial_msg = perform_x3dh_send_core(conn, key, user_id, bundle, &material.key_bytes)?;
+    let distribution_message = serde_json::to_vec(&initial_msg)
+        .map_err(|e| format!("serialize sender key distribution failed: {e}"))?;
+    Ok(PreparedSenderKeyDistribution {
+        distribution_message,
+        sender_key_version: material.sender_key_version,
+    })
+}
+
 pub(crate) enum ConsumeSenderKeyDistributionResult {
     Consumed,
     Stale,
@@ -508,11 +574,47 @@ pub(crate) fn consume_sender_key_distribution_core(
     key: &[u8; 32],
     user_id: &str,
     sender_member_id: &str,
+    sender_device_id: &str,
     distribution_message: &[u8],
     sender_key_version: i64,
 ) -> Result<ConsumeSenderKeyDistributionResult, String> {
-    if let Some(existing) = get_sender_key_state_inner(conn, user_id, sender_member_id)? {
-        if existing.sender_key_version >= sender_key_version {
+    consume_sender_key_distribution_for_member_core(
+        conn,
+        key,
+        user_id,
+        sender_member_id,
+        sender_device_id,
+        None,
+        None,
+        distribution_message,
+        sender_key_version,
+    )
+}
+
+pub(crate) fn consume_sender_key_distribution_for_member_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+    sender_member_id: &str,
+    sender_device_id: &str,
+    receiver_member_id: Option<&str>,
+    receiver_device_id: Option<&str>,
+    distribution_message: &[u8],
+    sender_key_version: i64,
+) -> Result<ConsumeSenderKeyDistributionResult, String> {
+    let store_as_own_key = receiver_member_id == Some(sender_member_id)
+        && receiver_device_id == Some(sender_device_id);
+    if let Some(existing) =
+        get_sender_key_state_inner(conn, user_id, sender_member_id, sender_device_id)?
+    {
+        let should_treat_as_stale = if existing.sender_key_version > sender_key_version {
+            true
+        } else if existing.sender_key_version < sender_key_version {
+            false
+        } else {
+            (existing.key_scope == SENDER_KEY_SCOPE_OWN) == store_as_own_key
+        };
+        if should_treat_as_stale {
             return Ok(ConsumeSenderKeyDistributionResult::Stale);
         }
     }
@@ -532,15 +634,27 @@ pub(crate) fn consume_sender_key_distribution_core(
         Err(_) => return Ok(ConsumeSenderKeyDistributionResult::Failed),
     };
 
-    store_member_sender_key_with_version_core(
+    store_sender_key_with_version_core(
         conn,
+        key,
         user_id,
         sender_member_id,
+        sender_device_id,
         key_bytes,
         sender_key_version,
+        store_as_own_key,
     )?;
 
     Ok(ConsumeSenderKeyDistributionResult::Consumed)
+}
+
+pub(crate) fn list_sender_key_materials_core(
+    conn: &Connection,
+    key: &[u8; 32],
+    user_id: &str,
+    member_ids: &[String],
+) -> Result<Vec<SenderKeyMaterial>, String> {
+    list_sender_key_materials_inner(conn, key, user_id, member_ids)
 }
 
 /// Return value of `bootstrap_local_e2ee_keys_core`.

@@ -8,7 +8,10 @@ impl ChatApiClient {
         log::info!("chat runtime: ensure participant");
         match self.get_participant().await {
             Ok(participant) => {
-                log::info!("chat runtime: participant already exists id={}", participant.id);
+                log::info!(
+                    "chat runtime: participant already exists id={}",
+                    participant.id
+                );
                 Ok(participant)
             }
             Err(err) if err.contains("404") => {
@@ -79,7 +82,9 @@ impl ChatApiClient {
         before_id: Option<i64>,
         limit: Option<u32>,
     ) -> Result<GetMessagesResponse, String> {
-        let mut request = self.client.get(self.url(&format!("/api/chat/room/{room_id}/messages")));
+        let mut request = self
+            .client
+            .get(self.url(&format!("/api/chat/room/{room_id}/messages")));
         if let Some(before_id) = before_id {
             request = request.query(&[("before_id", before_id)]);
         }
@@ -147,10 +152,7 @@ impl ChatApiClient {
             .map_err(|err| format!("decode send message failed: {err}"))
     }
 
-    pub async fn mark_room_read(
-        &self,
-        room_id: i64,
-    ) -> Result<UpdateMemberStatusResponse, String> {
+    pub async fn mark_room_read(&self, room_id: i64) -> Result<UpdateMemberStatusResponse, String> {
         self.client
             .patch(self.url(&format!("/api/chat/room/{room_id}/member/status")))
             .send()
@@ -190,8 +192,11 @@ pub struct RoomSummaryResponse {
     pub last_seen_at: Option<String>,
     pub status: Option<String>,
     pub latest_message: Option<String>,
+    pub latest_message_id: Option<i64>,
     pub latest_message_created_at: Option<String>,
     pub latest_message_sender_id: Option<i64>,
+    pub latest_message_sender_device_id: Option<String>,
+    pub latest_message_sender_key_version: Option<i64>,
     pub unread_count: i64,
     pub blocked_by_peer: Option<bool>,
     pub blocked_by_me: Option<bool>,
@@ -227,6 +232,8 @@ pub struct RoomMemberResponse {
 pub struct MessageResponse {
     pub message_id: i64,
     pub sender_id: i64,
+    pub sender_device_id: String,
+    pub sender_key_version: i64,
     pub content: String,
     #[serde(rename = "type")]
     pub message_type: String,
@@ -258,6 +265,7 @@ pub struct SendMessageRequest {
     pub message_type: String,
     pub content: String,
     pub reply_to_id: Option<i64>,
+    pub sender_key_version: i64,
 }
 
 #[allow(dead_code)]

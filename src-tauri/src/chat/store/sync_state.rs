@@ -67,13 +67,16 @@ pub(super) fn load_sync_state(conn: &Connection, account_id: i64) -> Result<Chat
             |row| {
                 Ok(ChatSyncState {
                     active_room_id: row.get(1)?,
-                    ws_status: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "idle".to_string()),
+                    ws_status: row
+                        .get::<_, Option<String>>(2)?
+                        .unwrap_or_else(|| "idle".to_string()),
                     last_rooms_sync_at: row.get(3)?,
                     last_active_room_sync_at: row.get(4)?,
                     self_sender_key_sync_status: row
                         .get::<_, Option<String>>(5)?
                         .unwrap_or_else(|| "idle".to_string()),
                     self_sender_key_sync_error: row.get(6)?,
+                    self_sender_key_sync: None,
                     error: row.get(7)?,
                     pending_business_jobs: 0,
                     pending_sync_jobs: 0,

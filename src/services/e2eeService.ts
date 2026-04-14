@@ -1,7 +1,9 @@
 import { e2eeApi } from '@/api/index.ts';
 import { useE2eeStore } from '@/stores/e2eeStore.ts';
 import { useChatStore } from '@/stores/chatStore.ts';
+import { useDeviceStore } from '@/stores/deviceStore.ts';
 import { useUserStore } from '@/stores/userStore.ts';
+import { chatRefreshSelfSenderKeySync } from '@/bridge/chat.ts';
 import { logger } from '@/utils/logger.ts';
 import { WAITING_FOR_SENDER_KEY_SENTINEL } from '@/utils/chatCopy.ts';
 import { toast } from 'sonner';
@@ -27,7 +29,9 @@ import type {
 } from '@/types/e2ee.ts';
 import type {
     GetPendingSenderKeyDistributionsResponse,
+    GetSelfSenderKeySyncResponse,
     GetSenderKeyDistributionStatusResponse,
+    SenderKeyDeviceRef,
 } from '@/api/types.ts';
 import type { RoomMember } from '@/types/chat.ts';
 
@@ -46,7 +50,10 @@ type IdentityKeys = Awaited<ReturnType<typeof bootstrapLocalE2eeKeys>>['identity
 type SignedPreKey = Awaited<ReturnType<typeof bootstrapLocalE2eeKeys>>['spk'];
 type KeyStatus = Awaited<ReturnType<typeof e2eeApi.checkKeyStatus>>;
 type KeyPolicy = Awaited<ReturnType<typeof e2eeApi.getKeyPolicy>>;
-type SenderKeyStateMap = Map<number, SenderKeyState>;
+type SenderKeyStateMap = Map<string, SenderKeyState>;
+
+const senderKeyStateKey = (memberId: number, deviceId: string): string => `${memberId}:${deviceId}`;
+const senderKeyDeviceRefKey = (ref: SenderKeyDeviceRef): string => senderKeyStateKey(ref.member_id, ref.device_id);
 
 interface RoomSenderKeyReconciliationInput {
     roomId: number;
@@ -88,6 +95,12 @@ class E2eeService {
         const accountId = useUserStore.getState().currentUser?.accountId;
         if (!accountId) throw new Error('No current account');
         return accountId;
+    }
+
+    private getCurrentDeviceId(): string {
+        const deviceId = useDeviceStore.getState().deviceId;
+        if (!deviceId) throw new Error('No current device');
+        return deviceId;
     }
 
     private resolveCurrentMemberId(roomId: number, memberId?: number): number {
@@ -333,40 +346,127 @@ class E2eeService {
     private async getSenderKeyStateMap(accountId: number, memberIds: number[]): Promise<SenderKeyStateMap> {
         const states = await getSenderKeyStates(accountId, memberIds);
         return new Map(
-            states.map((state) => [Number(state.member_id), state]),
+            states.map((state) => [senderKeyStateKey(Number(state.member_id), state.device_id), state]),
         );
     }
 
-    private isDirectRoomLocallyReady(
-        localStates: Map<number, SenderKeyState>,
-        options: { roomMembers?: RoomMember[]; currentMemberId: number },
+    private getSenderKeyState(
+        localStates: SenderKeyStateMap,
+        memberId: number,
+        deviceId: string,
+    ): SenderKeyState | undefined {
+        return localStates.get(senderKeyStateKey(memberId, deviceId));
+    }
+
+    private listSenderKeyStatesForMember(
+        localStates: SenderKeyStateMap,
+        memberId: number,
+    ): SenderKeyState[] {
+        return [...localStates.values()].filter((state) => Number(state.member_id) === memberId);
+    }
+
+    private hasOwnCurrentDeviceSenderKey(
+        localStates: SenderKeyStateMap,
+        memberId: number,
+        deviceId: string,
     ): boolean {
-        const localSenderKeyExists = localStates.get(options.currentMemberId)?.is_own_key === true;
-        if (!localSenderKeyExists) {
+        return this.getSenderKeyState(localStates, memberId, deviceId)?.is_own_key === true;
+    }
+
+    private hasAnyPeerSenderKeyForMember(
+        localStates: SenderKeyStateMap,
+        memberId: number,
+    ): boolean {
+        return this.listSenderKeyStatesForMember(localStates, memberId).some((state) => !state.is_own_key);
+    }
+
+    private hasPeerSenderKeyForSource(
+        localStates: SenderKeyStateMap,
+        memberId: number,
+        deviceId: string,
+    ): boolean {
+        return this.getSenderKeyState(localStates, memberId, deviceId)?.is_own_key === false;
+    }
+
+    private deviceRefsForMember(
+        refs: SenderKeyDeviceRef[] | undefined,
+        memberId: number,
+    ): SenderKeyDeviceRef[] {
+        return (refs ?? []).filter((ref) => ref.member_id === memberId);
+    }
+
+    private hasDeviceRef(
+        refs: SenderKeyDeviceRef[] | undefined,
+        memberId: number,
+        deviceId: string,
+    ): boolean {
+        return (refs ?? []).some((ref) => ref.member_id === memberId && ref.device_id === deviceId);
+    }
+
+    private collectUniqueSourceRefs(status: GetSenderKeyDistributionStatusResponse): SenderKeyDeviceRef[] {
+        const refs = [...(status.requestable_sources ?? []), ...(status.pending_from_sources ?? [])];
+        const unique = new Map<string, SenderKeyDeviceRef>();
+        for (const ref of refs) {
+            unique.set(senderKeyDeviceRefKey(ref), ref);
+        }
+        return [...unique.values()];
+    }
+
+    private isDirectRoomLocallyReady(
+        localStates: SenderKeyStateMap,
+        options: {
+            roomMembers?: RoomMember[];
+            currentMemberId: number;
+            status?: GetSenderKeyDistributionStatusResponse;
+        },
+    ): boolean {
+        const currentDeviceId = this.getCurrentDeviceId();
+        if (!this.hasOwnCurrentDeviceSenderKey(localStates, options.currentMemberId, currentDeviceId)) {
             return false;
         }
 
+        const requiredSources = [
+            ...(options.status?.available_from_sources ?? []),
+            ...this.collectUniqueSourceRefs(options.status ?? {
+                own_device_sender_key_exists: true,
+                requestable_sources: [],
+                available_from_sources: [],
+                available_to_targets: [],
+                pending_receivers: [],
+                pending_from_sources: [],
+            }),
+        ];
+        if (requiredSources.length > 0) {
+            return requiredSources.every((ref) => this.hasPeerSenderKeyForSource(localStates, ref.member_id, ref.device_id));
+        }
+
         const peerMembers = (options.roomMembers ?? []).filter((member) => member.member_id !== options.currentMemberId);
-        return peerMembers.every((member) => {
-            const state = localStates.get(member.member_id);
-            return state !== undefined && !state.is_own_key;
-        });
+        return peerMembers.every((member) => this.hasAnyPeerSenderKeyForMember(localStates, member.member_id));
     }
 
     isDirectRoomReadyFromState(
         status: GetSenderKeyDistributionStatusResponse,
-        localStates: Map<number, SenderKeyState>,
+        localStates: SenderKeyStateMap,
         options: { roomMembers?: RoomMember[]; currentMemberId: number },
     ): boolean {
         const peerMembers = (options.roomMembers ?? []).filter((member) => member.member_id !== options.currentMemberId);
         if (peerMembers.length > 0) {
-            return this.isDirectRoomLocallyReady(localStates, options);
+            return this.isDirectRoomLocallyReady(localStates, {
+                ...options,
+                status,
+            });
         }
 
-        const localSenderKeyExists = localStates.get(options.currentMemberId)?.is_own_key === true;
-        return localSenderKeyExists
-            && (status.pending_from_members?.length ?? 0) === 0
-            && (status.available_from_member_ids?.length ?? 0) === 0;
+        const currentDeviceId = this.getCurrentDeviceId();
+        if (!this.hasOwnCurrentDeviceSenderKey(localStates, options.currentMemberId, currentDeviceId)) {
+            return false;
+        }
+
+        const requiredSources = [
+            ...(status.available_from_sources ?? []),
+            ...this.collectUniqueSourceRefs(status),
+        ];
+        return requiredSources.every((ref) => this.hasPeerSenderKeyForSource(localStates, ref.member_id, ref.device_id));
     }
 
     async deleteLocalSenderKeys(memberIds: number[]): Promise<void> {
@@ -375,19 +475,50 @@ class E2eeService {
         await deleteSenderKeys(accountId, memberIds);
     }
 
-    private async createSenderKeyRequestOnce(roomId: number, providerMemberId: number): Promise<boolean> {
+    async getSelfSenderKeySync(): Promise<GetSelfSenderKeySyncResponse> {
+        return e2eeApi.getSelfSenderKeySync();
+    }
+
+    async acceptSelfSenderKeySync(): Promise<GetSelfSenderKeySyncResponse> {
+        let accepted: GetSelfSenderKeySyncResponse;
+        try {
+            accepted = await e2eeApi.acceptSelfSenderKeySync();
+        } catch (error) {
+            const latest = await e2eeApi.getSelfSenderKeySync().catch(() => null);
+            if (
+                latest?.exists
+                && latest.provider_current_device
+                && ['syncing', 'uploaded', 'completed'].includes(latest.status)
+            ) {
+                accepted = latest;
+            } else {
+                throw error;
+            }
+        }
+
+        await chatRefreshSelfSenderKeySync().catch((error) => {
+            logger.warn('Failed to refresh self sender key sync runtime state after accept', error);
+        });
+        return accepted;
+    }
+
+    private async createSenderKeyRequestOnce(
+        roomId: number,
+        providerMemberId: number,
+        providerDeviceId: string,
+    ): Promise<boolean> {
         const store = useE2eeStore.getState();
-        if (store.hasSenderKeyRequest(roomId, providerMemberId)) {
+        if (store.hasSenderKeyRequest(roomId, providerMemberId, providerDeviceId)) {
             return false;
         }
 
-        await e2eeApi.createSenderKeyRequest(roomId, providerMemberId);
-        useE2eeStore.getState().addSenderKeyRequest(roomId, providerMemberId);
+        await e2eeApi.createSenderKeyRequest(roomId, providerMemberId, providerDeviceId, this.getCurrentDeviceId());
+        useE2eeStore.getState().addSenderKeyRequest(roomId, providerMemberId, providerDeviceId);
         return true;
     }
 
-    private clearSenderKeyRequest(roomId: number, providerMemberId: number): void {
-        useE2eeStore.getState().removeSenderKeyRequest(roomId, providerMemberId);
+    private clearSenderKeyRequest(roomId: number, providerMemberId: number, providerDeviceId: string): void {
+        useE2eeStore.getState().removeSenderKeyRequest(roomId, providerMemberId, providerDeviceId);
     }
 
     private async uploadOwnSenderKey(
@@ -395,15 +526,22 @@ class E2eeService {
         targetUserId: number,
         ownMemberId: number,
         receiverMemberId: number,
+        receiverDeviceId?: string,
     ): Promise<void> {
-        const uploadKey = `${roomId}:${ownMemberId}:${receiverMemberId}`;
+        const uploadKey = `${roomId}:${ownMemberId}:${receiverMemberId}:${receiverDeviceId ?? ''}`;
         const existing = this._senderKeyUploadPromises.get(uploadKey);
         if (existing) {
             await existing;
             return;
         }
 
-        const uploadPromise = this.uploadOwnSenderKeyOnce(roomId, targetUserId, ownMemberId, receiverMemberId);
+        const uploadPromise = this.uploadOwnSenderKeyOnce(
+            roomId,
+            targetUserId,
+            ownMemberId,
+            receiverMemberId,
+            receiverDeviceId,
+        );
         this._senderKeyUploadPromises.set(uploadKey, uploadPromise);
         try {
             await uploadPromise;
@@ -419,9 +557,11 @@ class E2eeService {
         targetUserId: number,
         ownMemberId: number,
         receiverMemberId: number,
+        receiverDeviceId?: string,
     ): Promise<void> {
         const accountId = this.getCurrentAccountId();
-        const bundle = await e2eeApi.getKeyBundle(targetUserId);
+        const ownDeviceId = this.getCurrentDeviceId();
+        const bundle = await e2eeApi.getKeyBundle(targetUserId, receiverDeviceId);
 
         const keyBundle: PublicKeyBundle = {
             identity_key_dh: fromBase64(bundle.identity_key),
@@ -433,11 +573,12 @@ class E2eeService {
             otpk_key_id: bundle.otp_pre_key_id,
         };
 
-        const prepared = await prepareSenderKeyDistribution(accountId, ownMemberId, keyBundle);
+        const prepared = await prepareSenderKeyDistribution(accountId, ownMemberId, ownDeviceId, keyBundle);
 
         await e2eeApi.uploadSenderKey(
             roomId,
             receiverMemberId,
+            receiverDeviceId,
             prepared.sender_key_version,
             toBase64(prepared.distribution_message),
         );
@@ -450,19 +591,29 @@ class E2eeService {
         localStates: SenderKeyStateMap,
         status: GetSenderKeyDistributionStatusResponse,
     ): Promise<void> {
-        const ownState = localStates.get(ownMemberId);
-        const refreshAllReceivers = !ownState?.is_own_key || !status.own_sender_key_exists;
-        const pendingReceivers = new Set(status.pending_receivers ?? []);
+        const currentDeviceId = this.getCurrentDeviceId();
+        const ownCurrentDeviceState = this.getSenderKeyState(localStates, ownMemberId, currentDeviceId);
+        if (!ownCurrentDeviceState && (status.pending_receivers?.length ?? 0) === 0) {
+            logger.warn(`Sender key upload skipped for room ${roomId}: no own current-device sender key state and no explicit pending receivers`);
+            return;
+        }
 
-        for (const member of roomMembers) {
-            if (member.member_id === ownMemberId || member.user_id === undefined) continue;
-            if (!refreshAllReceivers && !pendingReceivers.has(member.member_id)) continue;
+        for (const receiverRef of status.pending_receivers ?? []) {
+            if (receiverRef.member_id === ownMemberId) continue;
+            const member = roomMembers.find((candidate) => candidate.member_id === receiverRef.member_id);
+            if (!member?.user_id) continue;
 
             try {
-                await this.uploadOwnSenderKey(roomId, member.user_id, ownMemberId, member.member_id);
-                logger.info(`Sender key uploaded for room ${roomId} to member ${member.member_id}`);
+                await this.uploadOwnSenderKey(
+                    roomId,
+                    member.user_id,
+                    ownMemberId,
+                    receiverRef.member_id,
+                    receiverRef.device_id,
+                );
+                logger.info(`Sender key uploaded for room ${roomId} to member ${receiverRef.member_id} device ${receiverRef.device_id}`);
             } catch (err) {
-                logger.warn(`Failed to upload sender key for room ${roomId} to member ${member.member_id}`, err);
+                logger.warn(`Failed to upload sender key for room ${roomId} to member ${receiverRef.member_id} device ${receiverRef.device_id}`, err);
             }
         }
     }
@@ -474,27 +625,28 @@ class E2eeService {
         localStates: SenderKeyStateMap,
         status: GetSenderKeyDistributionStatusResponse,
     ): Promise<void> {
-        const pendingFromMembers = new Set(status.pending_from_members ?? []);
-        const availableFromMembers = new Set(status.available_from_member_ids ?? []);
+        const availableFromSources = new Set((status.available_from_sources ?? []).map(senderKeyDeviceRefKey));
 
-        for (const member of roomMembers) {
-            if (member.member_id === ownMemberId) continue;
+        for (const sourceRef of this.collectUniqueSourceRefs(status)) {
+            if (sourceRef.member_id === ownMemberId) continue;
 
-            const localState = localStates.get(member.member_id);
-            const hasLocalPeerKey = localState !== undefined && !localState.is_own_key;
+            const hasLocalPeerKey = this.hasPeerSenderKeyForSource(localStates, sourceRef.member_id, sourceRef.device_id);
             if (hasLocalPeerKey) {
-                this.clearSenderKeyRequest(roomId, member.member_id);
+                this.clearSenderKeyRequest(roomId, sourceRef.member_id, sourceRef.device_id);
                 continue;
             }
 
-            if (availableFromMembers.has(member.member_id) || !pendingFromMembers.has(member.member_id)) {
+            if (availableFromSources.has(senderKeyDeviceRefKey(sourceRef))) {
                 continue;
             }
+
+            const member = roomMembers.find((candidate) => candidate.member_id === sourceRef.member_id);
+            if (!member) continue;
 
             try {
-                await this.createSenderKeyRequestOnce(roomId, member.member_id);
+                await this.createSenderKeyRequestOnce(roomId, sourceRef.member_id, sourceRef.device_id);
             } catch (err) {
-                logger.warn(`Failed to create sender key request for room ${roomId} and member ${member.member_id}`, err);
+                logger.warn(`Failed to create sender key request for room ${roomId} and member ${sourceRef.member_id} device ${sourceRef.device_id}`, err);
             }
         }
     }
@@ -584,11 +736,12 @@ class E2eeService {
         inviterUserId: number,
         memberId?: number,
         receiverMemberId?: number,
+        receiverDeviceId?: string,
     ): Promise<void> {
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
         const resolvedReceiverMemberId = this.resolvePeerMemberId(roomId, inviterUserId, receiverMemberId);
 
-        await this.uploadOwnSenderKey(roomId, inviterUserId, myMemberId, resolvedReceiverMemberId);
+        await this.uploadOwnSenderKey(roomId, inviterUserId, myMemberId, resolvedReceiverMemberId, receiverDeviceId);
 
         logger.info(`Direct key exchange completed for room ${roomId}`);
     }
@@ -601,8 +754,9 @@ class E2eeService {
     async encryptMessage(roomId: number, plaintext: string, memberId?: number): Promise<string> {
         const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
+        const myDeviceId = this.getCurrentDeviceId();
         const bytes = Array.from(new TextEncoder().encode(plaintext));
-        const { ciphertext, nonce } = await encryptWithSenderKey(accountId, myMemberId, bytes);
+        const { ciphertext, nonce } = await encryptWithSenderKey(accountId, myMemberId, myDeviceId, bytes);
         const combined = new Uint8Array([...nonce, ...ciphertext]);
         const b64 = btoa(String.fromCharCode(...combined));
         return `e2ee:v1:${b64}`;
@@ -614,7 +768,13 @@ class E2eeService {
     //      automatically fires a sender key request (debounced per room+member).
     // [中] decryptMessage：將 "e2ee:v1:{base64}" 格式的訊息解密回明文；若非 e2ee 格式則原樣返回。
     //      當因缺少/過期 key 解密失敗且有提供 roomId 時，自動發出 sender key 請求（依 room+member 防抖）。
-    async decryptMessage(content: string, senderMemberId: number, roomId?: number): Promise<string> {
+    async decryptMessage(
+        content: string,
+        senderMemberId: number,
+        senderDeviceId: string,
+        senderKeyVersion: number,
+        roomId?: number,
+    ): Promise<string> {
         const PREFIX = 'e2ee:v1:';
         if (!content.startsWith(PREFIX)) return content;
         const accountId = this.getCurrentAccountId();
@@ -622,34 +782,45 @@ class E2eeService {
             const combined = Uint8Array.from(atob(content.slice(PREFIX.length)), c => c.charCodeAt(0));
             const nonce = Array.from(combined.slice(0, 12));
             const ciphertext = Array.from(combined.slice(12));
-            const result = await decryptWithSenderKey(accountId, senderMemberId, ciphertext, nonce);
+            const result = await decryptWithSenderKey(
+                accountId,
+                senderMemberId,
+                senderDeviceId,
+                senderKeyVersion,
+                ciphertext,
+                nonce,
+            );
             if (result.status === 'ok' && result.plaintext) {
                 return new TextDecoder().decode(new Uint8Array(result.plaintext));
             }
             if (result.status === 'missing_key' || result.status === 'stale_key') {
-                this.requestSenderKeyOnDecryptFail(roomId, senderMemberId);
+                this.requestSenderKeyOnDecryptFail(roomId, senderMemberId, senderDeviceId);
                 return WAITING_FOR_SENDER_KEY;
             }
             return content;
         } catch (err) {
-            logger.warn(`Failed to decrypt message from member ${senderMemberId}`, err);
-            const keyExists = await hasSenderKey(accountId, senderMemberId).catch(() => false);
+            logger.warn(`Failed to decrypt message from member ${senderMemberId} device ${senderDeviceId}`, err);
+            const keyExists = await hasSenderKey(accountId, senderMemberId, senderDeviceId).catch(() => false);
             if (!keyExists) {
-                this.requestSenderKeyOnDecryptFail(roomId, senderMemberId);
+                this.requestSenderKeyOnDecryptFail(roomId, senderMemberId, senderDeviceId);
                 return WAITING_FOR_SENDER_KEY;
             }
             return content;
         }
     }
 
-    private requestSenderKeyOnDecryptFail(roomId: number | undefined, senderMemberId: number): void {
+    private requestSenderKeyOnDecryptFail(
+        roomId: number | undefined,
+        senderMemberId: number,
+        senderDeviceId: string,
+    ): void {
         if (roomId === undefined) return;
-        const key = `${roomId}:${senderMemberId}`;
+        const key = `${roomId}:${senderMemberId}:${senderDeviceId}`;
         const now = Date.now();
         const lastRequested = this._decryptRequestDebounce.get(key);
         if (lastRequested !== undefined && now - lastRequested < DECRYPT_REQUEST_DEBOUNCE_MS) return;
         this._decryptRequestDebounce.set(key, now);
-        this.createSenderKeyRequestOnce(roomId, senderMemberId).catch(() => {});
+        this.createSenderKeyRequestOnce(roomId, senderMemberId, senderDeviceId).catch(() => {});
     }
 
     // Called when the inviter receives e2ee.sender_key_needed.
@@ -659,22 +830,25 @@ class E2eeService {
         requesterUserId: number,
         memberId?: number,
         requesterMemberId?: number,
+        requesterDeviceId?: string,
         options?: { forceUpload?: boolean },
     ): Promise<boolean> {
         const accountId = this.getCurrentAccountId();
         const myMemberId = this.resolveCurrentMemberId(roomId, memberId);
         const receiverMemberId = this.resolvePeerMemberId(roomId, requesterUserId, requesterMemberId);
         const forceUpload = options?.forceUpload === true;
+        const currentDeviceId = this.getCurrentDeviceId();
 
         if (!forceUpload) {
             const [status, localStates] = await Promise.all([
                 e2eeApi.getSenderKeyDistributionStatus(roomId).catch(() => null),
-                this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>()),
+                this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<string, SenderKeyState>()),
             ]);
-            const ownState = localStates.get(myMemberId);
-            const shouldUpload = !ownState?.is_own_key
-                || !status?.own_sender_key_exists
-                || (status.pending_receivers ?? []).includes(receiverMemberId);
+            const shouldUpload = !this.hasOwnCurrentDeviceSenderKey(localStates, myMemberId, currentDeviceId)
+                || !status?.own_device_sender_key_exists
+                || (requesterDeviceId !== undefined
+                    ? this.hasDeviceRef(status?.pending_receivers, receiverMemberId, requesterDeviceId)
+                    : this.deviceRefsForMember(status?.pending_receivers, receiverMemberId).length > 0);
 
             if (!shouldUpload) {
                 logger.info(`Sender key upload skipped for room ${roomId}: receiver ${receiverMemberId} already has the latest distribution`);
@@ -682,7 +856,7 @@ class E2eeService {
             }
         }
 
-        await this.uploadOwnSenderKey(roomId, requesterUserId, myMemberId, receiverMemberId);
+        await this.uploadOwnSenderKey(roomId, requesterUserId, myMemberId, receiverMemberId, requesterDeviceId);
 
         logger.info(`Inviter key exchange completed for room ${roomId}`, {
             forceUpload,
@@ -695,29 +869,53 @@ class E2eeService {
     //      create a sender key request.
     // [中] checkAndRequestReverseKey：提供我方 key 給請求者後，反向確認是否也缺對方 key。
     //      若本地沒有，先嘗試消化已有 distribution；若仍缺少則建立 sender key 請求。
-    async checkAndRequestReverseKey(roomId: number, targetMemberId: number): Promise<void> {
+    async checkAndRequestReverseKey(
+        roomId: number,
+        targetMemberId: number,
+        targetDeviceId?: string,
+    ): Promise<void> {
         const accountId = this.getCurrentAccountId();
-        let localStates = await this.getSenderKeyStateMap(accountId, [targetMemberId]).catch(() => new Map<number, SenderKeyState>());
-        if (localStates.get(targetMemberId)?.is_own_key === false) {
-            this.clearSenderKeyRequest(roomId, targetMemberId);
+        let localStates = await this.getSenderKeyStateMap(accountId, [targetMemberId]).catch(() => new Map<string, SenderKeyState>());
+        const alreadyReady = targetDeviceId
+            ? this.hasPeerSenderKeyForSource(localStates, targetMemberId, targetDeviceId)
+            : this.hasAnyPeerSenderKeyForMember(localStates, targetMemberId);
+        if (alreadyReady) {
+            if (targetDeviceId) this.clearSenderKeyRequest(roomId, targetMemberId, targetDeviceId);
             return;
         }
 
         // Try consuming any pending distributions that may already be available.
         await this.resolveMemberSenderKeys(roomId).catch(() => {});
-        localStates = await this.getSenderKeyStateMap(accountId, [targetMemberId]).catch(() => new Map<number, SenderKeyState>());
-        if (localStates.get(targetMemberId)?.is_own_key === false) {
-            this.clearSenderKeyRequest(roomId, targetMemberId);
+        localStates = await this.getSenderKeyStateMap(accountId, [targetMemberId]).catch(() => new Map<string, SenderKeyState>());
+        const readyAfterConsume = targetDeviceId
+            ? this.hasPeerSenderKeyForSource(localStates, targetMemberId, targetDeviceId)
+            : this.hasAnyPeerSenderKeyForMember(localStates, targetMemberId);
+        if (readyAfterConsume) {
+            if (targetDeviceId) this.clearSenderKeyRequest(roomId, targetMemberId, targetDeviceId);
             return;
         }
 
         const status = await e2eeApi.getSenderKeyDistributionStatus(roomId).catch(() => null);
-        if (status && (status.available_from_member_ids ?? []).includes(targetMemberId)) {
+        if (status && targetDeviceId && this.hasDeviceRef(status.available_from_sources, targetMemberId, targetDeviceId)) {
+            return;
+        }
+        if (status && !targetDeviceId && this.deviceRefsForMember(status.available_from_sources, targetMemberId).length > 0) {
             return;
         }
 
-        if (!status || (status.pending_from_members ?? []).includes(targetMemberId)) {
-            await this.createSenderKeyRequestOnce(roomId, targetMemberId).catch(() => {});
+        if (!status) {
+            if (targetDeviceId) {
+                await this.createSenderKeyRequestOnce(roomId, targetMemberId, targetDeviceId).catch(() => {});
+            }
+            return;
+        }
+
+        const requestableRefs = this.collectUniqueSourceRefs(status);
+        const targets = targetDeviceId
+            ? requestableRefs.filter((ref) => ref.member_id === targetMemberId && ref.device_id === targetDeviceId)
+            : this.deviceRefsForMember(requestableRefs, targetMemberId);
+        for (const target of targets) {
+            await this.createSenderKeyRequestOnce(roomId, target.member_id, target.device_id).catch(() => {});
         }
     }
 
@@ -737,6 +935,9 @@ class E2eeService {
                 const result = await consumeSenderKeyDistribution(
                     accountId,
                     item.sender_member_id,
+                    item.sender_device_id,
+                    item.receiver_member_id,
+                    item.receiver_device_id,
                     distBytes,
                     item.sender_key_version,
                 );
@@ -746,7 +947,7 @@ class E2eeService {
                 const status = result.status === 'failed' ? 'failed' : 'consumed';
                 await e2eeApi.consumeSenderKeyDistribution(item.distribution_id, status);
                 if (status === 'consumed') {
-                    this.clearSenderKeyRequest(roomId, item.sender_member_id);
+                    this.clearSenderKeyRequest(roomId, item.sender_member_id, item.sender_device_id);
                 }
             } catch (err) {
                 logger.warn(`Failed to resolve sender key distribution ${item.distribution_id}`, err);
@@ -779,22 +980,28 @@ class E2eeService {
         }
 
         const accountId = this.getCurrentAccountId();
-        const localStates = roomMembers
+        const localStates: SenderKeyStateMap = roomMembers
             ? await this.getSenderKeyStateMap(
                 accountId,
                 roomMembers.map((member) => member.member_id),
-            ).catch(() => new Map<number, SenderKeyState>())
-            : await this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<number, SenderKeyState>());
+            ).catch(() => new Map<string, SenderKeyState>())
+            : await this.getSenderKeyStateMap(accountId, [myMemberId]).catch(() => new Map<string, SenderKeyState>());
 
         const status = await e2eeApi.getSenderKeyDistributionStatus(roomId).catch((err) => {
             logger.warn(`Failed to fetch sender key distribution status for room ${roomId}`, err);
             return null;
         });
-        if (!status || !Array.isArray(status.pending_from_members) || !Array.isArray(status.available_from_member_ids)) {
+        if (
+            !status
+            || !Array.isArray(status.pending_from_sources)
+            || !Array.isArray(status.available_from_sources)
+            || !Array.isArray(status.requestable_sources)
+        ) {
             if (roomMembers && roomMembers.length > 0) {
                 return this.isDirectRoomLocallyReady(localStates, {
                     roomMembers,
                     currentMemberId: myMemberId,
+                    status: status ?? undefined,
                 });
             }
             logger.warn(`Invalid sender key distribution status for room ${roomId}`, status);

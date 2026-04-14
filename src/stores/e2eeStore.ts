@@ -9,7 +9,7 @@ interface E2eeState {
     otpReplenishThreshold: number;
     bootstrapStatus: E2eeBootstrapStatus;
     bootstrapError: string | null;
-    // tracks in-flight or already-sent sender key requests: "roomId:provideMemberId"
+    // tracks in-flight or already-sent sender key requests: "roomId:providerMemberId:providerDeviceId"
     senderKeyRequests: Set<string>;
 
     setKeysUploaded: (v: boolean) => void;
@@ -17,10 +17,13 @@ interface E2eeState {
     setKeyPolicy: (targetCount: number, replenishThreshold: number) => void;
     setBootstrapStatus: (status: E2eeBootstrapStatus, error?: string | null) => void;
     resetBootstrapState: () => void;
-    hasSenderKeyRequest: (roomId: number, providerMemberId: number) => boolean;
-    addSenderKeyRequest: (roomId: number, providerMemberId: number) => void;
-    removeSenderKeyRequest: (roomId: number, providerMemberId: number) => void;
+    hasSenderKeyRequest: (roomId: number, providerMemberId: number, providerDeviceId?: string) => boolean;
+    addSenderKeyRequest: (roomId: number, providerMemberId: number, providerDeviceId?: string) => void;
+    removeSenderKeyRequest: (roomId: number, providerMemberId: number, providerDeviceId?: string) => void;
 }
+
+const senderKeyRequestKey = (roomId: number, providerMemberId: number, providerDeviceId?: string): string =>
+    `${roomId}:${providerMemberId}:${providerDeviceId ?? ''}`;
 
 export const useE2eeStore = create<E2eeState>((set, get) => ({
     keysUploaded: false,
@@ -50,16 +53,16 @@ export const useE2eeStore = create<E2eeState>((set, get) => ({
         bootstrapError: null,
         senderKeyRequests: new Set(),
     }),
-    hasSenderKeyRequest: (roomId, providerMemberId) =>
-        get().senderKeyRequests.has(`${roomId}:${providerMemberId}`),
-    addSenderKeyRequest: (roomId, providerMemberId) =>
+    hasSenderKeyRequest: (roomId, providerMemberId, providerDeviceId) =>
+        get().senderKeyRequests.has(senderKeyRequestKey(roomId, providerMemberId, providerDeviceId)),
+    addSenderKeyRequest: (roomId, providerMemberId, providerDeviceId) =>
         set((s) => ({
-            senderKeyRequests: new Set(s.senderKeyRequests).add(`${roomId}:${providerMemberId}`),
+            senderKeyRequests: new Set(s.senderKeyRequests).add(senderKeyRequestKey(roomId, providerMemberId, providerDeviceId)),
         })),
-    removeSenderKeyRequest: (roomId, providerMemberId) =>
+    removeSenderKeyRequest: (roomId, providerMemberId, providerDeviceId) =>
         set((s) => {
             const next = new Set(s.senderKeyRequests);
-            next.delete(`${roomId}:${providerMemberId}`);
+            next.delete(senderKeyRequestKey(roomId, providerMemberId, providerDeviceId));
             return { senderKeyRequests: next };
         }),
 }));

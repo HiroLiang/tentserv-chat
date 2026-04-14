@@ -72,10 +72,15 @@ impl SharedRuntime {
             room_id,
             client_message_id
         );
-        let pending = match store::load_retry_message(&self.app, self.session.account_id, &client_message_id) {
+        let pending = match store::load_retry_message(
+            &self.app,
+            self.session.account_id,
+            &client_message_id,
+        ) {
             Ok(Some(pending)) => pending,
             Ok(None) => {
-                let err = format!("pending message {client_message_id} not found for room {room_id}");
+                let err =
+                    format!("pending message {client_message_id} not found for room {room_id}");
                 log::warn!("chat runtime: send message preflight failed error={}", err);
                 let _ = store::update_message_delivery(
                     &self.app,

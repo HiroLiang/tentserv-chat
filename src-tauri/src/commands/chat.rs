@@ -3,7 +3,7 @@ use tauri::State;
 use crate::chat::runtime::{ChatRuntimeManager, SharedRuntime};
 use crate::chat::{
     ChatMessageSnapshot, ChatRetryMessageInput, ChatRoomSnapshot, ChatRoomSnapshotRequest,
-    ChatRoomsSnapshot, ChatRuntimeSession, ChatSendMessageInput,
+    ChatRoomsSnapshot, ChatRuntimeSession, ChatSelfSenderKeySyncState, ChatSendMessageInput,
 };
 
 #[tauri::command]
@@ -82,4 +82,12 @@ pub async fn chat_mark_room_read(
 ) -> Result<(), String> {
     let runtime = manager.current()?;
     runtime.enqueue_mark_room_read(room_id)
+}
+
+#[tauri::command]
+pub async fn chat_refresh_self_sender_key_sync(
+    manager: State<'_, ChatRuntimeManager>,
+) -> Result<ChatSelfSenderKeySyncState, String> {
+    let runtime = manager.current()?;
+    runtime.refresh_self_sender_key_sync().await
 }

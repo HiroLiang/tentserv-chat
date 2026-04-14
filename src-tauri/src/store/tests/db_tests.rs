@@ -247,7 +247,7 @@ fn migration_is_idempotent_after_v5() {
 }
 
 #[test]
-fn migration_v6_rebuilds_chat_message_tables_for_server_dedup_and_encrypted_cache() {
+fn migration_v7_rebuilds_chat_message_tables_with_device_scoped_sender_key_fields() {
     let conn = Connection::open_in_memory().expect("in-memory db must open");
     conn.execute_batch(
         r#"
@@ -273,62 +273,83 @@ fn migration_v6_rebuilds_chat_message_tables_for_server_dedup_and_encrypted_cach
         CREATE TABLE chat_messages_encrypted (
             account_id INTEGER NOT NULL,
             room_id INTEGER NOT NULL,
-            server_message_id INTEGER NOT NULL,
+            client_message_id TEXT NOT NULL,
+            server_message_id INTEGER,
             sender_id INTEGER NOT NULL,
             encrypted_content BLOB NOT NULL,
             message_type TEXT NOT NULL,
             created_at TEXT NOT NULL,
             received_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            PRIMARY KEY (account_id, server_message_id)
+            PRIMARY KEY (account_id, client_message_id),
+            UNIQUE (account_id, server_message_id)
         );
         INSERT INTO chat_messages (
             account_id, room_id, client_message_id, server_message_id, sender_id, message_type,
             content, created_at, sort_key, delivery_status, is_local_echo
         ) VALUES
-            (1, 3, 'server:11', 11, 5, 'text', 'duplicate-server-row', '2026-04-13T03:00:01Z', 1, 'sent', 0),
             (1, 3, 'local:3:1776020000000', 11, 5, 'text', 'preferred-local-row', '2026-04-13T03:00:00Z', 0, 'sent', 0);
         INSERT INTO chat_messages_encrypted (
-            account_id, room_id, server_message_id, sender_id, encrypted_content, message_type, created_at
+            account_id, room_id, client_message_id, server_message_id, sender_id, encrypted_content, message_type, created_at
         ) VALUES
-            (1, 3, 11, 5, X'AA', 'text', '2026-04-13T03:00:00Z');
-        PRAGMA user_version = 5;
+            (1, 3, 'local:3:1776020000000', 11, 5, X'AA', 'text', '2026-04-13T03:00:00Z');
+        PRAGMA user_version = 6;
         "#,
     )
-    .expect("v5 fixture setup must succeed");
+    .expect("v6 fixture setup must succeed");
 
-    migrate_schema(&conn).expect("v5→v6 migration must succeed");
+    migrate_schema(&conn).expect("v6→v8 migration must succeed");
 
-    let encrypted_columns: i64 = conn
+    let user_version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("schema version should be readable");
+    let encrypted_sender_device_columns: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('chat_messages_encrypted') WHERE name = 'client_message_id'",
+            "SELECT COUNT(*) FROM pragma_table_info('chat_messages_encrypted') WHERE name = 'sender_device_id'",
             [],
             |row| row.get(0),
         )
-        .expect("encrypted table columns should be readable");
-    let migrated_client_message_id: String = conn
+        .expect("encrypted message table columns should be readable");
+    let encrypted_sender_key_version_columns: i64 = conn
         .query_row(
-            "SELECT client_message_id FROM chat_messages_encrypted WHERE account_id = 1 AND server_message_id = 11",
+            "SELECT COUNT(*) FROM pragma_table_info('chat_messages_encrypted') WHERE name = 'sender_key_version'",
             [],
             |row| row.get(0),
         )
-        .expect("encrypted row should carry a client_message_id after migration");
+        .expect("encrypted message table columns should be readable");
+    let message_sender_device_columns: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('chat_messages') WHERE name = 'sender_device_id'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("chat message table columns should be readable");
+    let sender_key_device_columns: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sender_keys') WHERE name = 'device_id'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("sender key table columns should be readable");
+    let encrypted_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chat_messages_encrypted", [], |row| {
+            row.get(0)
+        })
+        .expect("encrypted message row count should be readable");
     let message_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM chat_messages WHERE account_id = 1 AND room_id = 3 AND server_message_id = 11",
-            [],
-            |row| row.get(0),
-        )
-        .expect("chat message count should be readable");
-    let preferred_row_client_id: String = conn
-        .query_row(
-            "SELECT client_message_id FROM chat_messages WHERE account_id = 1 AND room_id = 3 AND server_message_id = 11",
-            [],
-            |row| row.get(0),
-        )
-        .expect("preferred merged chat row should exist");
+        .query_row("SELECT COUNT(*) FROM chat_messages", [], |row| row.get(0))
+        .expect("chat message row count should be readable");
 
-    assert_eq!(encrypted_columns, 1, "v6 should add client_message_id to encrypted cache");
-    assert_eq!(migrated_client_message_id, "server:11");
-    assert_eq!(message_count, 1, "v6 should collapse duplicate server rows");
-    assert_eq!(preferred_row_client_id, "local:3:1776020000000");
+    assert_eq!(user_version, 8, "migration should advance schema to v8");
+    assert_eq!(encrypted_sender_device_columns, 1);
+    assert_eq!(encrypted_sender_key_version_columns, 1);
+    assert_eq!(message_sender_device_columns, 1);
+    assert_eq!(sender_key_device_columns, 1);
+    assert_eq!(
+        encrypted_count, 0,
+        "v7 rebuild intentionally drops encrypted cache rows"
+    );
+    assert_eq!(
+        message_count, 0,
+        "v7 rebuild intentionally drops message cache rows"
+    );
 }

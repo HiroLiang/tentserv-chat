@@ -1,22 +1,68 @@
 import { saveAuthToken, getAuthToken, clearAuthToken } from "@/bridge/auth.ts";
 import { authApi, userApi } from "@/api/index.ts";
 import type {
+    AuthLoginResponse,
+    AuthProfileResponse,
     AuthRegisterResponse,
+    AuthResendLoginDeviceVerificationResponse,
     AuthResendVerifyEmailResponse,
     AuthVerifyEmailRequest,
     AuthVerifyEmailResponse,
+    AuthVerifyLoginDeviceRequest,
+    AuthVerifyLoginDeviceResponse,
 } from "@/api/types.ts";
 import { useUserStore } from "@/stores/userStore.ts";
 import { useChatStore } from "@/stores/chatStore.ts";
 import {
-    AuthMessageResponse,
     CurrentUserResponse, UpdateProfileRequest,
+    LoginFlowResponse,
     UserRegisterRequest,
 } from "@/types/user.ts";
 import { toast } from "sonner";
 import { useDeviceStore } from "@/stores/deviceStore.ts";
 import { useE2eeStore } from "@/stores/e2eeStore.ts";
 import { chatService } from "@/services/chatService.ts";
+
+const toCurrentUserResponse = (response: AuthProfileResponse): CurrentUserResponse => ({
+    id: response.current_user.id,
+    accountId: response.account_id,
+    name: response.current_user.name,
+    email: response.email,
+    avatar_url: response.current_user.avatar,
+    roles: response.current_user.role_codes ?? [],
+});
+
+const setAuthenticatedUserState = (user: CurrentUserResponse, token?: string): void => {
+    const state = useUserStore.getState();
+    const preservedToken = token ?? state.currentUser?.token;
+    state.setCurrentUser({
+        id: user.id,
+        accountId: user.accountId,
+        email: user.email,
+        name: user.name,
+        avatar: user.avatar_url,
+        token: preservedToken,
+        isLoggedIn: true,
+        roles: user.roles,
+    });
+};
+
+const fetchCurrentUserProfile = async (): Promise<CurrentUserResponse> => {
+    const response = await authApi.getProfile();
+    return toCurrentUserResponse(response);
+};
+
+const hydrateAuthenticatedSessionState = async (): Promise<CurrentUserResponse> => {
+    const token = useUserStore.getState().currentUser?.token;
+    const currentUser = await fetchCurrentUserProfile();
+    setAuthenticatedUserState(currentUser, token);
+
+    if (token && currentUser.accountId) {
+        await saveAuthToken(currentUser.accountId, token);
+    }
+
+    return currentUser;
+};
 
 // [EN] UserService handles authentication lifecycle: login, register, session restore, logout, and profile updates.
 //      Token is persisted in the OS keyring via the Tauri bridge.
@@ -27,7 +73,7 @@ class UserService {
     // [EN] Login: call API with device_id, fetch current user, save token to keyring.
     // [中] 登入：攜帶 device_id 呼叫 API，取得目前使用者資料，將 token 存入 keyring。
     // [日] ログイン：device_id を含めて API を呼び出し、現在のユーザー情報を取得し、トークンを keyring に保存する。
-    async login(identifier: string, password: string): Promise<AuthMessageResponse> {
+    async login(identifier: string, password: string): Promise<LoginFlowResponse> {
         useE2eeStore.getState().resetBootstrapState();
         const deviceState = useDeviceStore.getState();
         const response = await authApi.login({
@@ -36,13 +82,12 @@ class UserService {
             device_id: deviceState.deviceId ?? '',
         });
 
-        const token = useUserStore.getState().currentUser?.token;
-        const currentUser = await this.fetchCurrentUser();
-        this.setAuthenticatedUser(currentUser, token);
+        if (response.login_status !== 'authenticated') {
+            return this.toLoginFlowResponse(response);
+        }
 
-        if (token && currentUser.accountId) await saveAuthToken(currentUser.accountId, token);
-
-        return response;
+        await hydrateAuthenticatedSessionState();
+        return this.toLoginFlowResponse(response);
     }
 
     // [EN] Restore session: read token from keyring, call /api/auth/profile to populate userStore.
@@ -87,6 +132,7 @@ class UserService {
             email: payload.email,
             name: payload.name,
             password: payload.password,
+            confirm_password: payload.confirmPassword,
         });
     }
 
@@ -94,8 +140,20 @@ class UserService {
         return authApi.verifyEmail(payload);
     }
 
+    async verifyLoginDevice(payload: AuthVerifyLoginDeviceRequest): Promise<AuthVerifyLoginDeviceResponse> {
+        return authApi.verifyLoginDevice(payload);
+    }
+
+    async hydrateAuthenticatedSession(): Promise<CurrentUserResponse> {
+        return hydrateAuthenticatedSessionState();
+    }
+
     async resendVerifyEmail(token: string): Promise<AuthResendVerifyEmailResponse> {
         return authApi.resendVerifyEmail({ token });
+    }
+
+    async resendLoginDeviceVerification(token: string): Promise<AuthResendLoginDeviceVerificationResponse> {
+        return authApi.resendLoginDeviceVerification({ token });
     }
 
     // [EN] Logout: call API, stop the Rust chat runtime, clear keyring token, reset chat and user stores.
@@ -128,8 +186,8 @@ class UserService {
         }
 
         await userApi.updateProfile({ name: payload.name });
-        const currentUser = await this.fetchCurrentUser();
-        this.setAuthenticatedUser(currentUser);
+        const currentUser = await fetchCurrentUserProfile();
+        setAuthenticatedUserState(currentUser);
     }
 
     async uploadAvatar(file: File): Promise<{ avatarUrl: string }> {
@@ -146,31 +204,15 @@ class UserService {
     }
 
     async fetchCurrentUser(): Promise<CurrentUserResponse> {
-        const response = await authApi.getProfile();
-
-        return {
-            id: response.current_user.id,
-            accountId: response.account_id,
-            name: response.current_user.name,
-            email: response.email,
-            avatar_url: response.current_user.avatar,
-            roles: response.current_user.role_codes ?? [],
-        };
+        return fetchCurrentUserProfile();
     }
 
-    private setAuthenticatedUser(user: CurrentUserResponse, token?: string): void {
-        const state = useUserStore.getState();
-        const preservedToken = token ?? state.currentUser?.token;
-        state.setCurrentUser({
-            id: user.id,
-            accountId: user.accountId,
-            email: user.email,
-            name: user.name,
-            avatar: user.avatar_url,
-            token: preservedToken,
-            isLoggedIn: true,
-            roles: user.roles,
-        });
+    private toLoginFlowResponse(response: AuthLoginResponse): LoginFlowResponse {
+        return {
+            loginStatus: response.login_status,
+            verificationToken: response.verification_token,
+            verificationExpiresAtMs: response.verification_expires_at_ms,
+        };
     }
 }
 

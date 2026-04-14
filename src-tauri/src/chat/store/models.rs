@@ -9,6 +9,8 @@ pub struct EncryptedChatMessageRecord {
     pub client_message_id: String,
     pub server_message_id: Option<i64>,
     pub sender_id: i64,
+    pub sender_device_id: String,
+    pub sender_key_version: i64,
     pub encrypted_content: Vec<u8>,
     pub message_type: String,
     pub created_at: String,

@@ -16,6 +16,29 @@ export interface ChatRuntimeSessionInput {
     device_id: string;
 }
 
+export interface ChatSelfSenderKeySyncDevice {
+    device_id: string;
+    device_name: string;
+    platform: string;
+    last_ip?: string;
+    binding_status?: string;
+}
+
+export interface ChatSelfSenderKeySyncState {
+    exists: boolean;
+    status: 'idle' | 'pending_provider' | 'syncing' | 'uploaded' | 'completed' | 'failed';
+    requester_device?: ChatSelfSenderKeySyncDevice | null;
+    provider_device?: ChatSelfSenderKeySyncDevice | null;
+    requester_current_device: boolean;
+    provider_current_device: boolean;
+    last_error?: string | null;
+    requested_at_ms?: number;
+    provider_claimed_at_ms?: number;
+    uploaded_at_ms?: number;
+    completed_at_ms?: number;
+    failed_at_ms?: number;
+}
+
 export interface ChatSyncState {
     ws_status: string;
     active_room_id?: number | null;
@@ -25,6 +48,7 @@ export interface ChatSyncState {
     last_active_room_sync_at?: string | null;
     self_sender_key_sync_status: string;
     self_sender_key_sync_error?: string | null;
+    self_sender_key_sync?: ChatSelfSenderKeySyncState | null;
     error?: string | null;
 }
 
@@ -100,6 +124,9 @@ export const chatRetryMessage = (
 
 export const chatMarkRoomRead = (roomId: number): Promise<void> =>
     invoke('chat_mark_room_read', { roomId });
+
+export const chatRefreshSelfSenderKeySync = (): Promise<ChatSelfSenderKeySyncState> =>
+    invoke<ChatSelfSenderKeySyncState>('chat_refresh_self_sender_key_sync');
 
 export const onChatRoomsUpdated = (
     handler: (payload: ChatRoomsSnapshot) => void,

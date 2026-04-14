@@ -13,6 +13,7 @@ vi.mock("@/api/index.ts", () => ({
         logout: vi.fn(),
         getProfile: vi.fn(),
         register: vi.fn(),
+        verifyLoginDevice: vi.fn(),
     },
     userApi: {
         updateProfile: vi.fn(),
@@ -100,12 +101,12 @@ describe("userService login/session", () => {
         });
         vi.mocked(authApi.login).mockImplementation(async () => {
             useUserStore.getState().setCurrentUser({ id: 0, token: "token-login" });
-            return { message: "Login successfully" };
+            return { login_status: "authenticated" };
         });
 
         const response = await userService.login("hiro@example.com", "correct-password");
 
-        expect(response).toEqual({ message: "Login successfully" });
+        expect(response).toEqual({ loginStatus: "authenticated" });
         expect(authApi.login).toHaveBeenCalledWith({
             identifier: "hiro@example.com",
             password: "correct-password",
@@ -122,6 +123,51 @@ describe("userService login/session", () => {
             token: "token-login",
             isLoggedIn: true,
             roles: ["user"],
+        });
+    });
+
+    it("allows verifyLoginDevice to be used as a detached callback without losing context", async () => {
+        vi.mocked(authApi.verifyLoginDevice).mockResolvedValue({ login_status: "authenticated" });
+
+        const submit = userService.verifyLoginDevice;
+        const response = await submit({
+            token: "verify-token",
+            code: "123456",
+        });
+
+        expect(response).toEqual({ login_status: "authenticated" });
+        expect(authApi.verifyLoginDevice).toHaveBeenCalledWith({
+            token: "verify-token",
+            code: "123456",
+        });
+        expect(authApi.getProfile).not.toHaveBeenCalled();
+        expect(saveAuthToken).not.toHaveBeenCalled();
+    });
+
+    it("hydrates an authenticated session after device verification using the refreshed interceptor token", async () => {
+        useUserStore.setState({
+            currentUser: { id: 0, token: "token-verified" },
+            recordedUsers: new Map(),
+            participantId: null,
+        });
+
+        const response = await userService.hydrateAuthenticatedSession();
+
+        expect(response).toEqual({
+            id: 501,
+            accountId: 42,
+            name: "Hiro",
+            email: "hiro@example.com",
+            avatar_url: "avatar.png",
+            roles: ["user"],
+        });
+        expect(authApi.getProfile).toHaveBeenCalledTimes(1);
+        expect(saveAuthToken).toHaveBeenCalledWith(42, "token-verified");
+        expect(useUserStore.getState().currentUser).toMatchObject({
+            id: 501,
+            accountId: 42,
+            token: "token-verified",
+            isLoggedIn: true,
         });
     });
 

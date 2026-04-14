@@ -64,7 +64,7 @@ describe("e2ee bridge", () => {
             ciphertext: [4, 5],
             nonce: Array(12).fill(6),
         }, 1);
-        await generateSenderKey(42, 99);
+        await generateSenderKey(42, 99, "device-1");
         await deleteSenderKeys(42, [99, "100"]);
         await clearE2eeKeys(42);
 
@@ -84,6 +84,7 @@ describe("e2ee bridge", () => {
         expect(invoke).toHaveBeenNthCalledWith(4, "generate_sender_key", {
             accountId: "42",
             memberId: "99",
+            deviceId: "device-1",
         });
         expect(invoke).toHaveBeenNthCalledWith(5, "delete_sender_keys", {
             accountId: "42",

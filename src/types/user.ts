@@ -14,6 +14,7 @@ export interface UserRegisterRequest {
     email: string;
     name: string;
     password: string;
+    confirmPassword: string;
 }
 
 export interface AuthMessageResponse {
@@ -21,9 +22,15 @@ export interface AuthMessageResponse {
 }
 
 export interface PendingVerificationState {
-    email: string;
+    kind: 'register' | 'device_login';
     verificationToken: string;
     verificationExpiresAtMs: number;
+}
+
+export interface LoginFlowResponse {
+    loginStatus: 'authenticated' | 'device_verification_required';
+    verificationToken?: string;
+    verificationExpiresAtMs?: number;
 }
 
 export interface CurrentUserResponse {

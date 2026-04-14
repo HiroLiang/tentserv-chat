@@ -16,6 +16,9 @@ vi.mock("@/components/layout/Navbar.tsx", () => ({
 vi.mock("@/services/userService.ts", () => ({
     userService: {
         login: vi.fn(),
+        verifyLoginDevice: vi.fn(),
+        resendLoginDeviceVerification: vi.fn(),
+        hydrateAuthenticatedSession: vi.fn(),
     },
 }));
 
@@ -79,6 +82,14 @@ describe("LoginPage", () => {
         resetStores();
         vi.mocked(chatService.initialize).mockResolvedValue(undefined);
         vi.mocked(e2eeService.ensureSessionBootstrap).mockResolvedValue(true);
+        vi.mocked(userService.hydrateAuthenticatedSession).mockResolvedValue({
+            id: 501,
+            accountId: 42,
+            name: "Hiro",
+            email: "hiro@example.com",
+            avatar_url: "avatar.png",
+            roles: ["user"],
+        });
     });
 
     it("submits an email login and starts the post-login handoff", async () => {
@@ -89,7 +100,7 @@ describe("LoginPage", () => {
                 token: "token-login",
                 isLoggedIn: true,
             });
-            return { message: "Welcome back" };
+            return { loginStatus: "authenticated" };
         });
         const user = userEvent.setup();
         renderLogin();
@@ -114,7 +125,7 @@ describe("LoginPage", () => {
                 token: "token-account",
                 isLoggedIn: true,
             });
-            return {};
+            return { loginStatus: "authenticated" };
         });
         const user = userEvent.setup();
         renderLogin();
@@ -139,5 +150,76 @@ describe("LoginPage", () => {
         expect(await screen.findByText("invalid credentials")).toBeInTheDocument();
         expect(chatService.initialize).not.toHaveBeenCalled();
         expect(e2eeService.ensureSessionBootstrap).not.toHaveBeenCalled();
+    });
+
+    it("opens device verification, completes the challenge, then continues bootstrap", async () => {
+        vi.mocked(userService.login).mockResolvedValue({
+            loginStatus: "device_verification_required",
+            verificationToken: "verify-login-token",
+            verificationExpiresAtMs: Date.now() + 180_000,
+        });
+        vi.mocked(userService.verifyLoginDevice).mockResolvedValue({ login_status: "authenticated" });
+        vi.mocked(userService.resendLoginDeviceVerification).mockResolvedValue({
+            verification_token: "verify-login-token-2",
+            verification_expires_at_ms: Date.now() + 180_000,
+        });
+        const user = userEvent.setup();
+        renderLogin();
+
+        await user.type(screen.getByLabelText(/email or account/i), "hiro@example.com");
+        await user.type(screen.getByLabelText(/password/i), "correct-password");
+        await user.click(screen.getByRole("button", { name: /sign in/i }));
+
+        expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+        const inputs = Array.from({ length: 6 }, (_, index) =>
+            screen.getByLabelText(`Verification digit ${index + 1}`),
+        );
+        for (const [index, digit] of "123456".split("").entries()) {
+            await user.type(inputs[index], digit);
+        }
+
+        await waitFor(() => expect(userService.verifyLoginDevice).toHaveBeenCalledWith({
+            token: "verify-login-token",
+            code: "123456",
+        }));
+        await waitFor(() => expect(userService.hydrateAuthenticatedSession).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("Home Route")).toBeInTheDocument());
+        expect(e2eeService.ensureSessionBootstrap).toHaveBeenCalledWith("device-1");
+        expect(chatService.initialize).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes the verification dialog and shows a general login error when post-verify hydration fails", async () => {
+        vi.mocked(userService.login).mockResolvedValue({
+            loginStatus: "device_verification_required",
+            verificationToken: "verify-login-token",
+            verificationExpiresAtMs: Date.now() + 180_000,
+        });
+        vi.mocked(userService.verifyLoginDevice).mockResolvedValue({ login_status: "authenticated" });
+        vi.mocked(userService.hydrateAuthenticatedSession).mockRejectedValue(new Error("profile load failed"));
+
+        const user = userEvent.setup();
+        renderLogin();
+
+        await user.type(screen.getByLabelText(/email or account/i), "hiro@example.com");
+        await user.type(screen.getByLabelText(/password/i), "correct-password");
+        await user.click(screen.getByRole("button", { name: /sign in/i }));
+
+        expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+        const inputs = Array.from({ length: 6 }, (_, index) =>
+            screen.getByLabelText(`Verification digit ${index + 1}`),
+        );
+        for (const [index, digit] of "123456".split("").entries()) {
+            await user.type(inputs[index], digit);
+        }
+
+        await waitFor(() => expect(userService.verifyLoginDevice).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(await screen.findByText("Failed to finish signing in on this device.")).toBeInTheDocument();
+        expect(screen.queryByText("profile load failed")).not.toBeInTheDocument();
+        expect(e2eeService.ensureSessionBootstrap).not.toHaveBeenCalled();
+        expect(chatService.initialize).not.toHaveBeenCalled();
     });
 });

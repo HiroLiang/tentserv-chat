@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { userService } from "@/services/userService.ts";
 import { VerificationCodeDialog } from "@/components/auth/VerificationCodeDialog.tsx";
 import type { PendingVerificationState } from "@/types/user.ts";
+import { PasswordField } from "@/components/auth/PasswordField.tsx";
 
 export const RegisterPage = () => {
     const navigate = useNavigate();
@@ -15,24 +16,46 @@ export const RegisterPage = () => {
     const [account, setAccount] = useState('');
     const [name, setName] = useState('');
     const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
+    const [confirmPasswordError, setConfirmPasswordError] = useState('');
     const [pendingVerification, setPendingVerification] = useState<PendingVerificationState | null>(null);
 
     const handleSubmit = async (e: SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
-        setIsLoading(true);
         setError('');
+        setConfirmPasswordError('');
+
+        if (password !== confirmPassword) {
+            setConfirmPasswordError('Passwords do not match.');
+            return;
+        }
+
+        setIsLoading(true);
 
         try {
-            const response = await userService.register({ account, email, name, password });
+            const response = await userService.register({ account, email, name, password, confirmPassword });
             toast.success("Verification code sent to your email.");
             setPendingVerification({
-                email,
+                kind: 'register',
                 verificationToken: response.verification_token,
                 verificationExpiresAtMs: response.verification_expires_at_ms,
             });
         } catch (err) {
+            const errorCode = (
+                typeof err === 'object'
+                && err !== null
+                && 'code' in err
+                && typeof (err as { code?: unknown }).code === 'string'
+            )
+                ? (err as { code: string }).code
+                : null;
+
+            if (errorCode === 'PASSWORD_CONFIRM_MISMATCH') {
+                setConfirmPasswordError('Passwords do not match.');
+                return;
+            }
             setError(err instanceof Error ? err.message : 'Registration failed');
         } finally {
             setIsLoading(false);
@@ -110,22 +133,38 @@ export const RegisterPage = () => {
                             </div>
 
                             {/* Password */}
-                            <div className="space-y-2">
-                                <label htmlFor="password"
-                                       className="block text-sm font-medium text-card-foreground mb-2">
-                                    Password
-                                </label>
-                                <Input
-                                    id="password"
-                                    type="password"
-                                    placeholder="••••••••"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    required
-                                    disabled={isLoading}
-                                    autoComplete="new-password"
-                                />
-                            </div>
+                            <PasswordField
+                                id="password"
+                                label="Password"
+                                placeholder="••••••••"
+                                value={password}
+                                onChange={(e) => {
+                                    setPassword(e.target.value);
+                                    if (confirmPasswordError) {
+                                        setConfirmPasswordError('');
+                                    }
+                                }}
+                                required
+                                disabled={isLoading}
+                                autoComplete="new-password"
+                            />
+
+                            <PasswordField
+                                id="confirm-password"
+                                label="Confirm Password"
+                                placeholder="••••••••"
+                                value={confirmPassword}
+                                onChange={(e) => {
+                                    setConfirmPassword(e.target.value);
+                                    if (confirmPasswordError) {
+                                        setConfirmPasswordError('');
+                                    }
+                                }}
+                                error={confirmPasswordError}
+                                required
+                                disabled={isLoading}
+                                autoComplete="new-password"
+                            />
 
                             {/* Error Message */}
                             {error && (
@@ -163,11 +202,14 @@ export const RegisterPage = () => {
             <VerificationCodeDialog
                 session={pendingVerification}
                 onSessionChange={setPendingVerification}
+                onSubmit={userService.verifyEmail}
+                onResend={userService.resendVerifyEmail}
                 onVerified={() => {
                     setPendingVerification(null);
                     navigate("/register/verified", { replace: true });
                 }}
                 onFailed={() => setPendingVerification(null)}
+                exhaustedErrorMessage="Registration failed"
             />
         </div>
     );

@@ -10,7 +10,9 @@ impl SharedRuntime {
         match event {
             WsEvent::StatusChanged { status, error } => {
                 match error.as_deref() {
-                    Some(error) => log::warn!("chat runtime ws status: status={} error={}", status, error),
+                    Some(error) => {
+                        log::warn!("chat runtime ws status: status={} error={}", status, error)
+                    }
                     None => log::info!("chat runtime ws status: status={}", status),
                 }
                 let _ = store::update_ws_status(
@@ -36,8 +38,12 @@ impl SharedRuntime {
                     self.active_room_id(),
                     payload,
                 )
-                .await {
-                    log::warn!("chat runtime ws event: failed to process incoming chat message: {}", error);
+                .await
+                {
+                    log::warn!(
+                        "chat runtime ws event: failed to process incoming chat message: {}",
+                        error
+                    );
                 }
                 let _ = self.emit_rooms_snapshot();
                 if self.active_room_id() == Some(room_id) {
@@ -50,8 +56,13 @@ impl SharedRuntime {
                     payload.user_id,
                     payload.status
                 );
-                if let Err(error) = sync::handle_presence_changed(&self.app, &self.session, payload).await {
-                    log::warn!("chat runtime ws event: failed to process presence update: {}", error);
+                if let Err(error) =
+                    sync::handle_presence_changed(&self.app, &self.session, payload).await
+                {
+                    log::warn!(
+                        "chat runtime ws event: failed to process presence update: {}",
+                        error
+                    );
                 }
                 let _ = self.emit_rooms_snapshot();
             }
@@ -70,8 +81,12 @@ impl SharedRuntime {
                     payload,
                     self.participant_id(),
                 )
-                .await {
-                    log::warn!("chat runtime ws event: failed to handle sender_key_needed: {}", error);
+                .await
+                {
+                    log::warn!(
+                        "chat runtime ws event: failed to handle sender_key_needed: {}",
+                        error
+                    );
                 }
                 let _ = self.emit_rooms_snapshot();
                 if let Some(room_id) = self.active_room_id() {
@@ -88,10 +103,14 @@ impl SharedRuntime {
                     &self.api,
                     room_id,
                 )
-                .await {
+                .await
+                {
                     Ok(_) => {}
                     Err(error) => {
-                        log::warn!("chat runtime ws event: failed to resolve sender key availability: {}", error);
+                        log::warn!(
+                            "chat runtime ws event: failed to resolve sender key availability: {}",
+                            error
+                        );
                     }
                 }
                 let _ = self.emit_rooms_snapshot();
@@ -99,10 +118,51 @@ impl SharedRuntime {
                     let _ = self.emit_room_snapshot(room_id);
                 }
             }
+            WsEvent::SelfSenderKeySyncStateChanged(payload) => {
+                log::info!(
+                    "chat runtime ws event: self_sender_key_sync_state_changed status={} requester_current_device={} provider_current_device={}",
+                    payload.status,
+                    payload.requester_current_device,
+                    payload.provider_current_device
+                );
+                match sync::handle_self_sender_key_sync_state_changed(
+                    &self.app,
+                    &self.session,
+                    &self.api,
+                    self.participant_id(),
+                    payload,
+                )
+                .await
+                {
+                    Ok(snapshot) => {
+                        if let Err(error) = self.set_self_sender_key_sync_snapshot(Some(snapshot)) {
+                            log::warn!(
+                                "chat runtime ws event: failed to persist self sender key sync snapshot in runtime memory: {}",
+                                error
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "chat runtime ws event: failed to handle self sender key sync state change: {}",
+                            error
+                        );
+                    }
+                }
+                let _ = self.emit_rooms_snapshot();
+                if let Some(room_id) = self.active_room_id() {
+                    let _ = self.emit_room_snapshot(room_id);
+                }
+            }
             WsEvent::ReplenishOtp => {
                 log::info!("chat runtime ws event: replenish otp requested");
-                if let Err(error) = sync::replenish_otp_if_needed(&self.app, &self.session, &self.api).await {
-                    log::warn!("chat runtime ws event: failed to replenish otp keys: {}", error);
+                if let Err(error) =
+                    sync::replenish_otp_if_needed(&self.app, &self.session, &self.api).await
+                {
+                    log::warn!(
+                        "chat runtime ws event: failed to replenish otp keys: {}",
+                        error
+                    );
                 }
             }
             WsEvent::MemberJoined { room_id } => {

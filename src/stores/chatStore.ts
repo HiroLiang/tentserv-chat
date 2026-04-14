@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import type { Message, PendingInvitation, PresenceStatus, RoomDetail, RoomSummary } from '@/types/chat.ts';
-import { normalizeRoomSummaryPreview } from '@/utils/chatCopy.ts';
+import {
+    normalizeRoomSummaryPreview,
+    WAITING_FOR_PEER_KEY_LABEL,
+    WAITING_FOR_SENDER_KEY_LABEL,
+    WAITING_FOR_SENDER_KEY_SENTINEL,
+} from '@/utils/chatCopy.ts';
 import type { ChatSyncState } from '@/bridge/chat.ts';
+
+type StructuredSelfSenderKeySyncState = NonNullable<ChatSyncState['self_sender_key_sync']>;
 
 interface RoomsState {
     direct: RoomSummary[];
@@ -30,6 +37,80 @@ const sortRoomsState = (rooms: RoomsState): RoomsState => ({
     bot: sortRoomSummaries(rooms.bot),
 });
 
+const hasText = (value?: string | null): value is string =>
+    typeof value === 'string' && value.trim().length > 0;
+
+const isWaitingRoomPreview = (value?: string | null): boolean =>
+    value === WAITING_FOR_SENDER_KEY_SENTINEL
+    || value === WAITING_FOR_SENDER_KEY_LABEL
+    || value === WAITING_FOR_PEER_KEY_LABEL;
+
+const flattenRoomsState = (rooms: RoomsState): Map<number, RoomSummary> => {
+    const entries = new Map<number, RoomSummary>();
+    for (const key of ROOM_SECTION_KEYS) {
+        for (const room of rooms[key]) {
+            entries.set(room.room_id, room);
+        }
+    }
+    return entries;
+};
+
+const normalizeIncomingRoomSummary = (room: RoomSummary): RoomSummary => ({
+    ...room,
+    latest_message: hasText(room.latest_message)
+        ? normalizeRoomSummaryPreview(room.room_type, room.latest_message)
+        : room.latest_message,
+});
+
+const mergeRoomSummary = (
+    previous: RoomSummary | undefined,
+    incoming: RoomSummary,
+): RoomSummary => {
+    const normalized = normalizeIncomingRoomSummary(incoming);
+    const incomingLatestMessage = hasText(normalized.latest_message)
+        ? normalized.latest_message
+        : previous?.latest_message;
+    const shouldPreservePreviousDecryptedPreview = Boolean(
+        previous
+        && normalized.latest_message_id !== undefined
+        && previous.latest_message_id === normalized.latest_message_id
+        && hasText(previous.latest_message)
+        && !isWaitingRoomPreview(previous.latest_message)
+        && isWaitingRoomPreview(incomingLatestMessage),
+    );
+
+    return {
+        ...previous,
+        ...normalized,
+        display_name: hasText(normalized.display_name)
+            ? normalized.display_name.trim()
+            : previous?.display_name ?? normalized.display_name,
+        avatar_url: normalized.avatar_url ?? previous?.avatar_url,
+        latest_message: shouldPreservePreviousDecryptedPreview
+            ? previous?.latest_message
+            : incomingLatestMessage,
+        latest_message_id: normalized.latest_message_id ?? previous?.latest_message_id,
+        latest_message_created_at: normalized.latest_message_created_at ?? previous?.latest_message_created_at,
+        latest_message_sender_id: normalized.latest_message_sender_id ?? previous?.latest_message_sender_id,
+        latest_message_sender_device_id: normalized.latest_message_sender_device_id ?? previous?.latest_message_sender_device_id,
+        latest_message_sender_key_version: normalized.latest_message_sender_key_version ?? previous?.latest_message_sender_key_version,
+        presence_status: normalized.presence_status ?? previous?.presence_status,
+        last_seen_at: normalized.last_seen_at ?? previous?.last_seen_at,
+        direct_key_status: normalized.direct_key_status ?? previous?.direct_key_status,
+        member_count: normalized.member_count ?? previous?.member_count,
+        blocked_by_peer: normalized.blocked_by_peer ?? previous?.blocked_by_peer,
+        blocked_by_me: normalized.blocked_by_me ?? previous?.blocked_by_me,
+    };
+};
+
+const mergeRoomsState = (previous: RoomsState, next: RoomsState): RoomsState => {
+    const previousById = flattenRoomsState(previous);
+    return ROOM_SECTION_KEYS.reduce((acc, key) => {
+        acc[key] = next[key].map((room) => mergeRoomSummary(previousById.get(room.room_id), room));
+        return acc;
+    }, {} as RoomsState);
+};
+
 const updateRoomSummariesForMessage = (
     rooms: RoomsState,
     roomId: number,
@@ -43,8 +124,11 @@ const updateRoomSummariesForMessage = (
             return {
                 ...room,
                 latest_message: normalizeRoomSummaryPreview(room.room_type, msg.content),
+                latest_message_id: msg.message_id ?? room.latest_message_id,
                 latest_message_created_at: msg.created_at,
                 latest_message_sender_id: msg.sender_id,
+                latest_message_sender_device_id: msg.sender_device_id,
+                latest_message_sender_key_version: msg.sender_key_version,
                 unread_count: room.unread_count,
             };
         });
@@ -135,6 +219,33 @@ const collectDirectKeyStatuses = (rooms: RoomsState): Record<number, DirectKeySt
     return statuses;
 };
 
+const mergeSyncState = (
+    previous: ChatSyncState | null,
+    next: ChatSyncState | null,
+): ChatSyncState | null => {
+    if (!next) {
+        return null;
+    }
+    if (next.self_sender_key_sync !== undefined && next.self_sender_key_sync !== null) {
+        return next;
+    }
+    if (previous?.self_sender_key_sync) {
+        return {
+            ...next,
+            self_sender_key_sync: {
+                ...previous.self_sender_key_sync,
+                status: (next.self_sender_key_sync_status as StructuredSelfSenderKeySyncState['status'])
+                    || previous.self_sender_key_sync.status,
+                last_error: next.self_sender_key_sync_error ?? previous.self_sender_key_sync.last_error ?? null,
+            },
+        };
+    }
+    return {
+        ...next,
+        self_sender_key_sync: next.self_sender_key_sync ?? null,
+    };
+};
+
 // [EN] chatStore (Zustand): central chat state.
 //      rooms: categorized room lists (direct/group/channel/bot).
 //      messages: keyed by roomId, supports pagination via prependMessages (older) / appendMessage (new WS messages).
@@ -161,13 +272,16 @@ export const useChatStore = create<ChatState>((set) => ({
     runtimeStatus: 'idle',
     runtimeError: null,
 
-    setRooms: (rooms) => set((state) => ({
-        rooms: sortRoomsState(rooms),
+    setRooms: (rooms) => set((state) => {
+        const mergedRooms = mergeRoomsState(state.rooms, rooms);
+        return {
+            rooms: sortRoomsState(mergedRooms),
         directKeyStatus: {
             ...state.directKeyStatus,
-            ...collectDirectKeyStatuses(rooms),
+                ...collectDirectKeyStatuses(mergedRooms),
         },
-    })),
+        };
+    }),
 
     setCurrentRoomId: (id) => set({ currentRoomId: id }),
 
@@ -301,7 +415,9 @@ export const useChatStore = create<ChatState>((set) => ({
             directKeyStatus: { ...state.directKeyStatus, [roomId]: status },
         })),
 
-    setSyncState: (syncState) => set({ syncState }),
+    setSyncState: (syncState) => set((state) => ({
+        syncState: mergeSyncState(state.syncState, syncState),
+    })),
 
     setRuntimeStatus: (runtimeStatus, runtimeError = null) => set({ runtimeStatus, runtimeError }),
 

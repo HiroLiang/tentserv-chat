@@ -3,6 +3,7 @@ use std::time::Duration;
 use chrono::Utc;
 use tokio::sync::{mpsc::unbounded_channel, watch};
 
+use crate::chat::api::ChatApiClient;
 use crate::chat::events::{emit_rooms_updated, emit_sync_state_changed};
 use crate::chat::queue::RuntimeQueue;
 use crate::chat::store;
@@ -10,9 +11,9 @@ use crate::chat::sync;
 use crate::chat::ws::spawn_ws_loop;
 use crate::chat::{
     ChatMessageSnapshot, ChatRetryMessageInput, ChatRoomSnapshot, ChatRoomSnapshotRequest,
-    ChatRoomsSnapshot, ChatRuntimeSession, ChatSendMessageInput,
+    ChatRoomsSnapshot, ChatRuntimeSession, ChatSelfSenderKeySyncState, ChatSendMessageInput,
+    ChatSyncState,
 };
-use crate::chat::api::ChatApiClient;
 
 use super::manager::RuntimeJob;
 use super::SharedRuntime;
@@ -30,7 +31,10 @@ impl SharedRuntime {
         );
         let api = ChatApiClient::new(&session)?;
         let participant = api.ensure_participant().await?;
-        log::info!("chat runtime: participant ready participant_id={}", participant.id);
+        log::info!(
+            "chat runtime: participant ready participant_id={}",
+            participant.id
+        );
 
         let (queue, business_rx, sync_rx) = RuntimeQueue::new();
         let (stop_tx, stop_rx) = watch::channel(false);
@@ -43,11 +47,20 @@ impl SharedRuntime {
             stop_tx,
             active_room_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
             participant_id: std::sync::Arc::new(std::sync::Mutex::new(Some(participant.id))),
+            self_sender_key_sync: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
 
-        let sections = sync::sync_rooms(&app, &runtime.session, &runtime.api, Some(participant.id)).await?;
-        sync::refresh_self_sender_key_sync_state(&app, &runtime.session, &runtime.api).await?;
-        let sync_state = store::save_sync_state(
+        let sections =
+            sync::sync_rooms(&app, &runtime.session, &runtime.api, Some(participant.id)).await?;
+        let self_sender_key_sync = sync::refresh_self_sender_key_sync_state(
+            &app,
+            &runtime.session,
+            &runtime.api,
+            Some(participant.id),
+        )
+        .await?;
+        runtime.set_self_sender_key_sync_snapshot(Some(self_sender_key_sync.clone()))?;
+        let mut sync_state = store::save_sync_state(
             &app,
             runtime.session.account_id,
             Some(participant.id),
@@ -58,6 +71,9 @@ impl SharedRuntime {
             None,
             None,
         )?;
+        sync_state.self_sender_key_sync_status = self_sender_key_sync.status.clone();
+        sync_state.self_sender_key_sync_error = self_sender_key_sync.last_error.clone();
+        sync_state.self_sender_key_sync = Some(self_sender_key_sync);
 
         let snapshot = ChatRoomsSnapshot {
             participant_id: Some(participant.id),
@@ -76,7 +92,12 @@ impl SharedRuntime {
             }
         });
 
-        store::save_rooms_snapshot(&app, runtime.session.account_id, Some(participant.id), &snapshot.rooms)?;
+        store::save_rooms_snapshot(
+            &app,
+            runtime.session.account_id,
+            Some(participant.id),
+            &snapshot.rooms,
+        )?;
         let _ = emit_rooms_updated(&app, &snapshot);
         let _ = emit_sync_state_changed(&app, &snapshot.sync_state);
         log::info!(
@@ -147,16 +168,23 @@ impl SharedRuntime {
         &self,
         input: ChatSendMessageInput,
     ) -> Result<ChatMessageSnapshot, String> {
-        log::info!("chat runtime: enqueue send message room_id={}", input.room_id);
+        log::info!(
+            "chat runtime: enqueue send message room_id={}",
+            input.room_id
+        );
         let room = self.ensure_local_room(input.room_id)?;
-        let current_member_id = sync::resolve_current_member_id_snapshot(self.participant_id(), &room.members)
-            .ok_or_else(|| format!("no current member mapping for room {}", input.room_id))?;
-        let client_message_id = format!("local:{}:{}", input.room_id, Utc::now().timestamp_millis());
+        let current_member_id =
+            sync::resolve_current_member_id_snapshot(self.participant_id(), &room.members)
+                .ok_or_else(|| format!("no current member mapping for room {}", input.room_id))?;
+        let client_message_id =
+            format!("local:{}:{}", input.room_id, Utc::now().timestamp_millis());
         let created_at = Utc::now().to_rfc3339();
         let pending = ChatMessageSnapshot {
             client_message_id: client_message_id.clone(),
             message_id: None,
             sender_id: current_member_id,
+            sender_device_id: self.session.device_id.clone(),
+            sender_key_version: 0,
             r#type: input.r#type.clone().unwrap_or_else(|| "text".to_string()),
             content: input.content.clone(),
             reply_to_id: None,
@@ -192,7 +220,12 @@ impl SharedRuntime {
             "chat runtime: enqueue retry message client_message_id={}",
             input.client_message_id
         );
-        let Some(retry) = store::load_retry_message(&self.app, self.session.account_id, &input.client_message_id)? else {
+        let Some(retry) = store::load_retry_message(
+            &self.app,
+            self.session.account_id,
+            &input.client_message_id,
+        )?
+        else {
             return Ok(None);
         };
 
@@ -232,7 +265,8 @@ impl SharedRuntime {
     pub fn enqueue_mark_room_read(&self, room_id: i64) -> Result<(), String> {
         log::info!("chat runtime: enqueue mark room read room_id={room_id}");
         store::update_room_unread(&self.app, self.session.account_id, room_id, 0)?;
-        self.queue.enqueue_business(RuntimeJob::MarkRoomRead { room_id })?;
+        self.queue
+            .enqueue_business(RuntimeJob::MarkRoomRead { room_id })?;
         self.emit_rooms_snapshot_best_effort("enqueue_mark_room_read");
         Ok(())
     }
@@ -252,6 +286,8 @@ impl SharedRuntime {
             None,
             None,
         )?;
+        let mut sync_state = sync_state;
+        self.attach_self_sender_key_sync_snapshot(&mut sync_state)?;
         let snapshot = ChatRoomsSnapshot {
             participant_id: self.participant_id(),
             rooms: sections,
@@ -259,6 +295,24 @@ impl SharedRuntime {
         };
         self.emit_rooms_snapshot_payload_best_effort(&snapshot, "force_sync_rooms");
         self.emit_sync_state_payload_best_effort(&snapshot.sync_state, "force_sync_rooms");
+        Ok(snapshot)
+    }
+
+    pub async fn refresh_self_sender_key_sync(&self) -> Result<ChatSelfSenderKeySyncState, String> {
+        log::info!("chat runtime: refresh self sender key sync state");
+        let snapshot = sync::refresh_self_sender_key_sync_state(
+            &self.app,
+            &self.session,
+            &self.api,
+            self.participant_id(),
+        )
+        .await?;
+        self.set_self_sender_key_sync_snapshot(Some(snapshot.clone()))?;
+        self.emit_sync_state_best_effort("refresh_self_sender_key_sync");
+        self.emit_rooms_snapshot_best_effort("refresh_self_sender_key_sync");
+        if let Some(room_id) = self.active_room_id() {
+            self.emit_room_snapshot_best_effort(room_id, "refresh_self_sender_key_sync");
+        }
         Ok(snapshot)
     }
 
@@ -303,6 +357,7 @@ impl SharedRuntime {
     pub fn local_rooms_snapshot(&self) -> Result<ChatRoomsSnapshot, String> {
         let mut snapshot = store::load_rooms_snapshot(&self.app, self.session.account_id)?;
         snapshot.sync_state.pending_sync_jobs = self.queue.pending_sync_jobs();
+        self.attach_self_sender_key_sync_snapshot(&mut snapshot.sync_state)?;
         Ok(snapshot)
     }
 
@@ -405,5 +460,99 @@ impl SharedRuntime {
                 }
             }
         });
+    }
+
+    pub(super) fn set_self_sender_key_sync_snapshot(
+        &self,
+        snapshot: Option<ChatSelfSenderKeySyncState>,
+    ) -> Result<(), String> {
+        let mut guard = self
+            .self_sender_key_sync
+            .lock()
+            .map_err(|_| "lock self sender key sync snapshot failed".to_string())?;
+        *guard = snapshot;
+        Ok(())
+    }
+
+    fn current_self_sender_key_sync_snapshot(
+        &self,
+    ) -> Result<Option<ChatSelfSenderKeySyncState>, String> {
+        let guard = self
+            .self_sender_key_sync
+            .lock()
+            .map_err(|_| "lock current self sender key sync snapshot failed".to_string())?;
+        Ok(guard.clone())
+    }
+
+    fn attach_self_sender_key_sync_snapshot(
+        &self,
+        sync_state: &mut ChatSyncState,
+    ) -> Result<(), String> {
+        let snapshot = self.current_self_sender_key_sync_snapshot()?;
+        apply_self_sender_key_sync_snapshot(sync_state, snapshot.as_ref());
+        Ok(())
+    }
+}
+
+fn apply_self_sender_key_sync_snapshot(
+    sync_state: &mut ChatSyncState,
+    snapshot: Option<&ChatSelfSenderKeySyncState>,
+) {
+    match snapshot {
+        Some(snapshot) => {
+            sync_state.self_sender_key_sync_status = snapshot.status.clone();
+            sync_state.self_sender_key_sync_error = snapshot.last_error.clone();
+            sync_state.self_sender_key_sync = Some(snapshot.clone());
+        }
+        None => {
+            sync_state.self_sender_key_sync = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_self_sender_key_sync_snapshot;
+    use crate::chat::{ChatSelfSenderKeySyncDevice, ChatSelfSenderKeySyncState, ChatSyncState};
+
+    #[test]
+    fn apply_self_sender_key_sync_snapshot_keeps_structured_snapshot_on_runtime_sync_state() {
+        let mut sync_state = ChatSyncState {
+            ws_status: "connected".to_string(),
+            self_sender_key_sync_status: "idle".to_string(),
+            ..Default::default()
+        };
+        let snapshot = ChatSelfSenderKeySyncState {
+            exists: true,
+            status: "pending_provider".to_string(),
+            requester_device: Some(ChatSelfSenderKeySyncDevice {
+                device_id: "device-new".to_string(),
+                device_name: "New Mac".to_string(),
+                platform: "macos".to_string(),
+                last_ip: Some("127.0.0.1".to_string()),
+                binding_status: Some("pending_sync".to_string()),
+            }),
+            requester_current_device: true,
+            ..Default::default()
+        };
+
+        apply_self_sender_key_sync_snapshot(&mut sync_state, Some(&snapshot));
+
+        assert_eq!(sync_state.self_sender_key_sync_status, "pending_provider");
+        assert_eq!(
+            sync_state
+                .self_sender_key_sync
+                .as_ref()
+                .and_then(|value| value.requester_device.as_ref())
+                .map(|value| value.device_id.as_str()),
+            Some("device-new")
+        );
+        assert_eq!(
+            sync_state
+                .self_sender_key_sync
+                .as_ref()
+                .map(|value| value.requester_current_device),
+            Some(true)
+        );
     }
 }

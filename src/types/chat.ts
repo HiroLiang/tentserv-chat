@@ -15,8 +15,11 @@ export interface RoomSummary {
     last_seen_at?: string;
     status?: RoomStatus;
     latest_message?: string;
+    latest_message_id?: number;
     latest_message_created_at?: string;
     latest_message_sender_id?: number;
+    latest_message_sender_device_id?: string;
+    latest_message_sender_key_version?: number;
     unread_count: number;
     blocked_by_peer?: boolean;
     blocked_by_me?: boolean;
@@ -43,6 +46,8 @@ export interface Message {
     client_message_id: string;
     message_id?: number | null;
     sender_id: number;
+    sender_device_id: string;
+    sender_key_version: number;
     type: MessageType;
     content: string;
     reply_to_id?: number;

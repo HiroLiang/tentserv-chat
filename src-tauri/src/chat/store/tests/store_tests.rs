@@ -23,6 +23,8 @@ fn message_snapshot(
         client_message_id: client_message_id.to_string(),
         message_id,
         sender_id: 6,
+        sender_device_id: "device-6".to_string(),
+        sender_key_version: 1776090000000,
         r#type: "text".to_string(),
         content: content.to_string(),
         reply_to_id: None,
@@ -68,7 +70,12 @@ fn upsert_chat_message_merges_server_backfill_into_existing_local_row() {
             is_local_echo = 0
         WHERE account_id = ?1 AND room_id = ?2 AND client_message_id = ?3
         "#,
-        params![account_id, room_id, local_client_message_id, server_message_id],
+        params![
+            account_id,
+            room_id,
+            local_client_message_id,
+            server_message_id
+        ],
     )
     .expect("local echo should be linked to the server id");
 
@@ -120,9 +127,9 @@ fn resolve_preferred_client_message_id_prefers_local_encrypted_row_over_server_a
         r#"
         INSERT INTO chat_messages_encrypted (
             account_id, room_id, client_message_id, server_message_id, sender_id,
-            encrypted_content, message_type, created_at, received_at
+            sender_device_id, sender_key_version, encrypted_content, message_type, created_at, received_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch())
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())
         "#,
         params![
             1,
@@ -130,6 +137,8 @@ fn resolve_preferred_client_message_id_prefers_local_encrypted_row_over_server_a
             "local:3:1776020001234",
             77,
             6,
+            "device-6",
+            1776090000000_i64,
             b"e2ee:v1:ciphertext".to_vec(),
             "text",
             "2026-04-13T03:00:00Z",
@@ -148,4 +157,61 @@ fn resolve_preferred_client_message_id_prefers_local_encrypted_row_over_server_a
     .expect("target client message id must resolve");
 
     assert_eq!(target, "local:3:1776020001234");
+}
+
+#[test]
+fn upsert_chat_message_updates_room_latest_message_metadata_with_sort_order_and_sender_key_version() {
+    let conn = open_test_conn();
+    let account_id = 1;
+    let room_id = 8;
+
+    conn.execute(
+        r#"
+        INSERT INTO chat_rooms (
+            account_id, room_id, room_type, display_name, unread_count, sort_order, updated_at
+        )
+        VALUES (?1, ?2, 'direct', 'Bell', 0, 0, unixepoch())
+        "#,
+        params![account_id, room_id],
+    )
+    .expect("room summary seed must succeed");
+
+    let message = ChatMessageSnapshot {
+        client_message_id: "server:501".to_string(),
+        message_id: Some(501),
+        sender_id: 9,
+        sender_device_id: "device-bell-2".to_string(),
+        sender_key_version: 1776100000001,
+        r#type: "text".to_string(),
+        content: "decrypted preview".to_string(),
+        reply_to_id: None,
+        is_edited: false,
+        is_deleted: false,
+        created_at: "2026-04-14T03:02:18Z".to_string(),
+        sort_key: 1776100001234,
+        delivery_status: "sent".to_string(),
+        delivery_error: None,
+        is_local_echo: false,
+    };
+
+    upsert_chat_message(&conn, account_id, room_id, &message)
+        .expect("message upsert must succeed");
+
+    let row: (Option<i64>, Option<String>, Option<i64>, i64) = conn
+        .query_row(
+            r#"
+            SELECT latest_message_id, latest_message_sender_device_id,
+                   latest_message_sender_key_version, sort_order
+            FROM chat_rooms
+            WHERE account_id = ?1 AND room_id = ?2
+            "#,
+            params![account_id, room_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("room latest metadata should be readable");
+
+    assert_eq!(row.0, Some(501));
+    assert_eq!(row.1.as_deref(), Some("device-bell-2"));
+    assert_eq!(row.2, Some(1776100000001));
+    assert_eq!(row.3, 1776100001234);
 }

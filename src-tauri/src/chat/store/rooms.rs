@@ -1,6 +1,8 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::messages::{has_more_messages, load_room_messages, sort_key_from_created_at, upsert_chat_message};
+use super::messages::{
+    has_more_messages, load_room_messages, sort_key_from_created_at, upsert_chat_message,
+};
 use super::sync_state::{load_sync_state, save_sync_state_inner};
 use crate::chat::{
     ChatInvitationSnapshot, ChatMemberSnapshot, ChatRoomSnapshot, ChatRoomSummarySnapshot,
@@ -76,8 +78,11 @@ pub fn save_rooms_snapshot(
     }
 
     if room_ids.is_empty() {
-        tx.execute("DELETE FROM chat_rooms WHERE account_id = ?1", params![account_id])
-            .map_err(|err| format!("clear rooms failed: {err}"))?;
+        tx.execute(
+            "DELETE FROM chat_rooms WHERE account_id = ?1",
+            params![account_id],
+        )
+        .map_err(|err| format!("clear rooms failed: {err}"))?;
     } else {
         let placeholders = std::iter::repeat("?")
             .take(room_ids.len())
@@ -111,7 +116,12 @@ pub fn save_room_snapshot(
 
     upsert_room_detail(&tx, account_id, snapshot)?;
     replace_room_members(&tx, account_id, snapshot.room_id, &snapshot.members)?;
-    save_invitation(&tx, account_id, snapshot.room_id, snapshot.pending_invitation.as_ref())?;
+    save_invitation(
+        &tx,
+        account_id,
+        snapshot.room_id,
+        snapshot.pending_invitation.as_ref(),
+    )?;
 
     for message in &snapshot.messages {
         upsert_chat_message(&tx, account_id, snapshot.room_id, message)?;
@@ -199,9 +209,9 @@ fn load_rooms_sections(conn: &Connection, account_id: i64) -> Result<ChatRoomsSe
         .prepare(
             r#"
             SELECT room_id, room_type, display_name, avatar_url, peer_user_id, presence_status,
-                   last_seen_at, status, latest_message, latest_message_created_at,
-                   latest_message_sender_id, unread_count, blocked_by_peer, blocked_by_me,
-                   direct_key_status, member_count
+                   last_seen_at, status, latest_message, latest_message_id, latest_message_created_at,
+                   latest_message_sender_id, latest_message_sender_device_id, latest_message_sender_key_version,
+                   unread_count, blocked_by_peer, blocked_by_me, direct_key_status, member_count
             FROM chat_rooms
             WHERE account_id = ?1
             ORDER BY CASE room_type
@@ -228,13 +238,16 @@ fn load_rooms_sections(conn: &Connection, account_id: i64) -> Result<ChatRoomsSe
                 last_seen_at: row.get(6)?,
                 status: row.get(7)?,
                 latest_message: row.get(8)?,
-                latest_message_created_at: row.get(9)?,
-                latest_message_sender_id: row.get(10)?,
-                unread_count: row.get(11)?,
-                blocked_by_peer: row.get::<_, i64>(12)? != 0,
-                blocked_by_me: row.get::<_, i64>(13)? != 0,
-                direct_key_status: row.get(14)?,
-                member_count: row.get(15)?,
+                latest_message_id: row.get(9)?,
+                latest_message_created_at: row.get(10)?,
+                latest_message_sender_id: row.get(11)?,
+                latest_message_sender_device_id: row.get(12)?,
+                latest_message_sender_key_version: row.get(13)?,
+                unread_count: row.get(14)?,
+                blocked_by_peer: row.get::<_, i64>(15)? != 0,
+                blocked_by_me: row.get::<_, i64>(16)? != 0,
+                direct_key_status: row.get(17)?,
+                member_count: row.get(18)?,
             })
         })
         .map_err(|err| format!("query load rooms sections failed: {err}"))?;
@@ -330,7 +343,9 @@ fn load_room_members(
                 user_id: row.get(2)?,
                 display_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
                 avatar_url: row.get(4)?,
-                role: row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "member".to_string()),
+                role: row
+                    .get::<_, Option<String>>(5)?
+                    .unwrap_or_else(|| "member".to_string()),
                 last_read_at: row.get(6)?,
                 joined_at: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
             })
@@ -386,11 +401,11 @@ fn upsert_room_summary(
         r#"
         INSERT INTO chat_rooms (
             account_id, room_id, room_type, display_name, avatar_url, peer_user_id, presence_status,
-            last_seen_at, status, latest_message, latest_message_created_at, latest_message_sender_id,
-            unread_count, blocked_by_peer, blocked_by_me, direct_key_status, member_count,
+            last_seen_at, status, latest_message, latest_message_id, latest_message_created_at, latest_message_sender_id,
+            latest_message_sender_device_id, latest_message_sender_key_version, unread_count, blocked_by_peer, blocked_by_me, direct_key_status, member_count,
             detail_name, detail_description, detail_avatar_url, sort_order, updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, NULL, ?19, ?20, unixepoch())
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, NULL, ?22, ?23, unixepoch())
         ON CONFLICT(account_id, room_id) DO UPDATE SET
             room_type = excluded.room_type,
             display_name = excluded.display_name,
@@ -400,8 +415,11 @@ fn upsert_room_summary(
             last_seen_at = excluded.last_seen_at,
             status = excluded.status,
             latest_message = excluded.latest_message,
+            latest_message_id = excluded.latest_message_id,
             latest_message_created_at = excluded.latest_message_created_at,
             latest_message_sender_id = excluded.latest_message_sender_id,
+            latest_message_sender_device_id = excluded.latest_message_sender_device_id,
+            latest_message_sender_key_version = excluded.latest_message_sender_key_version,
             unread_count = excluded.unread_count,
             blocked_by_peer = excluded.blocked_by_peer,
             blocked_by_me = excluded.blocked_by_me,
@@ -423,8 +441,11 @@ fn upsert_room_summary(
             room.last_seen_at,
             room.status.as_deref().unwrap_or("active"),
             room.latest_message,
+            room.latest_message_id,
             room.latest_message_created_at,
             room.latest_message_sender_id,
+            room.latest_message_sender_device_id,
+            room.latest_message_sender_key_version,
             room.unread_count,
             room.blocked_by_peer as i64,
             room.blocked_by_me as i64,
@@ -454,16 +475,24 @@ fn upsert_room_detail(
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, unixepoch())
         ON CONFLICT(account_id, room_id) DO UPDATE SET
             room_type = excluded.room_type,
-            display_name = excluded.display_name,
-            avatar_url = COALESCE(excluded.avatar_url, chat_rooms.avatar_url),
+            display_name = CASE
+                WHEN excluded.room_type IN ('direct', 'bot')
+                    THEN COALESCE(NULLIF(chat_rooms.display_name, ''), NULLIF(excluded.display_name, ''), chat_rooms.display_name, excluded.display_name)
+                ELSE COALESCE(NULLIF(excluded.display_name, ''), chat_rooms.display_name)
+            END,
+            avatar_url = CASE
+                WHEN excluded.room_type IN ('direct', 'bot')
+                    THEN COALESCE(chat_rooms.avatar_url, excluded.avatar_url)
+                ELSE COALESCE(excluded.avatar_url, chat_rooms.avatar_url)
+            END,
             status = excluded.status,
             blocked_by_peer = excluded.blocked_by_peer,
             blocked_by_me = excluded.blocked_by_me,
             direct_key_status = excluded.direct_key_status,
             member_count = excluded.member_count,
-            detail_name = excluded.detail_name,
+            detail_name = COALESCE(NULLIF(excluded.detail_name, ''), chat_rooms.detail_name),
             detail_description = excluded.detail_description,
-            detail_avatar_url = excluded.detail_avatar_url,
+            detail_avatar_url = COALESCE(excluded.detail_avatar_url, chat_rooms.detail_avatar_url),
             sort_order = MAX(chat_rooms.sort_order, excluded.sort_order),
             updated_at = unixepoch()
         "#,
@@ -574,4 +603,61 @@ fn save_invitation(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::{load_rooms_sections, upsert_room_detail, upsert_room_summary};
+    use crate::chat::{ChatRoomSnapshot, ChatRoomSummarySnapshot};
+    use crate::store::db::{init_schema, migrate_schema};
+
+    fn open_test_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("in-memory db must open");
+        init_schema(&conn).expect("schema init must succeed");
+        migrate_schema(&conn).expect("schema migration must succeed");
+        conn
+    }
+
+    #[test]
+    fn upsert_room_detail_keeps_direct_summary_identity_when_detail_name_is_blank() {
+        let conn = open_test_conn();
+        let account_id = 9;
+
+        upsert_room_summary(
+            &conn,
+            account_id,
+            &ChatRoomSummarySnapshot {
+                room_id: 21,
+                room_type: "direct".to_string(),
+                display_name: "Mizi Liang".to_string(),
+                avatar_url: Some("avatars/mizi.png".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("summary insert must succeed");
+
+        upsert_room_detail(
+            &conn,
+            account_id,
+            &ChatRoomSnapshot {
+                room_id: 21,
+                room_type: "direct".to_string(),
+                name: String::new(),
+                avatar_url: None,
+                status: "active".to_string(),
+                direct_key_status: "locked".to_string(),
+                member_count: 2,
+                ..Default::default()
+            },
+        )
+        .expect("detail upsert must succeed");
+
+        let sections = load_rooms_sections(&conn, account_id).expect("sections should load");
+        let room = sections.direct.first().expect("direct room should exist");
+
+        assert_eq!(room.display_name, "Mizi Liang");
+        assert_eq!(room.avatar_url.as_deref(), Some("avatars/mizi.png"));
+    }
 }

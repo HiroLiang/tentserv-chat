@@ -66,33 +66,40 @@ export const performX3dhReceive = (
 
 // sender keys are keyed by (local account_id, member_id) where member_id = chat_members.id.
 // room_id is not needed because chat_members.id is a globally unique sequence PK.
+// Device-scoped sender keys additionally require the concrete sender `device_id`.
 
 export const generateSenderKey = (
     accountId: BridgeId,
     memberId: BridgeId,
+    deviceId: string,
 ): Promise<SenderKeyBundle> =>
     invoke<SenderKeyBundle>('generate_sender_key', {
         accountId: toBridgeId(accountId),
         memberId: toBridgeId(memberId),
+        deviceId,
     });
 
 export const hasSenderKey = (
     accountId: BridgeId,
     memberId: BridgeId,
+    deviceId: string,
 ): Promise<boolean> =>
     invoke<boolean>('has_sender_key', {
         accountId: toBridgeId(accountId),
         memberId: toBridgeId(memberId),
+        deviceId,
     });
 
 export const storeMemberSenderKey = (
     accountId: BridgeId,
     memberId: BridgeId,
+    deviceId: string,
     keyBytes: number[],
 ): Promise<void> =>
     invoke('store_member_sender_key', {
         accountId: toBridgeId(accountId),
         memberId: toBridgeId(memberId),
+        deviceId,
         keyBytes,
     });
 
@@ -117,23 +124,31 @@ export const deleteSenderKeys = (
 export const prepareSenderKeyDistribution = (
     accountId: BridgeId,
     ownMemberId: BridgeId,
+    ownDeviceId: string,
     requesterBundle: PublicKeyBundle,
 ): Promise<PreparedSenderKeyDistribution> =>
     invoke<PreparedSenderKeyDistribution>('prepare_sender_key_distribution', {
         accountId: toBridgeId(accountId),
         ownMemberId: toBridgeId(ownMemberId),
+        ownDeviceId,
         requesterBundle,
     });
 
 export const consumeSenderKeyDistribution = (
     accountId: BridgeId,
     senderMemberId: BridgeId,
+    senderDeviceId: string,
+    receiverMemberId: BridgeId | undefined,
+    receiverDeviceId: string | undefined,
     distributionMessage: number[],
     senderKeyVersion: number,
 ): Promise<ConsumeSenderKeyDistributionResult> =>
     invoke<ConsumeSenderKeyDistributionResult>('consume_sender_key_distribution', {
         accountId: toBridgeId(accountId),
         senderMemberId: toBridgeId(senderMemberId),
+        senderDeviceId,
+        ...(receiverMemberId !== undefined && { receiverMemberId: toBridgeId(receiverMemberId) }),
+        ...(receiverDeviceId !== undefined && { receiverDeviceId }),
         distributionMessage,
         senderKeyVersion,
     });
@@ -141,23 +156,29 @@ export const consumeSenderKeyDistribution = (
 export const encryptWithSenderKey = (
     accountId: BridgeId,
     memberId: BridgeId,
+    deviceId: string,
     plaintext: number[],
 ): Promise<SenderKeyEncryptedMessage> =>
     invoke<SenderKeyEncryptedMessage>('encrypt_with_sender_key', {
         accountId: toBridgeId(accountId),
         memberId: toBridgeId(memberId),
+        deviceId,
         plaintext,
     });
 
 export const decryptWithSenderKey = (
     accountId: BridgeId,
     memberId: BridgeId,
+    deviceId: string,
+    senderKeyVersion: number,
     ciphertext: number[],
     nonce: number[],
 ): Promise<DecryptSenderKeyResult> =>
     invoke<DecryptSenderKeyResult>('decrypt_with_sender_key', {
         accountId: toBridgeId(accountId),
         memberId: toBridgeId(memberId),
+        deviceId,
+        senderKeyVersion,
         ciphertext,
         nonce,
     });

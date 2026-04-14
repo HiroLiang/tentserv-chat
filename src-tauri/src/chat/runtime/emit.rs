@@ -1,6 +1,4 @@
-use crate::chat::events::{
-    emit_room_updated, emit_rooms_updated, emit_sync_state_changed,
-};
+use crate::chat::events::{emit_room_updated, emit_rooms_updated, emit_sync_state_changed};
 use crate::chat::{ChatRoomSnapshotRequest, ChatRoomsSnapshot, ChatSyncState};
 
 use super::SharedRuntime;
